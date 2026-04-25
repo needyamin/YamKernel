@@ -14,6 +14,7 @@ YamKernel is a completely novel OS kernel for x86_64 that introduces a unique ar
 | Memory | **Cell Allocator** — fractal quad-tree allocation |
 | IPC | **Channels** — typed bidirectional graph edges |
 | Filesystem | **NexusFS** — graph-structured data storage |
+| Terminal | **Interactive Kernel REPL** with a 'top' Dashboard |
 
 ## Building
 
@@ -93,6 +94,15 @@ qemu-system-x86_64 -cdrom build/yamkernel.iso -m 256M -serial stdio
 ```bash
 sudo dd if=build/yamkernel.iso of=/dev/sdX bs=4M status=progress
 ```
+
+### Interactive Shell Commands
+Once booted, you can type commands directly into YamKernel:
+- `help` - Show command list.
+- `top` - View the live system dashboard (memory, graph topology, CPU).
+- `graph` - Inspect the inner workings of YamGraph.
+- `mem` - Check the cell allocator.
+- `clear` - Clear the framebuffer screen.
+- `shutdown` / `reboot` - VM power management.
 
 ## Architecture
 

@@ -1,5 +1,5 @@
 ================================================================================
-                    YamKernel v0.1.0 — Information Guide
+                    YamKernel v0.2.0 — Information Guide
               A Graph-Based Adaptive Operating System Kernel
 ================================================================================
 
@@ -43,47 +43,47 @@ When you boot YamKernel (from ISO in VMware, VirtualBox, or bare metal):
      [YAMGRAPH] Resource Graph self-test: PASS
 
      ╔══════════════════════════════════════╗
-     ║   YamKernel v0.1.0 — BOOT COMPLETE  ║
+     ║   YamKernel v0.2.0 — BOOT COMPLETE  ║
      ╚══════════════════════════════════════╝
 
-  5. The kernel enters idle mode (waiting for future shell/apps)
+  5. The kernel drops you into the INTERACTIVE DEBUG TERMINAL (`yam>`)
 
 
 DOES IT HAVE A GUI?
 -------------------
-Current version (v0.1.0): NO GUI yet.
+Current version (v0.2.0): NO graphical desktop yet, but it HAS A TERMINAL!
 
-YamKernel v0.1.0 boots to a TEXT CONSOLE with colored text output.
-It is a framebuffer-based text display (not old-school VGA text mode).
-Text is rendered using an embedded 8x16 bitmap font with full color support.
+YamKernel v0.2.0 boots to a highly interactive TEXT CONSOLE with colored text.
+It runs a "Kernel REPL" (interactive shell) where you can manage the core engine.
+
+Commands you can run right now:
+  - `top`      : Displays a beautiful ASCII dashboard of Memory and YamGraph stats.
+  - `graph`    : Dumps a visual tree of the entire YamGraph OS architecture.
+  - `mem`      : Shows Cell Allocator memory blocks.
+  - `shutdown` : Safely powers off VirtualBox/VMware/QEMU.
+  - `reboot`   : Restarts the CPU.
 
 Future versions will add:
-  - v0.2.0: Keyboard input + basic shell (type commands)
-  - v0.3.0: Filesystem (save/load files)
-  - v0.4.0: Userspace programs (run your own programs)
-  - v0.5.0: Networking (basic TCP/IP)
-  - v1.0.0: GUI desktop environment
+  - v0.3.0: Filesystem (NexusFS concept)
+  - v0.4.0: Userspace programs (loading custom .elf files)
+  - v1.0.0: Native GUI desktop environment mapping the Graph visually.
 
 
-WHAT CAN YOU DO WITH v0.1.0?
+WHAT CAN YOU DO WITH v0.2.0?
 -----------------------------
-Right now, v0.1.0 is the KERNEL FOUNDATION. It proves that:
+Right now, v0.2.0 is the KERNEL FOUNDATION + TERMINAL. It proves that:
 
   ✓ YamKernel boots successfully on real/virtual hardware
-  ✓ CPU is fully set up (GDT, IDT, interrupts)
-  ✓ The Cell Allocator manages physical memory (our own algorithm)
-  ✓ Virtual memory (paging) works
-  ✓ The kernel heap (kmalloc/kfree) works
-  ✓ The YamGraph resource graph — our unique invention — works
-  ✓ Capability tokens and IPC channels work
-  ✓ All self-tests pass
+  ✓ PS/2 Keyboard allows full user interaction
+  ✓ The Terminal executes powerful diagnostic commands natively
+  ✓ The Cell Allocator handles dynamic memory seamlessly
+  ✓ The YamGraph actively models the OS resources live
 
 You can:
   - Boot it in QEMU, VMware, or VirtualBox
-  - See the boot process and colored output
+  - Type commands (`top`, `help`, `graph`)
+  - See the live hardware and graph data
   - Verify all subsystems initialize correctly
-  - Study the code to understand how a kernel works
-  - Start developing the next layers (shell, filesystem, apps)
 
 
 HOW IS YAMKERNEL DIFFERENT FROM EVERY OTHER OS?
@@ -159,3 +159,4 @@ FILE COUNT
   YamKernel — Created by Yamin
   "A kernel that thinks in graphs"
 ================================================================================
+wsl -d Ubuntu -- bash -c "cd /mnt/c/laragon/www/kernel && make clean && make iso

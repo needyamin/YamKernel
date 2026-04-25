@@ -91,12 +91,12 @@ $(KERNEL_ISO): $(KERNEL_ELF)
 	# Copy limine config
 	cp limine.conf $(ISO_DIR)/boot/limine/limine.conf
 	
-	# Copy limine binaries (must be installed: apt install limine)
-	cp /usr/share/limine/limine-bios.sys $(ISO_DIR)/boot/limine/ 2>/dev/null || true
-	cp /usr/share/limine/limine-bios-cd.bin $(ISO_DIR)/boot/limine/ 2>/dev/null || true
-	cp /usr/share/limine/limine-uefi-cd.bin $(ISO_DIR)/boot/limine/ 2>/dev/null || true
-	cp /usr/share/limine/BOOTX64.EFI $(ISO_DIR)/EFI/BOOT/ 2>/dev/null || true
-	cp /usr/share/limine/BOOTIA32.EFI $(ISO_DIR)/EFI/BOOT/ 2>/dev/null || true
+	# Copy limine binaries (built via make setup)
+	cp limine-git/limine-bios.sys $(ISO_DIR)/boot/limine/ 2>/dev/null || true
+	cp limine-git/limine-bios-cd.bin $(ISO_DIR)/boot/limine/ 2>/dev/null || true
+	cp limine-git/limine-uefi-cd.bin $(ISO_DIR)/boot/limine/ 2>/dev/null || true
+	cp limine-git/BOOTX64.EFI $(ISO_DIR)/EFI/BOOT/ 2>/dev/null || true
+	cp limine-git/BOOTIA32.EFI $(ISO_DIR)/EFI/BOOT/ 2>/dev/null || true
 	
 	# Create ISO with xorriso
 	xorriso -as mkisofs \
@@ -107,7 +107,7 @@ $(KERNEL_ISO): $(KERNEL_ELF)
 		$(ISO_DIR) -o $@
 	
 	# Install limine to ISO
-	limine bios-install $@ 2>/dev/null || true
+	./limine-git/limine bios-install $@ 2>/dev/null || true
 	
 	@echo "============================================"
 	@echo "  YamKernel ISO ready: $@"
@@ -147,7 +147,12 @@ run-uefi: $(KERNEL_ISO)
 setup:
 	@echo "[SETUP] Installing build dependencies..."
 	sudo apt update
-	sudo apt install -y nasm gcc make xorriso mtools qemu-system-x86 ovmf limine
+	sudo apt install -y nasm gcc make xorriso mtools qemu-system-x86 ovmf git
+	@if [ ! -d "limine-git" ]; then \
+		echo "[SETUP] Cloning and building Limine bootloader..."; \
+		git clone https://github.com/limine-bootloader/limine.git limine-git --branch=v8.x-binary --depth=1; \
+		make -C limine-git; \
+	fi
 	@echo "[SETUP] Done! Run 'make iso' to build."
 
 clean:

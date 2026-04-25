@@ -24,6 +24,10 @@
 #include "../nexus/graph.h"
 #include "../nexus/capability.h"
 #include "../nexus/channel.h"
+#include "../drivers/pci.h"
+#include "../drivers/keyboard.h"
+#include "../drivers/mouse.h"
+#include "../kernel/shell.h"
 
 /* ============================================================================
  * Limine Requests — the bootloader fills these in before calling us
@@ -55,17 +59,6 @@ static volatile struct limine_kernel_address_request kaddr_request = {
     .revision = 0
 };
 
-/* Limine request markers */
-__attribute__((used, section(".limine_requests_start")))
-static volatile u64 limine_reqs_start[4] = {
-    0xf9562b2d5c95a6c8, 0x6a7b384944536bdc, 0, 0
-};
-
-__attribute__((used, section(".limine_requests_end")))
-static volatile u64 limine_reqs_end[4] = {
-    0xadc0e0531bb10d03, 0x9572709f31764c62, 0, 0
-};
-
 /* ============================================================================
  * Boot Banner
  * ============================================================================ */
@@ -86,7 +79,7 @@ static void print_banner(void) {
         "  ╩ ╩╚═╝╩╚═╝╚╝╚═╝╩═╝\n"
     );
     kprintf_color(0xFF00FF88,
-        "\n  YamKernel v0.1.0 — Graph-Based Adaptive OS\n");
+        "\n  YamKernel v0.2.0 — Graph-Based Adaptive OS\n");
     kprintf_color(0xFF888888,
         "  Architecture: x86_64 | Model: YamGraph Resource Graph\n"
         "  Built: " __DATE__ " " __TIME__ "\n\n");
@@ -167,7 +160,7 @@ void kernel_main(void) {
     kprintf_color(0xFF00FF88,
         "\n"
         "  ╔══════════════════════════════════════════════════╗\n"
-        "  ║        YamKernel v0.1.0 — BOOT COMPLETE         ║\n"
+        "  ║        YamKernel v0.2.0 — BOOT COMPLETE         ║\n"
         "  ╠══════════════════════════════════════════════════╣\n");
     kprintf_color(0xFF00DDFF,
         "  ║  Memory : %lu MB total, %lu MB free             \n",
@@ -181,9 +174,12 @@ void kernel_main(void) {
         "  ╚══════════════════════════════════════════════════╝\n"
         "\n");
 
-    /* ---- Kernel idle loop ---- */
-    kprintf("[YAM] Entering idle loop...\n");
-    for (;;) {
-        hlt();
-    }
+    /* ---- Phase 8: Shell / Interactive Terminal ---- */
+    kprintf_color(0xFF00DDFF, "\n=== Phase 5: Input & Terminal ===\n");
+    pci_init();
+    keyboard_init();
+    mouse_init();
+
+    /* Launch interactive REPL */
+    shell_start();
 }

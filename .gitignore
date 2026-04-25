@@ -1,49 +1,24 @@
-# Prerequisites
-*.d
-
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
-
-# YamKernel specific
+# Build artifacts
 build/
-*.iso
+*.o
 *.elf
+*.iso
+*.img
+*.map
+*.bin
+*.asm.o
 
-# Limine bootloader source clone
+# Toolchains and submodules
 limine-git/
+limine/
 
-# OS generated files
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
+
+# Logs
+*.log
+serial.log

@@ -103,10 +103,6 @@ static void idt_set_gate(u8 vector, void (*handler)(void), u8 ist, u8 type_attr)
 
 /* PIC (8259) initialization — remap IRQs to vectors 32-47 */
 static void pic_remap(void) {
-    /* Save masks */
-    u8 mask1 = inb(0x21);
-    u8 mask2 = inb(0xA1);
-
     /* Start initialization (ICW1) */
     outb(0x20, 0x11); io_wait();
     outb(0xA0, 0x11); io_wait();
@@ -123,9 +119,16 @@ static void pic_remap(void) {
     outb(0x21, 0x01); io_wait();
     outb(0xA1, 0x01); io_wait();
 
-    /* Restore masks */
-    outb(0x21, mask1);
-    outb(0xA1, mask2);
+    /* Set IRQ masks:
+     * Master (0x21): Enable IRQ1 (keyboard) and IRQ2 (cascade to slave)
+     *   Mask = ~(bit1 | bit2) = ~0x06 = 0xF9
+     *   This BLOCKS IRQ0(PIT), IRQ3-7 but ALLOWS keyboard + slave PIC
+     * Slave (0xA1): Enable IRQ12 (mouse)
+     *   Mask = ~(bit4) = ~0x10 = 0xEF
+     *   IRQ12 = slave IRQ 4, so unmask bit 4
+     */
+    outb(0x21, 0xF9);  /* Master: allow IRQ1(KB) + IRQ2(cascade) */
+    outb(0xA1, 0xEF);  /* Slave:  allow IRQ12(mouse) */
 }
 
 /* Send End of Interrupt */

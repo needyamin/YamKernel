@@ -1,5 +1,5 @@
 /* ============================================================================
- * YamKernel — Framebuffer Driver
+ * YamKernel — Framebuffer Driver (Optimized)
  * Software text rendering using an embedded 8x16 bitmap font
  * ============================================================================ */
 
@@ -113,6 +113,8 @@ static const u8 font_data[95][16] = {
 /* ---- Framebuffer state ---- */
 
 static struct limine_framebuffer *g_fb = NULL;
+static u32 *g_pixels = NULL;     /* Cached pixel pointer — avoid dereferencing every call */
+static u32 g_pitch4 = 0;         /* Cached pitch/4 — used in every draw */
 static u32 g_cursor_col = 0;
 static u32 g_cursor_row = 0;
 static u32 g_max_cols = 0;
@@ -120,6 +122,8 @@ static u32 g_max_rows = 0;
 
 void fb_init(struct limine_framebuffer *fb) {
     g_fb = fb;
+    g_pixels = (u32 *)fb->address;
+    g_pitch4 = (u32)(fb->pitch / 4);
     g_max_cols = (u32)(fb->width / FONT_W);
     g_max_rows = (u32)(fb->height / FONT_H);
     g_cursor_col = 0;
@@ -128,24 +132,33 @@ void fb_init(struct limine_framebuffer *fb) {
 }
 
 void fb_put_pixel(u32 x, u32 y, u32 color) {
-    if (!g_fb || x >= g_fb->width || y >= g_fb->height) return;
-    u32 *pixels = (u32 *)g_fb->address;
-    pixels[y * (g_fb->pitch / 4) + x] = color;
+    if (!g_pixels || x >= g_fb->width || y >= g_fb->height) return;
+    g_pixels[y * g_pitch4 + x] = color;
 }
 
 void fb_clear(u32 color) {
-    if (!g_fb) return;
-    u32 *pixels = (u32 *)g_fb->address;
-    u64 total = (g_fb->pitch / 4) * g_fb->height;
-    for (u64 i = 0; i < total; i++) {
-        pixels[i] = color;
+    if (!g_pixels) return;
+    /* Use 32-bit fill — much faster than per-pixel loop for solid colors */
+    u64 total = (u64)g_pitch4 * g_fb->height;
+    u32 *p = g_pixels;
+    u32 *end = p + total;
+    /* Unrolled 8x fill loop for speed */
+    while (p + 8 <= end) {
+        p[0] = color; p[1] = color; p[2] = color; p[3] = color;
+        p[4] = color; p[5] = color; p[6] = color; p[7] = color;
+        p += 8;
+    }
+    while (p < end) {
+        *p++ = color;
     }
     g_cursor_col = 0;
     g_cursor_row = 0;
 }
 
+/* OPTIMIZED: Writes directly to the framebuffer scanline pointer
+ * instead of calling fb_put_pixel 128 times per character */
 static void fb_draw_char(u32 col, u32 row, char c, u32 fg, u32 bg) {
-    if (!g_fb) return;
+    if (!g_pixels) return;
     int idx = (int)c - 32;
     if (idx < 0 || idx >= 95) idx = 0; /* Fallback to space */
 
@@ -154,35 +167,39 @@ static void fb_draw_char(u32 col, u32 row, char c, u32 fg, u32 bg) {
 
     for (int y = 0; y < FONT_H; y++) {
         u8 row_bits = font_data[idx][y];
-        for (int x = 0; x < FONT_W; x++) {
-            u32 color = (row_bits & (0x80 >> x)) ? fg : bg;
-            fb_put_pixel(x0 + x, y0 + y, color);
-        }
+        u32 *scanline = g_pixels + (y0 + y) * g_pitch4 + x0;
+        /* Unrolled 8-pixel row write */
+        scanline[0] = (row_bits & 0x80) ? fg : bg;
+        scanline[1] = (row_bits & 0x40) ? fg : bg;
+        scanline[2] = (row_bits & 0x20) ? fg : bg;
+        scanline[3] = (row_bits & 0x10) ? fg : bg;
+        scanline[4] = (row_bits & 0x08) ? fg : bg;
+        scanline[5] = (row_bits & 0x04) ? fg : bg;
+        scanline[6] = (row_bits & 0x02) ? fg : bg;
+        scanline[7] = (row_bits & 0x01) ? fg : bg;
     }
 }
 
 void fb_scroll(void) {
-    if (!g_fb) return;
-    u32 *pixels = (u32 *)g_fb->address;
-    u32 pitch4 = g_fb->pitch / 4;
+    if (!g_pixels) return;
     u32 line_height = FONT_H;
 
-    /* Move everything up by one character row */
-    u64 copy_size = pitch4 * (g_fb->height - line_height) * sizeof(u32);
-    memmove(pixels, pixels + pitch4 * line_height, copy_size);
+    /* Move everything up by one character row — memmove handles overlap */
+    u64 copy_size = (u64)g_pitch4 * (g_fb->height - line_height) * sizeof(u32);
+    memmove(g_pixels, g_pixels + g_pitch4 * line_height, copy_size);
 
     /* Clear the last row */
-    u32 clear_start = pitch4 * (g_fb->height - line_height);
-    u64 clear_size = pitch4 * line_height;
-    for (u64 i = 0; i < clear_size; i++) {
-        pixels[clear_start + i] = FB_COLOR_DARK_BG;
+    u32 *clear_ptr = g_pixels + g_pitch4 * (g_fb->height - line_height);
+    u64 clear_count = (u64)g_pitch4 * line_height;
+    for (u64 i = 0; i < clear_count; i++) {
+        clear_ptr[i] = FB_COLOR_DARK_BG;
     }
 
     g_cursor_row--;
 }
 
 void fb_putchar(char c, u32 fg, u32 bg) {
-    if (!g_fb) return;
+    if (!g_pixels) return;
 
     if (c == '\n') {
         g_cursor_col = 0;
@@ -190,7 +207,7 @@ void fb_putchar(char c, u32 fg, u32 bg) {
     } else if (c == '\r') {
         g_cursor_col = 0;
     } else if (c == '\t') {
-        g_cursor_col = (g_cursor_col + 4) & ~3;
+        g_cursor_col = (g_cursor_col + 4) & ~3u;
     } else if (c == '\b') {
         if (g_cursor_col > 0) g_cursor_col--;
     } else {
