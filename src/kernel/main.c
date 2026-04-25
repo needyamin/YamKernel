@@ -14,11 +14,18 @@
 
 #include "../cpu/gdt.h"
 #include "../cpu/idt.h"
+#include "../cpu/cpuid.h"
 #include "../mem/pmm.h"
 #include "../mem/vmm.h"
 #include "../mem/heap.h"
 #include "../drivers/serial.h"
 #include "../drivers/framebuffer.h"
+#include "../drivers/pit.h"
+#include "../drivers/rtc.h"
+#include "../drivers/bus/api.h"
+#include "../net/net.h"
+#include "../ipc/ipc.h"
+#include "../fs/vfs.h"
 #include "../lib/kprintf.h"
 #include "../lib/string.h"
 #include "../nexus/graph.h"
@@ -118,6 +125,7 @@ void kernel_main(void) {
     kprintf_color(0xFFFFDD00, "=== Phase 1: CPU Setup ===\n");
     gdt_init();
     idt_init();
+    cpuid_init();
 
     /* ---- Phase 5: Memory Management ---- */
     kprintf_color(0xFFFFDD00, "\n=== Phase 2: Memory (Cell Allocator) ===\n");
@@ -175,8 +183,18 @@ void kernel_main(void) {
         "\n");
 
     /* ---- Phase 8: Shell / Interactive Terminal ---- */
-    kprintf_color(0xFF00DDFF, "\n=== Phase 5: Input & Terminal ===\n");
+    kprintf_color(0xFF00DDFF, "\n=== Phase 5: Drivers, Subsystems & Input ===\n");
+    pit_init(100);   /* 100 Hz system timer (10ms resolution) */
     pci_init();
+    
+    usb_init();
+    i2c_init();
+    spi_init();
+    
+    vfs_init();
+    ipc_init();
+    net_init();
+    
     keyboard_init();
     mouse_init();
 

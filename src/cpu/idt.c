@@ -120,14 +120,13 @@ static void pic_remap(void) {
     outb(0xA1, 0x01); io_wait();
 
     /* Set IRQ masks:
-     * Master (0x21): Enable IRQ1 (keyboard) and IRQ2 (cascade to slave)
-     *   Mask = ~(bit1 | bit2) = ~0x06 = 0xF9
-     *   This BLOCKS IRQ0(PIT), IRQ3-7 but ALLOWS keyboard + slave PIC
+     * Master (0x21): Enable IRQ0(PIT), IRQ1(keyboard), IRQ2(cascade to slave)
+     *   Mask = ~(bit0 | bit1 | bit2) = ~0x07 = 0xF8
      * Slave (0xA1): Enable IRQ12 (mouse)
      *   Mask = ~(bit4) = ~0x10 = 0xEF
      *   IRQ12 = slave IRQ 4, so unmask bit 4
      */
-    outb(0x21, 0xF9);  /* Master: allow IRQ1(KB) + IRQ2(cascade) */
+    outb(0x21, 0xF8);  /* Master: allow IRQ0(PIT) + IRQ1(KB) + IRQ2(cascade) */
     outb(0xA1, 0xEF);  /* Slave:  allow IRQ12(mouse) */
 }
 

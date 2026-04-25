@@ -9,7 +9,7 @@
    Port 0xCFC: CONFIG_DATA */
 
 /* Because our outw/inw are 16 bit, let's just do 32 bit port I/O directly here using asm */
-static u32 pci_read_32(u8 bus, u8 slot, u8 func, u8 offset) {
+u32 pci_read_32(u8 bus, u8 slot, u8 func, u8 offset) {
     u32 address = (u32)((1U << 31) | ((u32)bus << 16) | ((u32)slot << 11) | ((u32)func << 8) | (offset & 0xFC));
     __asm__ volatile ("outl %0, %1" : : "a"(address), "Nd"(0xCF8));
     u32 ret;
@@ -17,14 +17,29 @@ static u32 pci_read_32(u8 bus, u8 slot, u8 func, u8 offset) {
     return ret;
 }
 
-static u16 pci_read_16(u8 bus, u8 slot, u8 func, u8 offset) {
+u16 pci_read_16(u8 bus, u8 slot, u8 func, u8 offset) {
     u32 dword = pci_read_32(bus, slot, func, offset);
     return (u16)((dword >> ((offset & 2) * 8)) & 0xFFFF);
 }
 
-static u8 pci_read_8(u8 bus, u8 slot, u8 func, u8 offset) {
+u8 pci_read_8(u8 bus, u8 slot, u8 func, u8 offset) {
     u32 dword = pci_read_32(bus, slot, func, offset);
     return (u8)((dword >> ((offset & 3) * 8)) & 0xFF);
+}
+
+void pci_write_32(u8 bus, u8 slot, u8 func, u8 offset, u32 value) {
+    u32 address = (u32)((1U << 31) | ((u32)bus << 16) | ((u32)slot << 11) | ((u32)func << 8) | (offset & 0xFC));
+    __asm__ volatile ("outl %0, %1" : : "a"(address), "Nd"(0xCF8));
+    __asm__ volatile ("outl %0, %1" : : "a"(value), "Nd"(0xCFC));
+}
+
+void pci_write_16(u8 bus, u8 slot, u8 func, u8 offset, u16 value) {
+    /* Read modify write to avoid clobbering other 16 bits */
+    u32 dword = pci_read_32(bus, slot, func, offset);
+    u32 shift = (offset & 2) * 8;
+    u32 mask = ~(0xFFFF << shift);
+    dword = (dword & mask) | ((u32)value << shift);
+    pci_write_32(bus, slot, func, offset, dword);
 }
 
 /* Helper to get class name */
@@ -92,6 +107,15 @@ void pci_init(void) {
         }
     }
     kprintf_color(0xFF00FF88, "[PCI] Scanned bus. Found %u devices.\n", pci_dev_count);
+}
+
+pci_device_t* pci_get_device(u16 vendor_id, u16 device_id) {
+    for (u32 i = 0; i < pci_dev_count; i++) {
+        if (pci_devices[i].vendor_id == vendor_id && pci_devices[i].device_id == device_id) {
+            return &pci_devices[i];
+        }
+    }
+    return NULL;
 }
 
 void pci_dump(void) {

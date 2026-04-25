@@ -34,6 +34,7 @@ static const char scancode_ascii_shift[128] = {
 /* State */
 static volatile bool shift_pressed = false;
 static volatile bool caps_pressed  = false;
+static volatile bool expecting_extended = false;
 
 /* Ring Buffer */
 static volatile char kbd_buffer[KBD_BUF_SIZE];
@@ -54,14 +55,32 @@ static void keyboard_isr(interrupt_frame_t *frame) {
     
     u8 scancode = inb(PS2_DATA_PORT);
 
-    /* Ignore extended scancodes (0xE0 prefix) for now */
-    if (scancode == 0xE0) return;
+    if (scancode == 0xE0) {
+        expecting_extended = true;
+        return;
+    }
 
     /* Check released keys (bit 7 set = key released) */
     if (scancode & 0x80) {
+        if (expecting_extended) {
+            expecting_extended = false;
+            return;
+        }
         u8 released = scancode & 0x7F;
         if (released == 0x2A || released == 0x36) { /* L-Shift or R-Shift */
             shift_pressed = false;
+        }
+        return;
+    }
+
+    /* Handle extended keys (Arrows) */
+    if (expecting_extended) {
+        expecting_extended = false;
+        switch (scancode) {
+            case 0x48: kbd_push('\x11'); break; /* Up Arrow -> DC1 */
+            case 0x50: kbd_push('\x12'); break; /* Down Arrow -> DC2 */
+            case 0x4B: kbd_push('\x13'); break; /* Left Arrow -> DC3 */
+            case 0x4D: kbd_push('\x14'); break; /* Right Arrow -> DC4 */
         }
         return;
     }

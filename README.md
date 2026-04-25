@@ -13,8 +13,9 @@ YamKernel is a completely novel OS kernel for x86_64 that introduces a unique ar
 | Scheduling | **Flow Scheduler** — graph topology-based priority |
 | Memory | **Cell Allocator** — fractal quad-tree allocation |
 | IPC | **Channels** — typed bidirectional graph edges |
-| Filesystem | **NexusFS** — graph-structured data storage |
-| Terminal | **Interactive Kernel REPL** with a 'top' Dashboard |
+| Terminal | **macOS-Style Bash Shell** — full History Ring and extended scancode navigation |
+| Networking | **Multi-Layer Data Link** — e1000 Gigabit, Intel Wireless (wlan0), USB Bluetooth (hci0) |
+| Network Protocols | **Full Stack Scaffolding** — TCP, UDP, ICMP, ARP, DHCP, DNS |
 
 ## Building
 
