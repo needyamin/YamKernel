@@ -18,10 +18,10 @@
 #include "../mem/pmm.h"
 #include "../mem/vmm.h"
 #include "../mem/heap.h"
-#include "../drivers/serial.h"
-#include "../drivers/framebuffer.h"
-#include "../drivers/pit.h"
-#include "../drivers/rtc.h"
+#include "../drivers/serial/serial.h"
+#include "../drivers/video/framebuffer.h"
+#include "../drivers/timer/pit.h"
+#include "../drivers/timer/rtc.h"
 #include "../drivers/bus/api.h"
 #include "../net/net.h"
 #include "../ipc/ipc.h"
@@ -31,10 +31,11 @@
 #include "../nexus/graph.h"
 #include "../nexus/capability.h"
 #include "../nexus/channel.h"
-#include "../drivers/pci.h"
-#include "../drivers/keyboard.h"
-#include "../drivers/mouse.h"
+#include "../drivers/bus/pci.h"
+#include "../drivers/input/keyboard.h"
+#include "../drivers/input/mouse.h"
 #include "../kernel/shell.h"
+#include "../boot/yamboot.h"
 
 /* ============================================================================
  * Limine Requests — the bootloader fills these in before calling us
@@ -118,6 +119,13 @@ void kernel_main(void) {
         serial_write("[YAM] WARNING: No framebuffer available\n");
     }
 
+    /* ---- YamBoot: custom boot menu (polled, no IDT yet) ---- */
+    yamboot_choice_t choice = yamboot_show();
+    if (choice == YAMBOOT_REBOOT) {
+        outb(0x64, 0xFE);
+        for (;;) __asm__ volatile ("cli; hlt");
+    }
+
     /* ---- Print boot banner ---- */
     print_banner();
 
@@ -185,18 +193,20 @@ void kernel_main(void) {
     /* ---- Phase 8: Shell / Interactive Terminal ---- */
     kprintf_color(0xFF00DDFF, "\n=== Phase 5: Drivers, Subsystems & Input ===\n");
     pit_init(100);   /* 100 Hz system timer (10ms resolution) */
-    pci_init();
-    
-    usb_init();
-    i2c_init();
-    spi_init();
-    
-    vfs_init();
-    ipc_init();
-    net_init();
-    
     keyboard_init();
-    mouse_init();
+
+    if (!g_yamboot_safe) {
+        pci_init();
+        usb_init();
+        i2c_init();
+        spi_init();
+        vfs_init();
+        ipc_init();
+        net_init();
+        mouse_init();
+    } else {
+        kprintf_color(0xFFFF8833, "[YAMBOOT] Safe Mode: skipping PCI/USB/I2C/SPI/VFS/IPC/NET/MOUSE\n");
+    }
 
     /* Launch interactive REPL */
     shell_start();

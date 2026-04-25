@@ -3,8 +3,8 @@
  * ============================================================================ */
 
 #include "keyboard.h"
-#include "../cpu/idt.h"
-#include "../lib/kprintf.h"
+#include "../../cpu/idt.h"
+#include "../../lib/kprintf.h"
 
 /* PS/2 Ports */
 #define PS2_DATA_PORT 0x60

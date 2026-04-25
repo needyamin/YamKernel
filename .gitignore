@@ -7,6 +7,8 @@ build/
 *.map
 *.bin
 *.asm.o
+*.lst
+*.d
 
 # Toolchains and submodules
 limine-git/
@@ -17,8 +19,18 @@ limine/
 .idea/
 *.swp
 *.swo
+*~
 .DS_Store
+Thumbs.db
 
-# Logs
+# Logs / runtime
 *.log
 serial.log
+qemu.log
+debug.log
+
+# Cursor / agent local state
+.cursor/
+.cursorignore
+agent-transcripts/
+terminals/

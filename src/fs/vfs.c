@@ -5,9 +5,9 @@
 #include "../lib/kprintf.h"
 #include "../nexus/graph.h"
 
-void fat32_init(void) { kprintf_color(0xFF0A0A14, "[FS] FAT32 module loaded\n"); }
-void ext4_init(void)  { kprintf_color(0xFF0A0A14, "[FS] ext4 module loaded\n"); }
-void ntfs_init(void)  { kprintf_color(0xFF0A0A14, "[FS] NTFS module loaded\n"); }
+void fat32_init(void) { kprintf_color(0xFF888888, "[FS] FAT32 module loaded\n"); }
+void ext4_init(void)  { kprintf_color(0xFF888888, "[FS] ext4 module loaded\n"); }
+void ntfs_init(void)  { kprintf_color(0xFF888888, "[FS] NTFS module loaded\n"); }
 
 void vfs_mount(const char *device, const char *mount_point, const char *fs_type) {
     (void)device; (void)mount_point; (void)fs_type;

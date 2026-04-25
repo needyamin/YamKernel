@@ -3,7 +3,7 @@
  * ============================================================================ */
 
 #include "pci.h"
-#include "../lib/kprintf.h"
+#include "../../lib/kprintf.h"
 
 /* Port 0xCF8: CONFIG_ADDRESS
    Port 0xCFC: CONFIG_DATA */

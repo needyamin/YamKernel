@@ -3,8 +3,8 @@
  * ============================================================================ */
 
 #include "mouse.h"
-#include "../cpu/idt.h"
-#include "../lib/kprintf.h"
+#include "../../cpu/idt.h"
+#include "../../lib/kprintf.h"
 
 #define PS2_DATA_PORT 0x60
 #define PS2_CMD_PORT  0x64
@@ -28,15 +28,18 @@ static void mouse_wait_read(void) {
     while (!(inb(PS2_CMD_PORT) & 0x01) && --timeout > 0);
 }
 
-/* Send command to mouse (via PS/2 controller) and wait for ACK */
-static void mouse_write(u8 data) {
+/* Send command to mouse (via PS/2 controller) and wait for ACK.
+   Returns false if no ACK arrives within the timeout (mouse not present). */
+static bool mouse_write(u8 data) {
     mouse_wait_write();
-    outb(PS2_CMD_PORT, 0xD4); /* Write next byte to second PS/2 port */
+    outb(PS2_CMD_PORT, 0xD4);
     mouse_wait_write();
     outb(PS2_DATA_PORT, data);
-    /* Wait for ACK (0xFA) from mouse */
-    mouse_wait_read();
-    inb(PS2_DATA_PORT); /* Discard ACK */
+    int timeout = 100000;
+    while (!(inb(PS2_CMD_PORT) & 0x01) && --timeout > 0) io_wait();
+    if (timeout <= 0) return false;
+    inb(PS2_DATA_PORT);
+    return true;
 }
 
 /* Mouse IRQ 12 Handler (vector 44) */
@@ -106,14 +109,13 @@ void mouse_init(void) {
     mouse_wait_write();
     outb(PS2_DATA_PORT, config);
 
-    /* Tell mouse to use default settings */
-    mouse_write(0xF6);
+    /* Tell mouse to use default settings + enable streaming.
+       If no PS/2 mouse is attached, we just skip registration cleanly. */
+    if (!mouse_write(0xF6) || !mouse_write(0xF4)) {
+        kprintf_color(0xFFFF8833, "[MOUSE] No PS/2 mouse detected (skipped)\n");
+        return;
+    }
 
-    /* Enable mouse data reporting (packet streaming) */
-    mouse_write(0xF4);
-
-    /* Register IRQ 12 (vector 32 + 12 = 44) */
     idt_register_handler(44, mouse_isr);
-
     kprintf_color(0xFF00FF88, "[MOUSE] PS/2 Mouse initialized (IRQ 12)\n");
 }

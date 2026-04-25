@@ -12,8 +12,8 @@
  * ============================================================================ */
 
 #include "pit.h"
-#include "../cpu/idt.h"
-#include "../lib/kprintf.h"
+#include "../../cpu/idt.h"
+#include "../../lib/kprintf.h"
 
 /* PIT I/O ports */
 #define PIT_CHANNEL_0   0x40
@@ -31,8 +31,7 @@ static u32 g_pit_hz = 100;
 static void pit_isr(interrupt_frame_t *frame) {
     (void)frame;
     g_ticks++;
-    /* Send EOI to master PIC */
-    outb(0x20, 0x20);
+    /* EOI is sent by isr_dispatch — don't double-EOI here */
 }
 
 void pit_init(u32 frequency_hz) {

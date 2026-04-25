@@ -4,7 +4,7 @@
  * ============================================================================ */
 
 #include "framebuffer.h"
-#include "../lib/string.h"
+#include "../../lib/string.h"
 
 /* ---- Embedded 8x16 bitmap font (CP437 subset: ASCII 32-126) ---- */
 

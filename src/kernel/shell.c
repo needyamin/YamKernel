@@ -6,15 +6,15 @@
 #include "shell.h"
 #include "../lib/kprintf.h"
 #include "../lib/string.h"
-#include "../drivers/keyboard.h"
-#include "../drivers/framebuffer.h"
-#include "../drivers/pci.h"
+#include "../drivers/input/keyboard.h"
+#include "../drivers/video/framebuffer.h"
+#include "../drivers/bus/pci.h"
 #include "../mem/pmm.h"
 #include "../nexus/graph.h"
 #include "../nexus/graph.h"
 #include "../cpu/cpuid.h"
-#include "../drivers/pit.h"
-#include "../drivers/rtc.h"
+#include "../drivers/timer/pit.h"
+#include "../drivers/timer/rtc.h"
 #include "../net/net.h"
 #include "../ipc/ipc.h"
 #include "../fs/vfs.h"
@@ -86,6 +86,8 @@ static void cmd_help(void) {
     kprintf_color(C_OK,      "    echo      "); kprintf_color(C_TEXT, "Print text to screen\n");
     kprintf_color(C_OK,      "    clear     "); kprintf_color(C_TEXT, "Clear the screen\n");
     kprintf_color(C_OK,      "    help      "); kprintf_color(C_TEXT, "Show this reference\n");
+    kprintf_color(C_OK,      "    whoami    "); kprintf_color(C_TEXT, "Current shell user\n");
+    kprintf_color(C_OK,      "    ver       "); kprintf_color(C_TEXT, "Short version string\n");
     kprintf_color(C_DIM,     "  --------------------------------------------------\n\n");
 }
 
@@ -559,6 +561,14 @@ static void parse_command(char *cmd) {
         char *str = cmd + 4;
         while (*str == ' ') str++; /* skip leading spaces */
         kprintf_color(C_VALUE, "%s\n", str);
+    } else if (strcmp(cmd, "lspci") == 0) {
+        cmd_pci();
+    } else if (strcmp(cmd, "ifconfig") == 0) {
+        cmd_net();
+    } else if (strcmp(cmd, "whoami") == 0) {
+        kprintf_color(C_OK, "  yam@kernel "); kprintf_color(C_DIM, "(capability-based, no UID)\n");
+    } else if (strcmp(cmd, "ver") == 0 || strcmp(cmd, "version") == 0) {
+        kprintf_color(C_VALUE, "  YamKernel 0.2.0\n");
     } else if (strcmp(cmd, "reboot") == 0 || strcmp(cmd, "restart") == 0) {
         cmd_reboot();
     } else if (strcmp(cmd, "shutdown") == 0) {

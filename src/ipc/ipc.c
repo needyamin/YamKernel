@@ -5,10 +5,10 @@
 #include "../lib/kprintf.h"
 #include "../nexus/graph.h"
 
-void ipc_shm_create(void)   { kprintf_color(0xFF0A0A14, "[IPC] Shared Memory created\n"); }
-void ipc_pipe_create(void)  { kprintf_color(0xFF0A0A14, "[IPC] Pipe/FIFO created\n"); }
-void ipc_msgq_create(void)  { kprintf_color(0xFF0A0A14, "[IPC] Message Queue created\n"); }
-void ipc_socket_create(void){ kprintf_color(0xFF0A0A14, "[IPC] Unix Socket created\n"); }
+void ipc_shm_create(void)   { kprintf_color(0xFF888888, "[IPC] Shared Memory created\n"); }
+void ipc_pipe_create(void)  { kprintf_color(0xFF888888, "[IPC] Pipe/FIFO created\n"); }
+void ipc_msgq_create(void)  { kprintf_color(0xFF888888, "[IPC] Message Queue created\n"); }
+void ipc_socket_create(void){ kprintf_color(0xFF888888, "[IPC] Unix Socket created\n"); }
 
 void ipc_init(void) {
     kprintf_color(0xFF00DDFF, "[IPC] Initializing IPC Mechanisms...\n");

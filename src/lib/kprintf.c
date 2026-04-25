@@ -5,8 +5,8 @@
 
 #include "kprintf.h"
 #include "string.h"
-#include "../drivers/serial.h"
-#include "../drivers/framebuffer.h"
+#include "../drivers/serial/serial.h"
+#include "../drivers/video/framebuffer.h"
 
 /* Variadic argument handling (GCC built-in) */
 typedef __builtin_va_list va_list;

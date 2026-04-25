@@ -39,6 +39,8 @@ static u64 *alloc_page_table(void) {
 /* Get or create a page table entry, returning the next level table */
 static u64 *get_or_create_table(u64 *table, u64 index, u64 flags) {
     if (table[index] & VMM_FLAG_PRESENT) {
+        /* Huge page (PS bit) — already mapped by bootloader, don't descend */
+        if (table[index] & (1ULL << 7)) return NULL;
         u64 phys = table[index] & 0x000FFFFFFFFFF000ULL;
         return (u64 *)vmm_phys_to_virt(phys);
     }

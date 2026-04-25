@@ -4,7 +4,7 @@
 
 #include <nexus/panic.h>
 #include "../lib/kprintf.h"
-#include "../drivers/framebuffer.h"
+#include "../drivers/video/framebuffer.h"
 
 /* Variadic args */
 typedef __builtin_va_list va_list;
