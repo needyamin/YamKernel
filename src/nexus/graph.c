@@ -252,7 +252,7 @@ void yamgraph_self_test(void) {
                                            YAM_PERM_READ | YAM_PERM_WRITE);
 
     kprintf("[YAMGRAPH] Test 2 - Link 3 edges: %s (edges=%u)\n",
-            (e1 != (yam_edge_id_t)-1 && yamgraph_edge_count() == 3) ? "PASS" : "FAIL",
+            (e1 != (yam_edge_id_t)-1 && e3 != (yam_edge_id_t)-1 && yamgraph_edge_count() == 3) ? "PASS" : "FAIL",
             yamgraph_edge_count());
 
     /* Test 3: Permission check */

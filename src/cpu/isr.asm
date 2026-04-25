@@ -5,6 +5,24 @@
 
 [bits 64]
 [extern isr_dispatch]
+[extern kernel_main]
+
+; ============================================================================
+; Kernel Entry Point — called by bootloader
+; ============================================================================
+section .text
+[global kernel_entry]
+kernel_entry:
+    ; Clear direction flag
+    cld
+    ; Call C kernel main
+    call kernel_main
+    ; If kernel_main returns, halt forever
+.halt:
+    cli
+    hlt
+    jmp .halt
+
 
 ; ============================================================================
 ; Macro: ISR stub WITHOUT error code (we push a dummy 0)
@@ -154,3 +172,6 @@ gdt_flush:
     mov gs, ax
     mov ss, ax
     ret
+
+; Mark stack as non-executable
+section .note.GNU-stack noalloc noexec nowrite progbits

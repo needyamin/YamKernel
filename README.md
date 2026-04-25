@@ -4,16 +4,16 @@
 
 YamKernel is a completely novel OS kernel for x86_64 that introduces a unique architecture: the **YamGraph Resource Graph**. Every system resource — processes, memory, devices, files, IPC channels — lives as a node in a live directed graph, with permissions flowing through edges as unforgeable capability tokens.
 
-## What Makes YamKernel Different
+## YamKernel Features
 
-| Feature | Linux | YamKernel |
-|---------|-------|-----------|
-| Resource Model | Flat PID + fd tables | Directed graph (YamGraph) |
-| Permissions | UID/GID + ACLs | Capability tokens on graph edges |
-| Scheduling | CFS fairness tree | Flow Scheduler (graph topology) |
-| Memory | Buddy allocator | Cell Allocator (fractal quad-tree) |
-| IPC | Pipes, sockets | Typed bidirectional Channels |
-| Filesystem | VFS tree | Graph-structured NexusFS |
+| Subsystem | YamKernel Approach |
+|-----------|--------------------|
+| Resource Model | **YamGraph** — live directed graph of all resources |
+| Permissions | **Capability tokens** flowing through graph edges |
+| Scheduling | **Flow Scheduler** — graph topology-based priority |
+| Memory | **Cell Allocator** — fractal quad-tree allocation |
+| IPC | **Channels** — typed bidirectional graph edges |
+| Filesystem | **NexusFS** — graph-structured data storage |
 
 ## Building
 
@@ -104,7 +104,7 @@ The kernel's core is a directed graph where:
 - Revoking a capability cascades through the graph
 
 ### Cell Allocator
-Physical memory uses a fractal quad-tree instead of Linux's buddy system:
+Physical memory uses YamKernel's original fractal quad-tree algorithm:
 - The root cell = entire physical memory
 - Split: each cell divides into 4 equal children
 - Merge: when all 4 siblings are free, they coalesce
