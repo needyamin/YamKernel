@@ -54,6 +54,7 @@ void cpuid_init(void) {
         g_cpuid.has_cx8  = (edx >> 8) & 1;
         g_cpuid.has_apic = (edx >> 9) & 1;
         g_cpuid.has_pse  = (edx >> 3) & 1;
+        g_cpuid.has_fxsr = (edx >> 24) & 1;
         g_cpuid.has_sse  = (edx >> 25) & 1;
         g_cpuid.has_sse2 = (edx >> 26) & 1;
 
@@ -61,9 +62,19 @@ void cpuid_init(void) {
         g_cpuid.has_sse3   = (ecx >> 0) & 1;
         g_cpuid.has_sse41  = (ecx >> 19) & 1;
         g_cpuid.has_sse42  = (ecx >> 20) & 1;
-        g_cpuid.has_aes    = (ecx >> 25) & 1;
-        g_cpuid.has_avx    = (ecx >> 28) & 1;
         g_cpuid.has_x2apic = (ecx >> 21) & 1;
+        g_cpuid.has_aes    = (ecx >> 25) & 1;
+        g_cpuid.has_xsave  = (ecx >> 26) & 1;
+        g_cpuid.has_avx    = (ecx >> 28) & 1;
+    }
+
+    /* ---- Leaf 0x0D: XSAVE Features & Size ---- */
+    if (g_cpuid.has_xsave && max_leaf >= 0x0D) {
+        cpuid(0x0D, &eax, &ebx, &ecx, &edx);
+        g_cpuid.xsave_size = ecx; /* Maximum size required for all supported features */
+    } else {
+        /* Default FXSAVE size is 512 bytes */
+        g_cpuid.xsave_size = 512;
     }
 
     /* ---- Extended Leaf 0x80000002-4: Brand String ---- */

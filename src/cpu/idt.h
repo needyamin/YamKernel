@@ -41,4 +41,7 @@ void idt_init(void);
 typedef void (*isr_handler_t)(interrupt_frame_t *frame);
 void idt_register_handler(u8 vector, isr_handler_t handler);
 
+/* Load the IDT on the current CPU (used by APs) */
+void idt_load(void);
+
 #endif /* _CPU_IDT_H */

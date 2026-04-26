@@ -1,0 +1,51 @@
+# YamKernel: Roadmap to Wayland (Modern Linux GUI)
+
+Implementing a modern display server protocol like Wayland is a monumental achievement for a custom OS. Wayland is not just a graphics protocol; it relies heavily on advanced POSIX OS primitives to function. 
+
+Currently, YamKernel is a powerful monolithic kernel with SMP, multi-threading, and a basic framebuffer. To run a Wayland Compositor (like Weston or Sway) and Wayland clients, YamKernel must be upgraded with the following subsystems.
+
+---
+
+## Phase 1: POSIX System Call Foundation
+Wayland clients and servers communicate via event loops and memory mapping. You must implement:
+1. **File Descriptors (FDs)**: A robust VFS where processes have an FD table mapping integers to kernel objects (files, sockets, pipes).
+2. **`mmap()` and Shared Memory (`memfd_create` or `shm_open`)**: Clients render graphics into a shared memory buffer. They must be able to `mmap()` this buffer into their address space.
+3. **`epoll` / `poll`**: Wayland uses asynchronous event loops. The kernel must support sleeping on multiple file descriptors simultaneously and waking up when one is ready (e.g., when a mouse moves or a socket receives data).
+
+## Phase 2: UNIX Domain Sockets & FD Passing (IPC)
+Wayland's entire protocol runs over local IPC. 
+1. **UNIX Domain Sockets (`AF_UNIX`)**: Wayland clients connect to the compositor via a local socket (typically `/run/user/1000/wayland-0`). 
+2. **File Descriptor Passing (`SCM_RIGHTS`)**: **CRITICAL FEATURE.** When a client draws a window, it allocates a shared memory buffer, and then *sends the File Descriptor of that buffer* to the compositor over the socket. YamKernel's IPC layer must support extracting an FD from one process and injecting it into the FD table of another process.
+
+## Phase 3: The Input Subsystem (Evdev)
+Wayland compositors use `libinput` to process hardware events.
+1. **`/dev/input` interface**: Your PS/2 Keyboard and Mouse drivers currently send data to the kernel shell. They must be refactored to create character devices (e.g., `/dev/input/event0`).
+2. **Evdev Protocol**: The drivers must format raw hardware interrupts into standard Linux `struct input_event` packets (Type, Code, Value) so that Wayland can understand when a key is pressed or the mouse moves.
+
+## Phase 4: Graphics & Direct Rendering Manager (DRM / KMS)
+Currently, YamKernel uses a static framebuffer provided by Limine. Wayland needs more control.
+1. **Kernel Mode Setting (KMS)**: A subsystem to query screen resolutions and push frames to the display.
+2. **Dumb Buffers**: An API (usually via `/dev/dri/card0`) where the compositor can allocate unaccelerated screen buffers and push them to the display hardware. 
+*(Note: Hardware acceleration via Mesa/Gallium3D and DMA-BUFs is highly complex and should be deferred until software-rendering works).*
+
+## Phase 5: Userspace Toolchain & Libraries
+Wayland is a userspace library (`libwayland`). It requires a standard C environment.
+1. **Port a Libc**: Port `musl-libc` or `newlib` to YamKernel. This requires implementing basic syscalls (`open`, `read`, `write`, `brk`, `mmap`, `clone`/`fork`, `execve`).
+2. **Port `libffi`**: Wayland's IPC message dispatcher relies heavily on the Foreign Function Interface library.
+3. **Port `libwayland`**: Compile `libwayland-server` and `libwayland-client` for YamKernel.
+
+## Phase 6: The Compositor
+Once the kernel supports Sockets, `mmap`, Evdev, and DRM:
+1. Write a minimal Wayland Compositor from scratch using `libwayland-server` (or port a minimal one like `tinywl`). 
+2. The compositor will: 
+   - Listen on the `wayland-0` socket.
+   - Read mouse/keyboard events from `/dev/input`.
+   - Receive shared memory FDs from clients.
+   - Composite the clients' buffers into the master DRM Dumb Buffer.
+   - Push the buffer to the screen.
+
+---
+
+### Suggested Next Steps for YamKernel:
+To begin this journey, you cannot jump straight to graphics. You must build the POSIX plumbing first.
+**Immediate Next Step:** Implement a true Virtual File System (VFS) with File Descriptors, and implement the `mmap()` syscall to allow userspace programs to map physical memory into their address space.

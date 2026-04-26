@@ -32,6 +32,7 @@ debug.log
 # Cursor / agent local state
 .cursor/
 .cursorignore
+.gemini/
 agent-transcripts/
 terminals/
 

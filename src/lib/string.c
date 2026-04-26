@@ -6,19 +6,23 @@
 #include "string.h"
 
 void *memset(void *dest, int val, usize count) {
-    u8 *d = (u8 *)dest;
-    for (usize i = 0; i < count; i++) {
-        d[i] = (u8)val;
-    }
+    __asm__ volatile (
+        "rep stosb"
+        : "+D"(dest), "+c"(count)
+        : "a"(val)
+        : "memory"
+    );
     return dest;
 }
 
 void *memcpy(void *dest, const void *src, usize count) {
-    u8 *d = (u8 *)dest;
-    const u8 *s = (const u8 *)src;
-    for (usize i = 0; i < count; i++) {
-        d[i] = s[i];
-    }
+    void *d = dest;
+    __asm__ volatile (
+        "rep movsb"
+        : "+D"(d), "+S"(src), "+c"(count)
+        :
+        : "memory"
+    );
     return dest;
 }
 

@@ -16,11 +16,12 @@ typedef struct heap_block {
     struct heap_block *next;
     struct heap_block *prev;
     u32               magic;    /* 0xDEADBEEF for corruption detection */
+    u32               _pad[3];  /* pad to 48 bytes (multiple of 16) */
 } heap_block_t;
 
 #define HEAP_MAGIC  0xDEADBEEF
 #define HEAP_ALIGN  16
-#define HEAP_INITIAL_PAGES 64   /* 256KB initial heap */
+#define HEAP_INITIAL_PAGES 16384   /* 64MB initial heap */
 
 static heap_block_t *heap_head = NULL;
 static u64 heap_base = 0;

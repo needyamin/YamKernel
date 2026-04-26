@@ -3,6 +3,7 @@
  * ============================================================================ */
 
 #include "keyboard.h"
+#include "evdev.h"
 #include "../../cpu/idt.h"
 #include "../../lib/kprintf.h"
 
@@ -62,11 +63,12 @@ static void keyboard_isr(interrupt_frame_t *frame) {
 
     /* Check released keys (bit 7 set = key released) */
     if (scancode & 0x80) {
+        u8 released = scancode & 0x7F;
+        evdev_push_event(EV_KEY, released, KEY_RELEASED);
         if (expecting_extended) {
             expecting_extended = false;
             return;
         }
-        u8 released = scancode & 0x7F;
         if (released == 0x2A || released == 0x36) { /* L-Shift or R-Shift */
             shift_pressed = false;
         }
@@ -94,6 +96,10 @@ static void keyboard_isr(interrupt_frame_t *frame) {
         caps_pressed = !caps_pressed;
         return;
     }
+
+    /* Push evdev key-press event */
+    evdev_push_event(EV_KEY, scancode, KEY_PRESSED);
+    evdev_push_event(EV_SYN, 0, 0);  /* Sync event */
 
     /* Translate to ASCII */
     if (scancode < 128) {

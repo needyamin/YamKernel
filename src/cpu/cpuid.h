@@ -25,12 +25,16 @@ typedef struct {
     bool has_tsc;
     bool has_cx8;
     bool has_pse;
+    bool has_fxsr;
     /* ECX features from leaf 1 */
     bool has_sse3;
     bool has_sse41;
     bool has_sse42;
     bool has_aes;
     bool has_x2apic;
+    bool has_xsave;
+    /* Derived/Extended state */
+    u32  xsave_size;
 } cpuid_info_t;
 
 /* Initialize CPUID detection (call once at boot) */

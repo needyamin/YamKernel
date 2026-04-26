@@ -10,10 +10,11 @@
 #include "../cpu/gdt.h"
 #include "../mem/heap.h"
 #include "../mem/slab.h"
+#include "../mem/vmm.h"
 #include "../lib/spinlock.h"
 #include "../lib/kprintf.h"
 #include "../lib/string.h"
-
+#include "../cpu/cpuid.h"
 static kmem_cache_t *task_cache;
 
 extern void task_trampoline(void);
@@ -63,6 +64,12 @@ task_t *sched_spawn(const char *name, void (*entry)(void *), void *arg, u8 prio)
     t->entry = entry; t->arg = arg;
     t->stack = (u8 *)kmalloc(SCHED_STACK_SIZE);
     if (!t->stack) { kfree(t); return NULL; }
+    
+    t->fpu_state = (u8 *)kmalloc(cpuid_get_info()->xsave_size);
+    if (!t->fpu_state) { kfree(t->stack); kfree(t); return NULL; }
+    /* Ensure buffer is initialized (avoids XSAVE faulting on garbage reserved bits) */
+    memset(t->fpu_state, 0, cpuid_get_info()->xsave_size);
+
     for (u32 i = 0; i < sizeof(t->name) - 1 && name[i]; i++) t->name[i] = name[i];
 
     /* Stack frame matching context_switch resume + task_trampoline */
@@ -101,6 +108,10 @@ void sched_init(void) {
     boot->weight = prio_weight[boot->prio];
     boot->state  = TASK_RUNNING;
     boot->name[0] = 'b'; boot->name[1] = 's'; boot->name[2] = 'p';
+    
+    boot->fpu_state = (u8 *)kmalloc(cpuid_get_info()->xsave_size);
+    memset(boot->fpu_state, 0, cpuid_get_info()->xsave_size);
+
     /* Boot uses the existing Limine-supplied stack; stack=NULL means
      * "do not touch TSS.rsp0/percpu.kernel_rsp on switch from this task". */
     this_cpu()->current = boot;
@@ -109,17 +120,60 @@ void sched_init(void) {
                   prio_weight[0], prio_weight[1], prio_weight[2], prio_weight[3]);
 }
 
+/* FPU/SIMD Save/Restore helpers */
+static inline u64 read_xcr0(void) {
+    u32 lo, hi;
+    __asm__ volatile("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+    return ((u64)hi << 32) | lo;
+}
+
+static inline void fpu_save(u8 *state) {
+    if (!state) return;
+    if (cpuid_get_info()->has_xsave) {
+        u64 xcr0 = read_xcr0();
+        __asm__ volatile("xsave64 %0" : "=m"(*state) : "a"((u32)xcr0), "d"((u32)(xcr0 >> 32)) : "memory");
+    } else if (cpuid_get_info()->has_fxsr) {
+        __asm__ volatile("fxsave64 %0" : "=m"(*state) : : "memory");
+    }
+}
+
+static inline void fpu_restore(u8 *state) {
+    if (!state) return;
+    if (cpuid_get_info()->has_xsave) {
+        u64 xcr0 = read_xcr0();
+        __asm__ volatile("xrstor64 %0" : : "m"(*state), "a"((u32)xcr0), "d"((u32)(xcr0 >> 32)) : "memory");
+    } else if (cpuid_get_info()->has_fxsr) {
+        __asm__ volatile("fxrstor64 %0" : : "m"(*state) : "memory");
+    }
+}
+
 /* Switch helper — also rebinds per-CPU kernel stack pointers */
 static void switch_to(task_t *next) {
     percpu_t *pc = this_cpu();
     task_t   *cur = pc->current;
     if (next->stack) {
         u64 ktop = (u64)(next->stack + SCHED_STACK_SIZE);
-        gdt_set_kernel_stack(ktop);     /* TSS.rsp0 — IRQs from ring 3 */
+        gdt_set_kernel_stack(pc->cpu_id, ktop);     /* TSS.rsp0 — IRQs from ring 3 */
         pc->kernel_rsp = ktop;          /* SYSCALL entry stack         */
     }
+    
+    /* Save current task's FPU state */
+    fpu_save(cur->fpu_state);
+    
     next->state = TASK_RUNNING;
     pc->current = next;
+    
+    /* Restore next task's FPU state */
+    fpu_restore(next->fpu_state);
+    
+    /* Switch address space if necessary */
+    u64 *next_pml4 = next->pml4 ? next->pml4 : vmm_get_kernel_pml4();
+    u64 *cur_pml4 = cur->pml4 ? cur->pml4 : vmm_get_kernel_pml4();
+    if (next_pml4 != cur_pml4) {
+        u64 phys = vmm_virt_hhdm_to_phys(next_pml4);
+        __asm__ volatile("mov %0, %%cr3" :: "r"(phys) : "memory");
+    }
+    
     context_switch(&cur->rsp, next->rsp);
 }
 

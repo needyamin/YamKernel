@@ -8,16 +8,22 @@ YamKernel is a completely novel OS kernel for x86_64 that introduces a unique ar
 
 | Subsystem | YamKernel Approach |
 |-----------|--------------------|
-| Boot | **YamBoot** — custom pre-kernel menu (Normal / Safe Mode / Reboot) |
+| Boot | **YamBoot** — custom pre-kernel menu (Normal / Safe Mode / Reboot) with 5-second headless timeout |
 | Resource Model | **YamGraph** — live directed graph of all resources |
 | Permissions | **Capability tokens** flowing through graph edges |
+| CPU Topology | **Full Symmetric Multiprocessing (SMP)** — all logical cores booted and managed via LAPIC |
 | Privilege | **Ring 0 / Ring 3 split** with SYSCALL/SYSRET fast path, SMAP/SMEP/UMIP/NX |
 | Scheduling | **CFS-lite** — vruntime-based fair scheduler, per-task kernel stacks, APIC-timer preemption |
+| Context Switch | Seamless general-purpose & **FPU/SIMD (`XSAVE`/`FXSAVE`/`AVX`)** register snapshotting |
 | Sync | **Spinlocks**, **blocking mutexes**, **wait queues**, `task_sleep_ms()` |
-| Memory | **Cell Allocator** (PMM, fractal quad-tree) + **Slab allocator** (`kmem_cache`) + heap |
+| Memory | **Cell Allocator** (PMM, fractal quad-tree, strict power-of-4 splits) + **Slab allocator** (`kmem_cache`) + heap |
 | Virtual Memory | 4-level paging with **huge-page-aware** PT walker |
-| Per-CPU | **GS_BASE-backed `percpu_t`** (Linux-style) with kernel/user GS swap on IRQ + SYSCALL |
+| Per-CPU | **GS_BASE-backed `percpu_t`** arrays (Linux-style) with kernel/user GS swap on IRQ + SYSCALL |
 | ACPI / IRQ | **ACPI MADT** parsing, **LAPIC** + **IO-APIC**, APIC timer at 100 Hz |
+| Video | Software Framebuffer with build-time asset downscaling (`img2raw`) and caching |
+| Display Server | **Wayland-style Compositor** — multi-tasking window management, damage tracking shadow buffer, lock-free Evdev input ring |
+| GUI Apps | **Terminal**, **Calculator**, and **Web Browser** running as fully preempted isolated tasks |
+| Executables | **ELF64 Loader** — dynamic Ring 3 address space creation, PT_LOAD mapping, privilege dropping |
 | IPC | **Channels** — typed bidirectional graph edges |
 | Terminal | **macOS-Style Bash Shell** — full History Ring and extended scancode navigation |
 | Networking | **Multi-Layer Data Link** — e1000 Gigabit, Intel Wireless (wlan0), USB Bluetooth (hci0) |
@@ -98,13 +104,19 @@ kernel/
     │   ├── serial/       # COM1 serial output
     │   ├── timer/        # PIT system tick + RTC
     │   └── video/        # Framebuffer text rendering
+    ├── wayland/
+    │   ├── compositor.c/h# Wayland-style compositor & window manager
+    │   ├── wl_draw.c/h   # Graphic primitives (rects, text, alpha blending)
+    │   ├── wl_terminal.c # GUI Terminal Emulator client
+    │   ├── wl_calculator.c # GUI Calculator client
+    │   └── wl_browser.c  # GUI Web Browser client
     ├── net/              # TCP / UDP / ICMP / ARP / DHCP / DNS skeletons
     ├── ipc/              # IPC mechanisms scaffolding
-    ├── fs/               # VFS (FAT32 / ext4 / NTFS scaffolding)
+    ├── fs/               # VFS (FAT32 / ext4 / NTFS scaffolding) & ELF Loader
     ├── lib/
     │   ├── kprintf.c/h   # Kernel printf
     │   ├── spinlock.h    # IRQ-safe spinlock primitive
-    │   └── string.c/h    # String functions
+    │   └── string.c/h    # String functions (optimized rep movsb / stosb)
     └── include/nexus/
         ├── types.h       # Core types & port I/O
         └── panic.h       # Panic interface
@@ -126,6 +138,11 @@ qemu-system-x86_64 -cdrom build/yamkernel.iso -m 256M -serial stdio
 1. Create a new VM (Guest OS: Other 64-bit)
 2. Attach `yamkernel.iso` as CD/DVD
 3. Boot
+
+### Proxmox / KVM
+1. Upload `yamkernel.iso` to Proxmox ISO storage.
+2. Create VM (OS: Other, Machine: q35, BIOS: SeaBIOS).
+3. **IMPORTANT**: For mouse support, go to Hardware -> double click "Pointer" (or "USB Tablet") and set **Use tablet for pointer: No**. YamKernel relies on PS/2 Mouse emulation.
 
 ### Bare Metal (USB)
 ```bash
@@ -191,7 +208,8 @@ History navigation: ↑ / ↓ arrow keys cycle through up to 15 previous command
 ## Architecture
 
 ### YamBoot
-Custom pre-kernel boot stage that runs after Limine but before the rest of `kernel_main`. Polls the PS/2 keyboard directly (no IDT yet) and lets the user pick:
+### YamBoot
+Custom pre-kernel boot stage that runs after Limine but before the rest of `kernel_main`. Features a 5-second auto-boot timeout (via hardware port `0x80` delays) for headless virtualization support. Polls the PS/2 keyboard directly and lets the user pick:
 - **Normal Boot** — bring up every subsystem
 - **Safe Mode** — only PIT + keyboard + shell (skip PCI/USB/VFS/IPC/NET/Mouse)
 - **Reboot** — 8042 keyboard-controller reset
@@ -204,11 +222,13 @@ The kernel's core is a directed graph where:
 - Revoking a capability cascades through the graph
 
 ### Cell Allocator
-Physical memory uses YamKernel's original fractal quad-tree algorithm:
-- The root cell = entire physical memory
-- Split: each cell divides into 4 equal children
-- Merge: when all 4 siblings are free, they coalesce
-- Each cell tracks its owner via YamGraph node reference
+### Cell Allocator
+Physical memory uses YamKernel's novel fractal quad-tree algorithm:
+- Bootloader usable regions are partitioned strictly into powers of 4 (e.g. 4096, 16384, 65536) to prevent non-page-aligned subdivisions.
+- The root cells represent physical memory chunks.
+- Split: each cell divides into 4 equal children, guaranteeing perfect page alignment.
+- Merge: when all 4 siblings are free, they coalesce.
+- Each cell tracks its owner via YamGraph node reference.
 
 ### Virtual Memory
 - 4-level x86_64 paging (PML4 → PDPT → PD → PT)
@@ -235,11 +255,25 @@ Physical memory uses YamKernel's original fractal quad-tree algorithm:
 - Per-CPU `kernel_rsp` (gs:[40]) holds the syscall stack; `user_rsp_save` (gs:[32]) stashes the user RSP.
 - ISR stubs auto-`swapgs` on entry/exit when interrupted from Ring 3.
 - `sys_write` is **SMAP-aware** — wraps user-buffer reads with `STAC` / `CLAC`.
-- Demo Ring 3 program loops `SYS_WRITE` + `SYS_YIELD` to prove the path.
+
+### ELF64 Loader
+- Parses standard ELF64 executables dynamically from memory/disk.
+- Creates fully isolated `pml4` page tables for user processes by cloning the kernel's top-half memory.
+- Maps `PT_LOAD` segments into the lower-half user address space.
+- Allocates an isolated 16KB user stack.
+- Uses `iretq` to safely transition CPU privilege from Ring 0 to Ring 3 execution at the ELF entry point.
+
+### Wayland Compositor & GUI
+- A custom display server managing multiple Ring 3 isolated graphical clients.
+- Implements a windowed desktop environment with an `owl_wallpaper.jpg` background.
+- Uses **Evdev** ring buffers for lock-free routing of PS/2 mouse coordinates and clicks to focused surfaces.
+- **Damage Tracking (Shadow Buffer)**: Compares rendering output to a RAM shadow-buffer and only writes changed pixels to the Uncacheable (UC) MMIO framebuffer using `rep movsb`. This completely eliminates KVM VM-Exit storms, ensuring < 5% idle CPU usage on Proxmox/Hypervisors.
 
 
 ## Build Command 
-wsl -d Ubuntu -- bash -c "cd /mnt/c/laragon/www/kernel && make clean && make iso
+```bash
+wsl -d Ubuntu -- bash -c "cd /mnt/c/laragon/www/kernel && make clean && make iso"
+```
 
 ## License
 

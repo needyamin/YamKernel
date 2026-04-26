@@ -164,15 +164,24 @@ void pmm_init(void *memmap_response, u64 hhdm_offset) {
             u64 end  = (entry->base + entry->length) & ~(PAGE_SIZE - 1);
             u64 size = end - base;
 
-            if (size >= PAGE_SIZE) {
+            while (size >= PAGE_SIZE) {
+                /* Find the largest power of 4 pages that fits in 'size' */
+                u64 chunk_size = PAGE_SIZE;
+                while (chunk_size * 4 <= size) {
+                    chunk_size *= 4;
+                }
+
                 u16 idx = cell_alloc_node();
                 if (idx != 0xFFFF) {
                     cells[idx].base  = base;
-                    cells[idx].size  = size;
+                    cells[idx].size  = chunk_size;
                     cells[idx].state = CELL_FREE;
-                    total_mem += size;
-                    free_mem  += size;
+                    total_mem += chunk_size;
+                    free_mem  += chunk_size;
                 }
+
+                base += chunk_size;
+                size -= chunk_size;
             }
         }
     }

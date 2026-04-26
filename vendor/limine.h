@@ -192,4 +192,33 @@ struct limine_rsdp_request {
     { LIMINE_COMMON_MAGIC_0, LIMINE_COMMON_MAGIC_1, \
       0xc5e77b6b397e7b43, 0x27637845accdcf3c }
 
+/* ---- SMP ---- */
+
+struct limine_smp_info {
+    u32 processor_id;
+    u32 lapic_id;
+    u64 reserved;
+    void (*goto_address)(struct limine_smp_info *);
+    u64 extra_argument;
+};
+
+struct limine_smp_response {
+    u64 revision;
+    u32 flags;
+    u32 bsp_lapic_id;
+    u64 cpu_count;
+    struct limine_smp_info **cpus;
+};
+
+struct limine_smp_request {
+    u64 id[4];
+    u64 revision;
+    struct limine_smp_response *response;
+    u64 flags;
+};
+
+#define LIMINE_SMP_REQUEST \
+    { LIMINE_COMMON_MAGIC_0, LIMINE_COMMON_MAGIC_1, \
+      0x95a67b819a1b857e, 0xa0b61b723b6a73e0 }
+
 #endif /* _LIMINE_H */

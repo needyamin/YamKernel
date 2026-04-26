@@ -6,6 +6,10 @@
 #include "../sched/wait.h"
 #include "../lib/kprintf.h"
 #include "../drivers/serial/serial.h"
+#include "../fs/vfs.h"
+#include "../fs/poll.h"
+#include "../mem/vmm.h"
+#include "../ipc/pipe.h"
 
 extern void syscall_entry(void);   /* in syscall.asm */
 
@@ -38,7 +42,7 @@ void syscall_init(void) {
 
 /* ---- Individual syscall handlers ---- */
 
-static i64 sys_write(u64 fd, u64 ubuf, u64 len) {
+static i64 sys_write_serial(u64 fd, u64 ubuf, u64 len) {
     (void)fd;
     bool smap = (read_cr4() & CR4_SMAP) != 0;
     if (smap) __asm__ volatile ("stac");
@@ -67,11 +71,19 @@ static i64 sys_exit(u64 code) {
 i64 syscall_dispatch(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5) {
     (void)a4; (void)a5;
     switch (nr) {
-    case SYS_WRITE:  return sys_write(a1, a2, a3);
-    case SYS_EXIT:   return sys_exit(a1);
-    case SYS_GETPID: return sys_getpid();
-    case SYS_YIELD:  return sys_yield();
-    case SYS_SLEEPMS:return sys_sleepms(a1);
+    case SYS_WRITE:    return sys_write_serial(a1, a2, a3);
+    case SYS_EXIT:     return sys_exit(a1);
+    case SYS_GETPID:   return sys_getpid();
+    case SYS_YIELD:    return sys_yield();
+    case SYS_SLEEPMS:  return sys_sleepms(a1);
+    case SYS_OPEN:     return (i64)sys_open((const char *)a1, (u32)a2);
+    case SYS_CLOSE:    return (i64)sys_close((int)a1);
+    case SYS_READ:     return (i64)sys_read((int)a1, (void *)a2, (usize)a3);
+    case SYS_WRITE_FD: return (i64)sys_write((int)a1, (const void *)a2, (usize)a3);
+    case SYS_MMAP:     return (i64)(u64)sys_mmap((void *)a1, (usize)a2, (u32)a3, (u32)a4, (int)a5, 0);
+    case SYS_MUNMAP:   return (i64)sys_munmap((void *)a1, (usize)a2);
+    case SYS_PIPE:     return (i64)sys_pipe((int *)a1);
+    case SYS_POLL:     return (i64)sys_poll((pollfd_t *)a1, (u32)a2, (i64)a3);
     default: return -1;
     }
 }

@@ -42,11 +42,17 @@
 #include "../drivers/bus/pci.h"
 #include "../drivers/input/keyboard.h"
 #include "../drivers/input/mouse.h"
+#include "../drivers/input/evdev.h"
+#include "../drivers/drm/drm.h"
+#include "../wayland/compositor.h"
+#include "../wayland/demo_client.h"
+#include "../sched/wait.h"
 #include "../kernel/shell.h"
 #include "../boot/yamboot.h"
 
 #define YAM_DEMO_TASKS 0
-#define YAM_PREEMPTIVE 0
+#define YAM_PREEMPTIVE 1
+#define YAM_WAYLAND    1
 
 /* ============================================================================
  * Limine Requests — the bootloader fills these in before calling us
@@ -58,6 +64,13 @@ __attribute__((used, section(".limine_requests")))
 static volatile struct limine_framebuffer_request fb_request = {
     .id = LIMINE_FRAMEBUFFER_REQUEST,
     .revision = 0
+};
+
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_smp_request smp_request = {
+    .id = LIMINE_SMP_REQUEST,
+    .revision = 0,
+    .flags = 0  /* 0 = default (x2APIC enabled if available) */
 };
 
 __attribute__((used, section(".limine_requests")))
@@ -89,6 +102,13 @@ static volatile struct limine_module_request module_request = {
     .id = LIMINE_MODULE_REQUEST,
     .revision = 0
 };
+
+/* ============================================================================
+ * Global module pointers
+ * ============================================================================ */
+static void *g_elf_module = NULL;
+static usize g_elf_module_size = 0;
+void *g_wallpaper_module = NULL;
 
 /* ============================================================================
  * Boot Banner
@@ -172,10 +192,15 @@ void kernel_main(void) {
                 int len = strlen(mod->path);
                 if (len >= 13 && strcmp(mod->path + len - 13, "wallpaper.bin") == 0) {
                     wallpaper_data = mod->address;
+                    g_wallpaper_module = mod->address;
                     KINFO("MODULE", "    -> matched WALLPAPER");
                 } else if (len >= 8 && strcmp(mod->path + len - 8, "logo.bin") == 0) {
                     logo_data = mod->address;
                     KINFO("MODULE", "    -> matched LOGO");
+                } else if (len >= 12 && strcmp(mod->path + len - 12, "test_app.elf") == 0) {
+                    g_elf_module = mod->address;
+                    g_elf_module_size = mod->size;
+                    KINFO("MODULE", "    -> matched ELF APP");
                 }
             }
         } else {
@@ -208,7 +233,7 @@ void kernel_main(void) {
     /* ---- Phase 4: CPU Setup ---- */
     KINFO("INIT", "Phase 1: CPU Setup");
     kprintf_color(0xFFFFDD00, "=== Phase 1: CPU Setup ===\n");
-    gdt_init();
+    gdt_init(0);
     KTRACE("INIT", "GDT OK");
     idt_init();
     KTRACE("INIT", "IDT OK");
@@ -246,9 +271,14 @@ void kernel_main(void) {
     KTRACE("INIT", "APIC OK");
     ioapic_init(hhdm_offset);
     KTRACE("INIT", "IOAPIC OK");
+    
+    /* Route legacy ISA IRQs to BSP (LAPIC 0) */
+    ioapic_set_irq(1, 33, 0);  /* Keyboard -> Vector 33 */
+    ioapic_set_irq(12, 44, 0); /* PS/2 Mouse -> Vector 44 */
+    
     percpu_init(0, 0);
     KTRACE("INIT", "PerCPU OK");
-    smp_init();
+    smp_init(smp_request.response);
     KTRACE("INIT", "SMP OK");
     syscall_init();
     KTRACE("INIT", "Syscall OK");
@@ -317,7 +347,9 @@ void kernel_main(void) {
         ipc_init();
         KTRACE("INIT", "IPC OK. Initializing NET...");
         net_init();
-        KTRACE("INIT", "NET OK. Initializing Mouse...");
+        KTRACE("INIT", "NET OK. Initializing Evdev...");
+        evdev_init();
+        KTRACE("INIT", "Evdev OK. Initializing Mouse...");
         mouse_init();
         KTRACE("INIT", "Mouse OK");
     } else {
@@ -361,9 +393,38 @@ void kernel_main(void) {
     fb_clear(FB_COLOR_DARK_BG);
     fb_enable_text(true);
 
-    KINFO("BOOT", "=== Boot Complete — Entering Shell ===");
+    KINFO("BOOT", "=== Boot Complete ===");
 
-    /* Launch interactive REPL — runs as task #0 (BSP); demo tasks
-     * preempt us via APIC timer. */
-    shell_start();
+    if (YAM_WAYLAND) {
+        kprintf_color(0xFF00DDFF, "\n=== Phase 7: Wayland Display Server ===\n");
+        drm_init();
+        wl_compositor_init();
+        
+        /* Load ELF user-space app if found */
+        if (g_elf_module) {
+            extern bool elf_load(const void *, usize, const char *);
+            elf_load(g_elf_module, g_elf_module_size, "test_app");
+        }
+        
+        /* Spawn Wayland Compositor (highest priority) */
+        sched_spawn("wayland", wl_compositor_task, NULL, 0);
+        
+        /* Spawn Apps (normal priority) */
+        extern void wl_calc_task(void *);
+        extern void wl_browser_task(void *);
+        extern void wl_term_task(void *);
+        sched_spawn("wl-calc", wl_calc_task, NULL, 2);
+        sched_spawn("wl-browser", wl_browser_task, NULL, 2);
+        sched_spawn("wl-term", wl_term_task, NULL, 2);
+        
+        kprintf_color(0xFF00FF88, "[WAYLAND] Handoff to Compositor complete. Terminal suspended.\n");
+        
+        /* Task 0 (us) just sleeps forever so the compositor can run */
+        for (;;) {
+            task_sleep_ms(1000);
+        }
+    } else {
+        /* Launch interactive REPL */
+        shell_start();
+    }
 }

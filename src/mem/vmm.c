@@ -111,3 +111,172 @@ u64 *vmm_get_kernel_pml4(void) {
     __asm__ volatile ("mov %%cr3, %0" : "=r"(pml4_phys));
     return (u64 *)vmm_phys_to_virt(pml4_phys & 0x000FFFFFFFFFF000ULL);
 }
+
+u64 *vmm_create_user_pml4(void) {
+    u64 *new_pml4 = alloc_page_table();
+    if (!new_pml4) return NULL;
+    
+    u64 *kernel_pml4 = vmm_get_kernel_pml4();
+    /* Copy the top half (entries 256-511) to map kernel and HHDM into user space */
+    for (int i = 256; i < 512; i++) {
+        new_pml4[i] = kernel_pml4[i];
+    }
+    return new_pml4;
+}
+
+static void free_pd(u64 *pd) {
+    for (int i = 0; i < 512; i++) {
+        if (pd[i] & VMM_FLAG_PRESENT) {
+            if (!(pd[i] & (1ULL << 7))) { /* Not a huge page */
+                u64 phys = pd[i] & 0x000FFFFFFFFFF000ULL;
+                pmm_free_page(phys);
+            }
+        }
+    }
+}
+
+static void free_pdpt(u64 *pdpt) {
+    for (int i = 0; i < 512; i++) {
+        if (pdpt[i] & VMM_FLAG_PRESENT) {
+            u64 phys = pdpt[i] & 0x000FFFFFFFFFF000ULL;
+            u64 *pd = (u64 *)vmm_phys_to_virt(phys);
+            free_pd(pd);
+            pmm_free_page(phys);
+        }
+    }
+}
+
+void vmm_destroy_user_pml4(u64 *pml4) {
+    if (!pml4) return;
+    /* Free user half (0-255) */
+    for (int i = 0; i < 256; i++) {
+        if (pml4[i] & VMM_FLAG_PRESENT) {
+            u64 phys = pml4[i] & 0x000FFFFFFFFFF000ULL;
+            u64 *pdpt = (u64 *)vmm_phys_to_virt(phys);
+            free_pdpt(pdpt);
+            pmm_free_page(phys);
+        }
+    }
+    pmm_free_page(vmm_virt_hhdm_to_phys(pml4));
+}
+
+/* ---- mmap subsystem ---- */
+#include "../sched/sched.h"
+#include "../mem/heap.h"
+
+/* User virtual address space for mmap starts at 0x7F0000000000 */
+#define MMAP_BASE   0x7F0000000000ULL
+
+static u64 next_mmap_addr = MMAP_BASE;
+
+void *sys_mmap(void *addr, usize length, u32 prot, u32 flags, int fd, usize offset) {
+    (void)addr; (void)fd; (void)offset;
+
+    if (length == 0) return MAP_FAILED;
+
+    /* Round up to page boundary */
+    usize pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+    usize size  = pages * PAGE_SIZE;
+
+    /* Allocate a virtual address range */
+    u64 vaddr = next_mmap_addr;
+    next_mmap_addr += size;
+
+    /* Create a VMA to track this region */
+    vma_t *vma = (vma_t *)kmalloc(sizeof(vma_t));
+    if (!vma) return MAP_FAILED;
+    memset(vma, 0, sizeof(*vma));
+    vma->start = vaddr;
+    vma->end   = vaddr + size;
+    vma->flags = flags;
+    vma->prot  = prot;
+    vma->file  = NULL;
+
+    /* Link into current task's VMA list */
+    task_t *t = sched_current();
+    if (t) {
+        vma->next = (vma_t *)t->vma_head;
+        t->vma_head = (struct vma *)vma;
+    }
+
+    /* If MAP_ANONYMOUS: pages are NOT mapped yet.
+     * They will be mapped lazily by vmm_handle_page_fault on first access. */
+    if (!(flags & MAP_ANONYMOUS)) {
+        /* File-backed mmap: eagerly map for now (to be refined later) */
+        for (usize i = 0; i < pages; i++) {
+            u64 phys = pmm_alloc_page();
+            if (!phys) return MAP_FAILED;
+            u64 pflags = VMM_FLAG_PRESENT | VMM_FLAG_WRITE | VMM_FLAG_USER;
+            if (!(prot & PROT_EXEC)) pflags |= VMM_FLAG_NX;
+            vmm_map_page(vmm_get_kernel_pml4(), vaddr + i * PAGE_SIZE, phys, pflags);
+            void *mapped = vmm_phys_to_virt(phys);
+            memset(mapped, 0, PAGE_SIZE);
+        }
+    }
+
+    return (void *)vaddr;
+}
+
+int sys_munmap(void *addr, usize length) {
+    u64 vaddr = (u64)addr;
+    usize pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+
+    /* Unmap pages and free physical memory */
+    u64 *pml4 = vmm_get_kernel_pml4();
+    for (usize i = 0; i < pages; i++) {
+        u64 va = vaddr + i * PAGE_SIZE;
+        u64 phys = vmm_virt_to_phys(pml4, va);
+        if (phys) {
+            vmm_unmap_page(pml4, va);
+            pmm_free_page(phys & ~0xFFFULL);
+        }
+    }
+
+    /* Remove VMA from task list */
+    task_t *t = sched_current();
+    if (t) {
+        vma_t **prev = (vma_t **)&t->vma_head;
+        for (vma_t *v = (vma_t *)t->vma_head; v; v = v->next) {
+            if (v->start == vaddr) {
+                *prev = v->next;
+                kfree(v);
+                break;
+            }
+            prev = &v->next;
+        }
+    }
+
+    return 0;
+}
+
+/* ---- Demand Paging: Page Fault Handler ---- */
+bool vmm_handle_page_fault(u64 fault_addr, u64 error_code) {
+    (void)error_code;
+
+    task_t *t = sched_current();
+    if (!t) return false;
+
+    /* Search VMA list for the faulting address */
+    for (vma_t *v = (vma_t *)t->vma_head; v; v = v->next) {
+        if (fault_addr >= v->start && fault_addr < v->end) {
+            /* Valid region — lazily allocate a physical page */
+            u64 page_addr = fault_addr & ~0xFFFULL;
+            u64 phys = pmm_alloc_page();
+            if (!phys) return false;
+
+            u64 pflags = VMM_FLAG_PRESENT | VMM_FLAG_USER;
+            if (v->prot & PROT_WRITE) pflags |= VMM_FLAG_WRITE;
+            if (!(v->prot & PROT_EXEC)) pflags |= VMM_FLAG_NX;
+
+            vmm_map_page(vmm_get_kernel_pml4(), page_addr, phys, pflags);
+
+            /* Zero the page */
+            void *mapped = vmm_phys_to_virt(phys);
+            memset(mapped, 0, PAGE_SIZE);
+
+            return true;  /* Fault handled */
+        }
+    }
+
+    return false;  /* Not our VMA — let the default handler panic */
+}

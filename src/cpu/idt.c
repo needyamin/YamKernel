@@ -137,6 +137,8 @@ static void pic_eoi(u8 irq) {
     outb(0x20, 0x20);
 }
 
+#include "../mem/vmm.h"
+
 /* Default exception handler */
 static void default_exception_handler(interrupt_frame_t *frame) {
     const char *name = "Unknown";
@@ -144,8 +146,14 @@ static void default_exception_handler(interrupt_frame_t *frame) {
         name = exception_names[frame->int_no];
 
     u64 cr2 = 0;
-    if (frame->int_no == 14)
+    if (frame->int_no == 14) {
         __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
+        
+        /* Attempt demand paging before panicking */
+        if (vmm_handle_page_fault(cr2, frame->error_code)) {
+            return;  /* Page fault resolved — resume execution */
+        }
+    }
 
     kprintf_color(0xFFFF3333,
         "\n!!! YamKernel EXCEPTION !!!\n"
@@ -239,4 +247,8 @@ void idt_init(void) {
     sti();
 
     kprintf_color(0xFF00FF88, "[IDT] Loaded: 48 vectors (32 exceptions + 16 IRQs)\n");
+}
+
+void idt_load(void) {
+    __asm__ volatile ("lidt %0" :: "m"(idt_ptr));
 }

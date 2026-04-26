@@ -24,7 +24,7 @@ HOST_CC := gcc
 CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-stack-check \
           -fno-pie -fno-pic -m64 -march=x86-64 -mno-80387 -mno-mmx \
           -mno-sse -mno-sse2 -mno-red-zone -mcmodel=kernel \
-          -Wall -Wextra -Werror -O2 \
+          -Wall -Wextra -Werror -O2 -g \
           -Isrc/include -Isrc -Ivendor
 
 ASFLAGS := -f elf64
@@ -52,6 +52,9 @@ KERNEL_ISO := $(BUILD_DIR)/$(KERNEL_NAME).iso
 IMG2RAW       := $(BUILD_DIR)/img2raw
 LOGO_BIN      := $(BUILD_DIR)/logo.bin
 WALLPAPER_BIN := $(BUILD_DIR)/wallpaper.bin
+
+# User-space ELF test app
+USER_ELF := $(BUILD_DIR)/test_app.elf
 
 # ============================================================================
 #  Targets
@@ -87,7 +90,7 @@ $(BUILD_DIR)/%.asm.o: $(SRC_DIR)/%.asm
 
 $(IMG2RAW): tools/img2raw.c
 	@mkdir -p $(dir $@)
-	$(HOST_CC) -O2 -Itools $< -lm -o $@
+	$(HOST_CC) -O2 -g -Itools $< -lm -o $@
 
 $(LOGO_BIN): assets/logo.png $(IMG2RAW)
 	@mkdir -p $(dir $@)
@@ -97,11 +100,19 @@ $(WALLPAPER_BIN): assets/owl_wallpaper.jpg $(IMG2RAW)
 	@mkdir -p $(dir $@)
 	$(IMG2RAW) $< $@ 1920
 
+$(USER_ELF): src/user/test_app.c src/user/user.ld
+	@mkdir -p $(dir $@)
+	$(CC) -std=c11 -ffreestanding -fno-stack-protector -fno-stack-check \
+	      -fno-pie -fno-pic -no-pie -static -m64 -march=x86-64 -mno-80387 -mno-mmx \
+	      -mno-sse -mno-sse2 -mno-red-zone -O2 -g \
+	      -nostdlib -Wl,-T,src/user/user.ld -o $@ src/user/test_app.c
+	@echo "[USER] $@"
+
 # ============================================================================
 #  ISO Creation (Limine-based bootable ISO)
 # ============================================================================
 
-$(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN)
+$(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN) $(USER_ELF)
 	@echo "[ISO]  Building bootable ISO..."
 	@rm -rf $(ISO_DIR)
 	@mkdir -p $(ISO_DIR)/boot/limine
@@ -112,6 +123,7 @@ $(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN)
 	cp $(KERNEL_ELF) $(ISO_DIR)/boot/$(KERNEL_NAME).elf
 	cp $(LOGO_BIN) $(ISO_DIR)/boot/logo.bin
 	cp $(WALLPAPER_BIN) $(ISO_DIR)/boot/wallpaper.bin
+	cp $(USER_ELF) $(ISO_DIR)/boot/test_app.elf
 	
 	# Copy limine config
 	cp limine.conf $(ISO_DIR)/boot/limine/limine.conf

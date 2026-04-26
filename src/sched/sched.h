@@ -9,6 +9,9 @@
 
 typedef enum { TASK_READY, TASK_RUNNING, TASK_BLOCKED, TASK_DEAD } task_state_t;
 
+struct file;
+struct vma;
+
 typedef struct task {
     u64           rsp;          /* saved kernel stack ptr (must be first) */
     u64           id;
@@ -23,6 +26,10 @@ typedef struct task {
     void        (*entry)(void *);
     void         *arg;
     u8           *stack;        /* per-task kernel stack base */
+    u8           *fpu_state;    /* dynamically allocated FXSAVE/XSAVE buffer */
+    struct file  *fd_table[128];/* POSIX File Descriptor table */
+    struct vma   *vma_head;     /* Virtual Memory Area list for mmap */
+    u64          *pml4;         /* User page table (NULL for kernel threads) */
     struct task  *next;         /* runqueue link */
     struct task  *wait_next;    /* wait-queue link */
 } task_t;

@@ -4,7 +4,7 @@
 #include "../mem/heap.h"
 #include "../lib/string.h"
 
-#define MAX_CPUS 64
+#define MAX_CPUS 256
 static percpu_t pool[MAX_CPUS];
 
 void percpu_init(u32 cpu_id, u32 apic_id) {

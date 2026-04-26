@@ -10,7 +10,15 @@
 #define SYS_GETPID  3
 #define SYS_YIELD   4
 #define SYS_SLEEPMS 5
-#define SYS_MAX     16
+#define SYS_OPEN    6
+#define SYS_CLOSE   7
+#define SYS_READ    8
+#define SYS_WRITE_FD 9
+#define SYS_MMAP    10
+#define SYS_MUNMAP  11
+#define SYS_PIPE    12
+#define SYS_POLL    13
+#define SYS_MAX     32
 
 void syscall_init(void);
 

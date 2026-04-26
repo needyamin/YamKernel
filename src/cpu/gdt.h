@@ -42,10 +42,10 @@ typedef struct PACKED {
     u64 base;
 } gdt_ptr_t;
 
-/* Initialize GDT with kernel/user segments and TSS */
-void gdt_init(void);
+/* Initialize GDT with kernel/user segments and TSS for a specific CPU */
+void gdt_init(u32 cpu_id);
 
 /* Set the kernel stack pointer in the TSS (for ring transitions) */
-void gdt_set_kernel_stack(u64 stack);
+void gdt_set_kernel_stack(u32 cpu_id, u64 stack);
 
 #endif /* _CPU_GDT_H */

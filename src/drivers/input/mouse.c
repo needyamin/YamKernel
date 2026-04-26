@@ -3,6 +3,7 @@
  * ============================================================================ */
 
 #include "mouse.h"
+#include "evdev.h"
 #include "../../cpu/idt.h"
 #include "../../lib/kprintf.h"
 
@@ -79,8 +80,26 @@ static void mouse_isr(interrupt_frame_t *frame) {
             if (mouse_y < 0) mouse_y = 0;
 
             /* Button states */
-            mouse_left  = (mouse_byte[0] & 0x01) ? true : false;
-            mouse_right = (mouse_byte[0] & 0x02) ? true : false;
+            bool new_left  = (mouse_byte[0] & 0x01) ? true : false;
+            bool new_right = (mouse_byte[0] & 0x02) ? true : false;
+
+            /* Emit EV_KEY for button state changes */
+            if (new_left != mouse_left) {
+                evdev_push_event(EV_KEY, 0x110, new_left ? 1 : 0);
+                mouse_left = new_left;
+            }
+            if (new_right != mouse_right) {
+                evdev_push_event(EV_KEY, 0x111, new_right ? 1 : 0);
+                mouse_right = new_right;
+            }
+
+            /* Push evdev relative motion events */
+            if (mouse_byte[1] != 0)
+                evdev_push_event(EV_REL, REL_X, (i32)mouse_byte[1]);
+            if (mouse_byte[2] != 0)
+                evdev_push_event(EV_REL, REL_Y, -(i32)mouse_byte[2]);
+            
+            evdev_push_event(EV_SYN, 0, 0);
             break;
     }
 }

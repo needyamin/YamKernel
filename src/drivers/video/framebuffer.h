@@ -36,4 +36,10 @@ void fb_enable_text(bool enable);
 u32  fb_get_cols(void);
 u32  fb_get_rows(void);
 
+/* Raw pixel buffer access (used by DRM/Wayland compositor) */
+u32 *fb_get_pixels(void);
+u32  fb_get_width(void);
+u32  fb_get_height(void);
+u32  fb_get_pitch(void);
+
 #endif /* _DRIVERS_FRAMEBUFFER_H */
