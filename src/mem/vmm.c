@@ -71,6 +71,7 @@ bool vmm_map_page(u64 *pml4, u64 virt, u64 phys, u64 flags) {
     if (!pt) return false;
 
     pt[pt_index(virt)] = (phys & 0x000FFFFFFFFFF000ULL) | flags | VMM_FLAG_PRESENT;
+    __asm__ volatile ("invlpg (%0)" :: "r"(virt) : "memory");
     return true;
 }
 

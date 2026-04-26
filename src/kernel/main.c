@@ -15,6 +15,13 @@
 #include "../cpu/gdt.h"
 #include "../cpu/idt.h"
 #include "../cpu/cpuid.h"
+#include "../cpu/security.h"
+#include "../cpu/acpi.h"
+#include "../cpu/apic.h"
+#include "../cpu/percpu.h"
+#include "../cpu/smp.h"
+#include "../cpu/syscall.h"
+#include "../sched/sched.h"
 #include "../mem/pmm.h"
 #include "../mem/vmm.h"
 #include "../mem/heap.h"
@@ -36,6 +43,8 @@
 #include "../drivers/input/mouse.h"
 #include "../kernel/shell.h"
 #include "../boot/yamboot.h"
+
+#define YAM_DEMO_TASKS 0
 
 /* ============================================================================
  * Limine Requests — the bootloader fills these in before calling us
@@ -64,6 +73,12 @@ static volatile struct limine_hhdm_request hhdm_request = {
 __attribute__((used, section(".limine_requests")))
 static volatile struct limine_kernel_address_request kaddr_request = {
     .id = LIMINE_KERNEL_ADDRESS_REQUEST,
+    .revision = 0
+};
+
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_rsdp_request rsdp_request = {
+    .id = LIMINE_RSDP_REQUEST,
     .revision = 0
 };
 
@@ -134,6 +149,7 @@ void kernel_main(void) {
     gdt_init();
     idt_init();
     cpuid_init();
+    security_init();   /* NX, SMEP, SMAP, UMIP, WP */
 
     /* ---- Phase 5: Memory Management ---- */
     kprintf_color(0xFFFFDD00, "\n=== Phase 2: Memory (Cell Allocator) ===\n");
@@ -149,6 +165,16 @@ void kernel_main(void) {
     }
     pmm_init((void *)memmap_request.response, hhdm_offset);
     heap_init();
+
+    /* ---- Phase 5b: Modern interrupt + SMP topology ---- */
+    kprintf_color(0xFFFFDD00, "\n=== Phase 2b: ACPI / APIC / SMP ===\n");
+    acpi_init(rsdp_request.response ? rsdp_request.response->address : NULL,
+              hhdm_offset);
+    apic_init(hhdm_offset);
+    ioapic_init(hhdm_offset);
+    percpu_init(0, 0);
+    smp_init();
+    syscall_init();
 
     /* ---- Phase 6: YamGraph Core ---- */
     kprintf_color(0xFFFFDD00, "\n=== Phase 3: YamGraph Resource Graph ===\n");
@@ -192,7 +218,7 @@ void kernel_main(void) {
 
     /* ---- Phase 8: Shell / Interactive Terminal ---- */
     kprintf_color(0xFF00DDFF, "\n=== Phase 5: Drivers, Subsystems & Input ===\n");
-    pit_init(100);   /* 100 Hz system timer (10ms resolution) */
+    pit_init(100);   /* boot timer, used to calibrate APIC timer */
     keyboard_init();
 
     if (!g_yamboot_safe) {
@@ -208,6 +234,20 @@ void kernel_main(void) {
         kprintf_color(0xFFFF8833, "[YAMBOOT] Safe Mode: skipping PCI/USB/I2C/SPI/VFS/IPC/NET/MOUSE\n");
     }
 
-    /* Launch interactive REPL */
+    /* ---- Phase 9: Preemptive Multitasking ---- */
+    kprintf_color(0xFFFFDD00, "\n=== Phase 6: Preemptive Scheduler ===\n");
+    sched_init();
+    sched_install_timer();
+    extern void sched_demo_spawn(void);
+    extern void user_demo_load(void);
+    if (YAM_DEMO_TASKS) {
+        sched_demo_spawn();
+        user_demo_load();    /* Ring 3 demo */
+    }
+    apic_timer_start(100);   /* 100 Hz preemption */
+    sched_enable();
+
+    /* Launch interactive REPL — runs as task #0 (BSP); demo tasks
+     * preempt us via APIC timer. */
     shell_start();
 }

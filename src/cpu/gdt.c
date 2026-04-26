@@ -52,11 +52,13 @@ void gdt_init(void) {
     /* 2: Kernel Data Segment (0x10) — ring 0 */
     gdt_set_entry(2, 0xFFFF, 0, 0, 0x92, 0xCF, 0);
 
-    /* 3: User Code Segment (0x18) — 64-bit, ring 3 */
-    gdt_set_entry(3, 0xFFFF, 0, 0, 0xFA, 0xAF, 0);
+    /* 3: User Data (0x18) — ring 3.   ORDER MATTERS for SYSRET:
+     *    SYSRET sets CS=STAR.user_base+16, SS=STAR.user_base+8 (RPL=3). With
+     *    STAR.user_base=0x10, we get SS=0x1B (this entry) + CS=0x23 (next). */
+    gdt_set_entry(3, 0xFFFF, 0, 0, 0xF2, 0xCF, 0);
 
-    /* 4: User Data Segment (0x20) — ring 3 */
-    gdt_set_entry(4, 0xFFFF, 0, 0, 0xF2, 0xCF, 0);
+    /* 4: User Code Segment (0x20) — 64-bit, ring 3 */
+    gdt_set_entry(4, 0xFFFF, 0, 0, 0xFA, 0xAF, 0);
 
     /* 5-6: TSS — 16-byte entry in 64-bit mode */
     u64 tss_addr = (u64)&tss;

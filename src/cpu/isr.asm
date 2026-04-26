@@ -105,6 +105,11 @@ ISR_NOERR 47   ; Secondary ATA (IRQ 15)
 ; Common ISR handler — saves registers, calls C, restores registers
 ; ============================================================================
 isr_common:
+    ; If interrupt came from ring 3, swap GS so percpu (gs:[..]) works.
+    test byte [rsp+24], 3      ; CS = rsp+24 (after err_code + int_no)
+    jz   .skip_swapgs_in
+    swapgs
+.skip_swapgs_in:
     ; Save all general-purpose registers
     push rax
     push rbx
@@ -147,6 +152,11 @@ isr_common:
     ; Remove error code and interrupt number from stack
     add rsp, 16
 
+    ; Mirror the entry swap if returning to ring 3
+    test byte [rsp+8], 3       ; CS = rsp+8 (now points at RIP, CS after)
+    jz   .skip_swapgs_out
+    swapgs
+.skip_swapgs_out:
     iretq
 
 ; ============================================================================

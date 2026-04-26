@@ -18,6 +18,7 @@
 #include "../net/net.h"
 #include "../ipc/ipc.h"
 #include "../fs/vfs.h"
+#include "../sched/wait.h"
 #include <nexus/types.h>
 
 #define MAX_CMD_LEN 256
@@ -617,6 +618,7 @@ void shell_start(void) {
 
         for (;;) {
             char c = keyboard_get_char();
+            if (c == 0) { task_sleep_ms(10); continue; }
 
             if (c == '\n') {
                 kprintf("\n");

@@ -34,3 +34,8 @@ debug.log
 .cursorignore
 agent-transcripts/
 terminals/
+
+# Local notes / scratch
+task.txt
+info.txt
+*.local.md

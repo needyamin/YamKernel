@@ -3,6 +3,7 @@
  * ============================================================================ */
 
 #include "idt.h"
+#include "apic.h"
 #include "../lib/kprintf.h"
 #include <nexus/panic.h>
 
@@ -142,21 +143,29 @@ static void default_exception_handler(interrupt_frame_t *frame) {
     if (frame->int_no < 22)
         name = exception_names[frame->int_no];
 
+    u64 cr2 = 0;
+    if (frame->int_no == 14)
+        __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
+
     kprintf_color(0xFFFF3333,
         "\n!!! YamKernel EXCEPTION !!!\n"
         "  Exception: %s (#%lu)\n"
-        "  Error Code: 0x%lx\n"
+        "  Error Code: 0x%lx   CR2: 0x%lx\n"
         "  RIP: 0x%lx  CS: 0x%lx\n"
         "  RSP: 0x%lx  SS: 0x%lx\n"
         "  RFLAGS: 0x%lx\n"
         "  RAX: 0x%lx  RBX: 0x%lx\n"
-        "  RCX: 0x%lx  RDX: 0x%lx\n",
-        name, frame->int_no, frame->error_code,
+        "  RCX: 0x%lx  RDX: 0x%lx\n"
+        "  RSI: 0x%lx  RDI: 0x%lx\n"
+        "  R8 : 0x%lx  R9 : 0x%lx\n",
+        name, frame->int_no, frame->error_code, cr2,
         frame->rip, frame->cs,
         frame->rsp, frame->ss,
         frame->rflags,
         frame->rax, frame->rbx,
-        frame->rcx, frame->rdx
+        frame->rcx, frame->rdx,
+        frame->rsi, frame->rdi,
+        frame->r8,  frame->r9
     );
 
     /* Halt on unrecoverable exceptions */
@@ -175,8 +184,13 @@ void isr_dispatch(interrupt_frame_t *frame) {
         default_exception_handler(frame);
     }
 
-    /* Send EOI for hardware IRQs (vectors 32-47) */
-    if (vector >= 32 && vector < 48) {
+    /* EOI policy:
+     *   APIC mode: timer vector (0x20) EOIs itself in the handler before
+     *   context-switching, so skip auto-EOI for it. All others auto-EOI.
+     *   Legacy PIC mode: as before. */
+    if (apic_active()) {
+        if (vector >= 32 && vector != 0x20) apic_eoi();
+    } else if (vector >= 32 && vector < 48) {
         pic_eoi(vector - 32);
     }
 }

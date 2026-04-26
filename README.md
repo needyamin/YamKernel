@@ -11,9 +11,13 @@ YamKernel is a completely novel OS kernel for x86_64 that introduces a unique ar
 | Boot | **YamBoot** — custom pre-kernel menu (Normal / Safe Mode / Reboot) |
 | Resource Model | **YamGraph** — live directed graph of all resources |
 | Permissions | **Capability tokens** flowing through graph edges |
-| Scheduling | **Flow Scheduler** — graph topology-based priority |
-| Memory | **Cell Allocator** — fractal quad-tree allocation |
+| Privilege | **Ring 0 / Ring 3 split** with SYSCALL/SYSRET fast path, SMAP/SMEP/UMIP/NX |
+| Scheduling | **CFS-lite** — vruntime-based fair scheduler, per-task kernel stacks, APIC-timer preemption |
+| Sync | **Spinlocks**, **blocking mutexes**, **wait queues**, `task_sleep_ms()` |
+| Memory | **Cell Allocator** (PMM, fractal quad-tree) + **Slab allocator** (`kmem_cache`) + heap |
 | Virtual Memory | 4-level paging with **huge-page-aware** PT walker |
+| Per-CPU | **GS_BASE-backed `percpu_t`** (Linux-style) with kernel/user GS swap on IRQ + SYSCALL |
+| ACPI / IRQ | **ACPI MADT** parsing, **LAPIC** + **IO-APIC**, APIC timer at 100 Hz |
 | IPC | **Channels** — typed bidirectional graph edges |
 | Terminal | **macOS-Style Bash Shell** — full History Ring and extended scancode navigation |
 | Networking | **Multi-Layer Data Link** — e1000 Gigabit, Intel Wireless (wlan0), USB Bluetooth (hci0) |
@@ -57,13 +61,30 @@ kernel/
     │   ├── panic.c       # Kernel panic handler
     │   └── shell.c/h     # Interactive REPL shell
     ├── cpu/
-    │   ├── gdt.c/h       # Global Descriptor Table + TSS
+    │   ├── gdt.c/h       # GDT + TSS (SYSRET-compatible user segments)
     │   ├── idt.c/h       # Interrupt Descriptor Table
     │   ├── cpuid.c/h     # CPU feature detection
-    │   └── isr.asm       # Interrupt stubs (x86_64)
+    │   ├── msr.h         # MSR / CR / CPUID inline helpers
+    │   ├── security.c/h  # Enable NX, SMEP, SMAP, UMIP, WP, FSGSBASE
+    │   ├── acpi.c/h      # RSDP/XSDT/MADT parser (CPU + IO-APIC topology)
+    │   ├── apic.c/h      # LAPIC + IO-APIC + APIC timer (PIT-calibrated)
+    │   ├── percpu.c/h    # Per-CPU data via GS_BASE
+    │   ├── smp.c/h       # CPU enumeration (AP boot pending)
+    │   ├── syscall.c/h   # SYSCALL/SYSRET MSR setup + dispatcher
+    │   ├── syscall.asm   # SYSCALL entry stub (swapgs, kernel stack switch)
+    │   └── isr.asm       # Interrupt stubs with ring-3 swapgs handling
+    ├── sched/
+    │   ├── sched.c/h     # CFS-lite scheduler (vruntime, per-task kstack)
+    │   ├── wait.c/h      # Wait queues, task_sleep_ms, blocking mutex
+    │   ├── context.asm   # Kernel context switch + task trampoline
+    │   ├── enter_user.asm# iretq into Ring 3 (user CS/SS, IF=1, regs cleared)
+    │   ├── user.c        # Demo Ring 3 task loader (maps code+stack pages)
+    │   ├── user_demo.asm # Tiny PIC ring-3 program (SYS_WRITE + SYS_YIELD)
+    │   └── demo.c        # Kernel-thread demo (sleep_ms + mutex print)
     ├── mem/
-    │   ├── pmm.c/h       # Cell Allocator (physical memory)
+    │   ├── pmm.c/h       # Cell Allocator (physical memory, fractal quad-tree)
     │   ├── vmm.c/h       # Virtual memory (4-level paging, huge-page safe)
+    │   ├── slab.c/h      # Slab allocator (kmem_cache_create/alloc/free)
     │   └── heap.c/h      # Kernel heap (kmalloc/kfree)
     ├── nexus/
     │   ├── graph.c/h     # YamGraph — core resource graph
@@ -82,6 +103,7 @@ kernel/
     ├── fs/               # VFS (FAT32 / ext4 / NTFS scaffolding)
     ├── lib/
     │   ├── kprintf.c/h   # Kernel printf
+    │   ├── spinlock.h    # IRQ-safe spinlock primitive
     │   └── string.c/h    # String functions
     └── include/nexus/
         ├── types.h       # Core types & port I/O
@@ -121,15 +143,23 @@ serial_init  →  fb_init  →  YamBoot menu
         │                        ├──── [3] Reboot (8042 reset)
         └───── [2] Safe Mode ────┘
                 ↓
-   GDT / IDT / CPUID  →  VMM / PMM / Heap
+   GDT / IDT / CPUID / Security (NX·SMEP·SMAP·UMIP·WP)
+        ↓
+   VMM / PMM / Heap / Slab
+        ↓
+   ACPI (MADT) → LAPIC + IO-APIC → percpu_init → SMP enumerate → syscall_init
         ↓
    YamGraph init + self-tests
         ↓
-   PIT 100Hz  →  Keyboard
+   PIT 100Hz (boot tick)  →  Keyboard
         ↓
    (Normal only) PCI / USB / I2C / SPI / VFS / IPC / NET / Mouse
         ↓
-   shell_start()  →  yam@kernel ~ %
+   sched_init → spawn demo + ring-3 demo → APIC timer 100 Hz → sched_enable
+        ↓
+   shell_start()  (runs as task #0; CFS-lite preempts via APIC timer)
+        ↓
+   yam@kernel ~ %
 ```
 
 ## Interactive Shell Commands
@@ -184,6 +214,28 @@ Physical memory uses YamKernel's original fractal quad-tree algorithm:
 - 4-level x86_64 paging (PML4 → PDPT → PD → PT)
 - Page-table walker is **huge-page aware**: refuses to descend into existing 2 MB / 1 GB entries (e.g. Limine's HHDM), so MMIO mappings on top of pre-mapped regions can't corrupt page tables.
 - TLB invalidated via `mov cr3, cr3` after MMIO mappings.
+
+### Slab Allocator
+- `kmem_cache_create(name, size, align)` → fixed-size object cache.
+- One PMM page per slab; objects threaded onto a per-cache freelist via their first 8 bytes — alloc/free are O(1).
+- IRQ-safe via per-cache spinlock; tracks alloc/free counters.
+- Currently used by the scheduler for `task_t` allocations.
+
+### Scheduler (CFS-lite)
+- Single ready list; pick the task with the **lowest `vruntime`** each switch.
+- `vruntime += 1024 / weight` per timer tick (weights `8 / 4 / 2 / 1` by priority), so high-priority/heavy-weight tasks get more CPU.
+- New tasks **inherit the minimum vruntime** of the queue so they don't immediately monopolize.
+- **Per-task kernel stack**: `switch_to()` rebinds `TSS.rsp0` and `percpu.kernel_rsp` so IRQs from Ring 3 and SYSCALL entry both land on the current task's own kernel stack.
+- **Sleeping list** scanned every tick — `task_sleep_ms()` blocks instead of busy-waiting.
+- **Wait queues + blocking `mutex_t`** (atomic xchg fast path, queue slow path), with the lost-wakeup race avoided by holding `IF=0` across enqueue+yield.
+
+### Ring 3 / Syscalls
+- `STAR / LSTAR / SFMASK / EFER.SCE` configured for SYSCALL/SYSRET.
+- GDT layout matches Linux convention (CS=0x23, SS=0x1B for ring 3).
+- Per-CPU `kernel_rsp` (gs:[40]) holds the syscall stack; `user_rsp_save` (gs:[32]) stashes the user RSP.
+- ISR stubs auto-`swapgs` on entry/exit when interrupted from Ring 3.
+- `sys_write` is **SMAP-aware** — wraps user-buffer reads with `STAC` / `CLAC`.
+- Demo Ring 3 program loops `SYS_WRITE` + `SYS_YIELD` to prove the path.
 
 ## License
 
