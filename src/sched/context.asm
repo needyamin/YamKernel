@@ -32,6 +32,7 @@ context_switch:
 ;   [rflags][r15..rbp][trampoline_RIP][arg][entry]
 ; context_switch's popfq+6 pops+ret lands here. Stack may not be 16-aligned
 ; for `call rax`, so we force-align it.
+extern task_exit
 global task_trampoline
 task_trampoline:
     pop  rdi               ; arg
@@ -39,6 +40,7 @@ task_trampoline:
     and  rsp, -16          ; align stack for SysV ABI
     sti
     call rax
+    call task_exit         ; If task returns, exit properly instead of hlt
 .dead:
     cli
     hlt

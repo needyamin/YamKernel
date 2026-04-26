@@ -17,5 +17,6 @@ int    strcmp(const char *a, const char *b);
 int    strncmp(const char *a, const char *b, usize n);
 char  *strcpy(char *dest, const char *src);
 char  *strncpy(char *dest, const char *src, usize n);
+char  *strstr(const char *haystack, const char *needle);
 
 #endif /* _LIB_STRING_H */

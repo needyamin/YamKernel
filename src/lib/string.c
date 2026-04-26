@@ -82,3 +82,19 @@ char *strncpy(char *dest, const char *src, usize n) {
         dest[i] = 0;
     return dest;
 }
+
+char *strstr(const char *haystack, const char *needle) {
+    if (!*needle) return (char *)haystack;
+    for (; *haystack; haystack++) {
+        if (*haystack == *needle) {
+            const char *h = haystack;
+            const char *n = needle;
+            while (*h && *n && *h == *n) {
+                h++;
+                n++;
+            }
+            if (!*n) return (char *)haystack;
+        }
+    }
+    return NULL;
+}

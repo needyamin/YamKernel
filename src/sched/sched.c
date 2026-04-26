@@ -100,6 +100,16 @@ task_t *sched_spawn(const char *name, void (*entry)(void *), void *arg, u8 prio)
     return t;
 }
 
+void task_exit(void) {
+    cli();
+    task_t *cur = sched_current();
+    cur->state = TASK_DEAD;
+    /* In a real kernel we'd free the stack here, but for now we just stop scheduling it */
+    sched_yield();
+    /* Should never reach here */
+    for(;;) hlt();
+}
+
 void sched_init(void) {
     task_t *boot = (task_t *)kmalloc(sizeof(task_t));
     memset(boot, 0, sizeof(*boot));

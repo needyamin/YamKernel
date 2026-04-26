@@ -409,19 +409,22 @@ void kernel_main(void) {
         /* Spawn Wayland Compositor (highest priority) */
         sched_spawn("wayland", wl_compositor_task, NULL, 0);
         
-        /* Spawn Apps (normal priority) */
+        /* Spawn Apps (only when clicked from GUI now) */
+        /*
         extern void wl_calc_task(void *);
         extern void wl_browser_task(void *);
         extern void wl_term_task(void *);
         sched_spawn("wl-calc", wl_calc_task, NULL, 2);
         sched_spawn("wl-browser", wl_browser_task, NULL, 2);
         sched_spawn("wl-term", wl_term_task, NULL, 2);
+        */
         
         kprintf_color(0xFF00FF88, "[WAYLAND] Handoff to Compositor complete. Terminal suspended.\n");
         
-        /* Task 0 (us) just sleeps forever so the compositor can run */
+        /* Task 0 (us) acts as the Idle Task */
         for (;;) {
-            task_sleep_ms(1000);
+            sched_yield();
+            __asm__ volatile("hlt");
         }
     } else {
         /* Launch interactive REPL */

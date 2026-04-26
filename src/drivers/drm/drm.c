@@ -89,7 +89,8 @@ void drm_page_flip(drm_buffer_t *buf) {
         
         if (g_shadow_buffer) {
             u32 *shadow = g_shadow_buffer + y * dst_pitch4;
-            /* Only write dwords that actually changed to avoid uncached MMIO write overhead */
+            /* Shadow buffer is MUCH faster in non-KVM QEMU because it avoids 
+               expensive MMIO writes for pixels that haven't changed. */
             for (u32 x = 0; x < copy_w; x++) {
                 if (src[x] != shadow[x]) {
                     dst[x] = src[x];

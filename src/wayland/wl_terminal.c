@@ -250,7 +250,8 @@ void wl_term_task(void *arg) {
     draw_terminal(s);
     wl_surface_commit(s);
 
-    while (1) {
+    u32 my_id = s->id;
+    while (s->state == WL_SURFACE_ACTIVE && s->id == my_id) {
         input_event_t ev;
 
         while (wl_surface_pop_event(s, &ev)) {

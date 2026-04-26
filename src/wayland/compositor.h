@@ -55,8 +55,20 @@ typedef struct wl_surface {
     } event_queue;
 } wl_surface_t;
 
+/* Compositor system state */
+typedef enum {
+    COMPOSITOR_STATE_LOGIN = 0,
+    COMPOSITOR_STATE_DESKTOP
+} compositor_state_t;
+
 /* Compositor state */
 typedef struct wl_compositor {
+    compositor_state_t state;
+    char            login_user[32];
+    char            login_pass[32];
+    bool            login_focus_pass;
+    bool            login_failed;
+
     wl_surface_t    surfaces[WL_MAX_SURFACES];
     u32             surface_count;
     u32             focused_id;         /* ID of the focused (top) surface */
@@ -70,6 +82,14 @@ typedef struct wl_compositor {
     u32             display_w, display_h;
     
     bool            running;
+    
+    /* Window Dragging */
+    bool            dragging;
+    u32             drag_surface_id;
+    i32             drag_off_x, drag_off_y;
+    
+    /* Power Menu */
+    bool            show_power_menu;
 } wl_compositor_t;
 
 /* Initialize the Wayland compositor */

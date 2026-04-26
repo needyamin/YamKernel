@@ -74,14 +74,16 @@ static void calc_handle_click(i32 x, i32 y) {
 }
 
 static void draw_calculator(wl_surface_t *s) {
-    /* Background */
-    wl_draw_rect(s, 0, 0, 240, 360, 0xFF222222);
+    /* Dracula Theme Background */
+    wl_draw_rect(s, 0, 0, 240, 360, 0xFF282A36);
     
-    /* Display area */
-    wl_draw_rect(s, 0, 0, 240, 40, 0xFFEEEEEE);
-    /* Right align text */
+    /* Display area (Glass effect) */
+    wl_draw_rect(s, 10, 10, 220, 50, 0xFF44475A);
+    wl_draw_rect(s, 10, 59, 220, 1, 0xFF6272A4); /* Underline highlight */
+    
+    /* Right align text in display */
     int len = 0; while(display_buf[len]) len++;
-    wl_draw_text(s, 240 - (len * 8) - 10, 12, display_buf, 0xFF000000, 0);
+    wl_draw_text(s, 230 - (len * 8) - 10, 26, display_buf, 0xFFF8F8F2, 0);
     
     /* Buttons */
     char btn[4][4] = {
@@ -93,17 +95,25 @@ static void draw_calculator(wl_surface_t *s) {
     
     for (int by = 0; by < 4; by++) {
         for (int bx = 0; bx < 4; bx++) {
-            i32 px = bx * 60;
-            i32 py = 40 + by * 80;
+            i32 px = 10 + bx * 58;
+            i32 py = 75 + by * 70;
             
-            u32 color = (bx == 3) ? 0xFFFF9900 : 0xFF444444; /* Operators are orange */
-            if (btn[by][bx] == 'C') color = 0xFFDD3333; /* Clear is red */
+            u32 color = 0xFF44475A; /* Default button */
+            u32 text_color = 0xFFF8F8F2;
             
-            wl_draw_rect(s, px + 2, py + 2, 56, 76, color);
+            if (bx == 3) color = 0xFFBD93F9; /* Operators are purple */
+            if (btn[by][bx] == '=') color = 0xFF50FA7B; /* Equals is green */
+            if (btn[by][bx] == 'C') color = 0xFFFF5555; /* Clear is red */
+            
+            if (color == 0xFF50FA7B || color == 0xFFFF5555 || color == 0xFFBD93F9)
+                text_color = 0xFF282A36; /* Dark text for bright buttons */
+                
+            /* Draw rounded-ish rect (just a smaller rect with padding) */
+            wl_draw_rect(s, px, py, 50, 60, color);
             
             /* Draw character centered */
             char str[2] = { btn[by][bx], 0 };
-            wl_draw_text(s, px + 26, py + 32, str, 0xFFFFFFFF, 0);
+            wl_draw_text(s, px + 21, py + 22, str, text_color, 0);
         }
     }
 }
@@ -121,7 +131,9 @@ void wl_calc_task(void *arg) {
     
     i32 last_x = -1, last_y = -1;
     
-    while (1) {
+    u32 my_id = s->id;
+    
+    while (s->state == WL_SURFACE_ACTIVE && s->id == my_id) {
         input_event_t ev;
         while (wl_surface_pop_event(s, &ev)) {
             if (ev.type == EV_ABS && ev.code == 0) last_x = ev.value;
