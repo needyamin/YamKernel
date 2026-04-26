@@ -45,6 +45,7 @@
 #include "../boot/yamboot.h"
 
 #define YAM_DEMO_TASKS 0
+#define YAM_PREEMPTIVE 0
 
 /* ============================================================================
  * Limine Requests — the bootloader fills these in before calling us
@@ -244,8 +245,12 @@ void kernel_main(void) {
         sched_demo_spawn();
         user_demo_load();    /* Ring 3 demo */
     }
-    apic_timer_start(100);   /* 100 Hz preemption */
-    sched_enable();
+    if (YAM_PREEMPTIVE) {
+        apic_timer_start(100);   /* 100 Hz preemption */
+        sched_enable();
+    } else {
+        kprintf_color(0xFFFF8833, "[SCHED] preemption disabled (stable shell mode)\n");
+    }
 
     /* Launch interactive REPL — runs as task #0 (BSP); demo tasks
      * preempt us via APIC timer. */
