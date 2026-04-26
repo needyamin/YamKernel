@@ -35,6 +35,7 @@
 #include "../fs/vfs.h"
 #include "../lib/kprintf.h"
 #include "../lib/string.h"
+#include "../lib/kdebug.h"
 #include "../nexus/graph.h"
 #include "../nexus/capability.h"
 #include "../nexus/channel.h"
@@ -83,6 +84,12 @@ static volatile struct limine_rsdp_request rsdp_request = {
     .revision = 0
 };
 
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_module_request module_request = {
+    .id = LIMINE_MODULE_REQUEST,
+    .revision = 0
+};
+
 /* ============================================================================
  * Boot Banner
  * ============================================================================ */
@@ -117,42 +124,101 @@ static void print_banner(void) {
 void kernel_main(void) {
     /* ---- Phase 1: Early console (serial only) ---- */
     serial_init();
-    serial_write("\n[YAM] Serial console initialized\n");
+    KINFO("BOOT", "=== YamKernel Boot Start ===");
+    KINFO("BOOT", "Serial console initialized");
 
     /* ---- Phase 2: Validate bootloader response ---- */
     if (limine_base_revision[2] != 0) {
-        serial_write("[YAM] FATAL: Limine base revision mismatch!\n");
+        KERR("BOOT", "Limine base revision mismatch! Halting.");
         for (;;) hlt();
     }
+    KINFO("BOOT", "Limine base revision OK");
 
     /* ---- Phase 3: Framebuffer ---- */
     if (fb_request.response && fb_request.response->framebuffer_count > 0) {
         struct limine_framebuffer *fb = fb_request.response->framebuffers[0];
         fb_init(fb);
-        kprintf("[FB] Framebuffer: %lux%lu @ %u bpp\n",
-                fb->width, fb->height, fb->bpp);
+        KINFO("FB", "Framebuffer: %llux%llu @ %u bpp, addr=%p, pitch=%llu",
+              fb->width, fb->height, fb->bpp, fb->address, fb->pitch);
     } else {
-        serial_write("[YAM] WARNING: No framebuffer available\n");
+        KWARN("FB", "No framebuffer available!");
     }
 
     /* ---- YamBoot: custom boot menu (polled, no IDT yet) ---- */
+    KINFO("BOOT", "Showing YamBoot menu...");
     yamboot_choice_t choice = yamboot_show();
     if (choice == YAMBOOT_REBOOT) {
+        KINFO("BOOT", "User chose REBOOT");
         outb(0x64, 0xFE);
         for (;;) __asm__ volatile ("cli; hlt");
     }
+    KINFO("BOOT", "User chose boot mode %d (safe=%d)", (int)choice, g_yamboot_safe);
 
-    /* ---- Print boot banner ---- */
+    /* ---- Draw Windows-Style Splash Screen AFTER YamBoot ---- */
+    KINFO("SPLASH", "--- Splash Screen Init ---");
+    if (fb_request.response && fb_request.response->framebuffer_count > 0) {
+        void *wallpaper_data = NULL;
+        void *logo_data = NULL;
+
+        if (module_request.response) {
+            KINFO("MODULE", "Bootloader provided %llu module(s)",
+                  module_request.response->module_count);
+            for (u64 i = 0; i < module_request.response->module_count; i++) {
+                struct limine_file *mod = module_request.response->modules[i];
+                KINFO("MODULE", "  [%llu] path='%s' addr=%p size=%llu",
+                      i, mod->path ? mod->path : "(null)",
+                      mod->address, mod->size);
+
+                int len = strlen(mod->path);
+                if (len >= 13 && strcmp(mod->path + len - 13, "wallpaper.bin") == 0) {
+                    wallpaper_data = mod->address;
+                    KINFO("MODULE", "    -> matched WALLPAPER");
+                } else if (len >= 8 && strcmp(mod->path + len - 8, "logo.bin") == 0) {
+                    logo_data = mod->address;
+                    KINFO("MODULE", "    -> matched LOGO");
+                }
+            }
+        } else {
+            KWARN("MODULE", "module_request.response is NULL — bootloader loaded no modules!");
+        }
+
+        KINFO("SPLASH", "wallpaper=%p  logo=%p", wallpaper_data, logo_data);
+
+        if (wallpaper_data) {
+            u32 *wp = (u32 *)wallpaper_data;
+            KINFO("SPLASH", "wallpaper dimensions: %ux%u", wp[0], wp[1]);
+        }
+        if (logo_data) {
+            u32 *lp = (u32 *)logo_data;
+            KINFO("SPLASH", "logo dimensions: %ux%u", lp[0], lp[1]);
+        }
+
+        fb_enable_text(false);
+        KINFO("SPLASH", "Drawing splash...");
+        fb_draw_splash(wallpaper_data, logo_data);
+        KINFO("SPLASH", "Splash drawn OK");
+    } else {
+        KWARN("SPLASH", "No framebuffer, skipping splash");
+    }
+
+    /* ---- Print boot banner (goes to serial since fb text is off) ---- */
+    KINFO("BOOT", "--- Kernel Init Phases ---");
     print_banner();
 
     /* ---- Phase 4: CPU Setup ---- */
+    KINFO("INIT", "Phase 1: CPU Setup");
     kprintf_color(0xFFFFDD00, "=== Phase 1: CPU Setup ===\n");
     gdt_init();
+    KTRACE("INIT", "GDT OK");
     idt_init();
+    KTRACE("INIT", "IDT OK");
     cpuid_init();
-    security_init();   /* NX, SMEP, SMAP, UMIP, WP */
+    KTRACE("INIT", "CPUID OK");
+    security_init();
+    KTRACE("INIT", "Security OK");
 
     /* ---- Phase 5: Memory Management ---- */
+    KINFO("INIT", "Phase 2: Memory Management");
     kprintf_color(0xFFFFDD00, "\n=== Phase 2: Memory (Cell Allocator) ===\n");
     
     if (!hhdm_request.response) {
@@ -160,24 +226,35 @@ void kernel_main(void) {
     }
     u64 hhdm_offset = hhdm_request.response->offset;
     vmm_init(hhdm_offset);
+    KTRACE("INIT", "VMM OK");
 
     if (!memmap_request.response) {
         kpanic("Memory map request not fulfilled by bootloader");
     }
     pmm_init((void *)memmap_request.response, hhdm_offset);
+    KTRACE("INIT", "PMM OK");
     heap_init();
+    KTRACE("INIT", "Heap OK");
 
     /* ---- Phase 5b: Modern interrupt + SMP topology ---- */
+    KINFO("INIT", "Phase 2b: ACPI / APIC / SMP");
     kprintf_color(0xFFFFDD00, "\n=== Phase 2b: ACPI / APIC / SMP ===\n");
     acpi_init(rsdp_request.response ? rsdp_request.response->address : NULL,
               hhdm_offset);
+    KTRACE("INIT", "ACPI OK");
     apic_init(hhdm_offset);
+    KTRACE("INIT", "APIC OK");
     ioapic_init(hhdm_offset);
+    KTRACE("INIT", "IOAPIC OK");
     percpu_init(0, 0);
+    KTRACE("INIT", "PerCPU OK");
     smp_init();
+    KTRACE("INIT", "SMP OK");
     syscall_init();
+    KTRACE("INIT", "Syscall OK");
 
     /* ---- Phase 6: YamGraph Core ---- */
+    KINFO("INIT", "Phase 3: YamGraph Resource Graph");
     kprintf_color(0xFFFFDD00, "\n=== Phase 3: YamGraph Resource Graph ===\n");
     yamgraph_init();
 
@@ -195,9 +272,11 @@ void kernel_main(void) {
             yamgraph_node_count(), yamgraph_edge_count());
 
     /* ---- Phase 7: Self-Tests ---- */
+    KINFO("INIT", "Phase 4: Self-Tests");
     kprintf_color(0xFFFFDD00, "\n=== Phase 4: Self-Tests ===\n");
     pmm_self_test();
     yamgraph_self_test();
+    KINFO("INIT", "Self-tests passed");
 
     /* ---- Phase 8: System Ready ---- */
     kprintf_color(0xFF00FF88,
@@ -218,24 +297,35 @@ void kernel_main(void) {
         "\n");
 
     /* ---- Phase 8: Shell / Interactive Terminal ---- */
+    KINFO("INIT", "Phase 5: Drivers, Subsystems & Input");
     kprintf_color(0xFF00DDFF, "\n=== Phase 5: Drivers, Subsystems & Input ===\n");
-    pit_init(100);   /* boot timer, used to calibrate APIC timer */
+    pit_init(100);
     keyboard_init();
 
     if (!g_yamboot_safe) {
+        KTRACE("INIT", "Initializing PCI...");
         pci_init();
+        KTRACE("INIT", "PCI OK. Initializing USB...");
         usb_init();
+        KTRACE("INIT", "USB OK. Initializing I2C...");
         i2c_init();
+        KTRACE("INIT", "I2C OK. Initializing SPI...");
         spi_init();
+        KTRACE("INIT", "SPI OK. Initializing VFS...");
         vfs_init();
+        KTRACE("INIT", "VFS OK. Initializing IPC...");
         ipc_init();
+        KTRACE("INIT", "IPC OK. Initializing NET...");
         net_init();
+        KTRACE("INIT", "NET OK. Initializing Mouse...");
         mouse_init();
+        KTRACE("INIT", "Mouse OK");
     } else {
         kprintf_color(0xFFFF8833, "[YAMBOOT] Safe Mode: skipping PCI/USB/I2C/SPI/VFS/IPC/NET/MOUSE\n");
     }
 
     /* ---- Phase 9: Preemptive Multitasking ---- */
+    KINFO("INIT", "Phase 6: Preemptive Scheduler");
     kprintf_color(0xFFFFDD00, "\n=== Phase 6: Preemptive Scheduler ===\n");
     sched_init();
     sched_install_timer();
@@ -243,14 +333,35 @@ void kernel_main(void) {
     extern void user_demo_load(void);
     if (YAM_DEMO_TASKS) {
         sched_demo_spawn();
-        user_demo_load();    /* Ring 3 demo */
+        user_demo_load();
     }
     if (YAM_PREEMPTIVE) {
-        apic_timer_start(100);   /* 100 Hz preemption */
+        apic_timer_start(100);
         sched_enable();
     } else {
         kprintf_color(0xFFFF8833, "[SCHED] preemption disabled (stable shell mode)\n");
     }
+
+    /* ---- Splash Screen Spinner Animation (hlt-based, near-0% CPU) ---- */
+    KINFO("SPLASH", "Starting spinner animation...");
+    __asm__ volatile ("sti");  /* Ensure interrupts are enabled for hlt to wake */
+    for (int i = 0; i < 45; i++) {
+        fb_draw_spinner(i);
+        /*
+         * Sleep ~80ms per frame using hlt.
+         * PIT fires at 100Hz (10ms per tick), so 8 halts ≈ 80ms.
+         * CPU drops to ~0% between frames (sleeps until PIT interrupt).
+         */
+        for (int t = 0; t < 8; t++) {
+            __asm__ volatile ("hlt");
+        }
+    }
+    KINFO("SPLASH", "Spinner done, transitioning to shell");
+
+    fb_clear(FB_COLOR_DARK_BG);
+    fb_enable_text(true);
+
+    KINFO("BOOT", "=== Boot Complete — Entering Shell ===");
 
     /* Launch interactive REPL — runs as task #0 (BSP); demo tasks
      * preempt us via APIC timer. */

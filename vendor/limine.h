@@ -140,6 +140,41 @@ struct limine_kernel_address_request {
     { LIMINE_COMMON_MAGIC_0, LIMINE_COMMON_MAGIC_1, \
       0x71ba76863cc55f63, 0xb2644a48c516a487 }
 
+/* ---- Modules ---- */
+
+struct limine_file {
+    u64   revision;
+    void *address;
+    u64   size;
+    char *path;
+    char *cmdline;
+    u32   media_type;
+    u32   unused;
+    u32   tftp_ip;
+    u32   tftp_port;
+    u32   partition_index;
+    u32   mbr_disk_id;
+    u8    gpt_disk_uuid[16];
+    u8    gpt_part_uuid[16];
+    u8    part_uuid[16];
+};
+
+struct limine_module_response {
+    u64   revision;
+    u64   module_count;
+    struct limine_file **modules;
+};
+
+struct limine_module_request {
+    u64       id[4];
+    u64       revision;
+    struct limine_module_response *response;
+};
+
+#define LIMINE_MODULE_REQUEST \
+    { LIMINE_COMMON_MAGIC_0, LIMINE_COMMON_MAGIC_1, \
+      0x3e7e279702be32af, 0xca1c4f3bd1280cee }
+
 /* ---- RSDP (ACPI) ---- */
 
 struct limine_rsdp_response {

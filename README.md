@@ -237,6 +237,13 @@ Physical memory uses YamKernel's original fractal quad-tree algorithm:
 - `sys_write` is **SMAP-aware** — wraps user-buffer reads with `STAC` / `CLAC`.
 - Demo Ring 3 program loops `SYS_WRITE` + `SYS_YIELD` to prove the path.
 
+
+## Build Command 
+wsl -d Ubuntu -- bash -c "cd /mnt/c/laragon/www/kernel && make clean && make iso
+
 ## License
 
 MIT
+
+
+

@@ -46,17 +46,31 @@ yamboot_choice_t yamboot_show(void) {
 
     draw();
 
-    for (;;) {
+    /*
+     * Auto-boot timeout: ~5 seconds using port 0x80 hardware delay.
+     * Each outer tick ≈ 100ms (100 iterations × 1000 port writes × ~1us).
+     * Total: 50 ticks × 100ms = 5 seconds.
+     */
+    for (int tick = 50; tick > 0; tick--) {
+        /* Check for keyboard input */
         int sc = kbd_poll();
-        if (sc < 0) continue;
-        if (sc & 0x80) continue;          /* ignore key-release events */
-        switch (sc) {
-            case 0x02:                    /* '1' */
-            case 0x1C: return YAMBOOT_NORMAL;   /* Enter */
-            case 0x03:                    /* '2' */
-                g_yamboot_safe = 1;
-                return YAMBOOT_SAFE;
-            case 0x04: return YAMBOOT_REBOOT;   /* '3' */
+        if (sc >= 0 && !(sc & 0x80)) {
+            switch (sc) {
+                case 0x02:                    /* '1' */
+                case 0x1C: return YAMBOOT_NORMAL;   /* Enter */
+                case 0x03:                    /* '2' */
+                    g_yamboot_safe = 1;
+                    return YAMBOOT_SAFE;
+                case 0x04: return YAMBOOT_REBOOT;   /* '3' */
+            }
+        }
+
+        /* ~100ms hardware delay */
+        for (volatile int d = 0; d < 100000; d++) {
+            __asm__ volatile ("outb %%al, $0x80" : : "a"(0));
         }
     }
+
+    /* Timeout reached — auto-boot Normal Mode */
+    return YAMBOOT_NORMAL;
 }

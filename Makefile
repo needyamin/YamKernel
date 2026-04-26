@@ -18,6 +18,8 @@ ifeq ($(shell which $(CC) 2>/dev/null),)
     OBJCOPY := objcopy
 endif
 
+HOST_CC := gcc
+
 # Flags
 CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-stack-check \
           -fno-pie -fno-pic -m64 -march=x86-64 -mno-80387 -mno-mmx \
@@ -46,11 +48,16 @@ OBJS     := $(C_OBJS) $(ASM_OBJS)
 KERNEL_ELF := $(BUILD_DIR)/$(KERNEL_NAME).elf
 KERNEL_ISO := $(BUILD_DIR)/$(KERNEL_NAME).iso
 
+# Splash screen images
+IMG2RAW       := $(BUILD_DIR)/img2raw
+LOGO_BIN      := $(BUILD_DIR)/logo.bin
+WALLPAPER_BIN := $(BUILD_DIR)/wallpaper.bin
+
 # ============================================================================
 #  Targets
 # ============================================================================
 
-.PHONY: all clean run run-vmware iso setup
+.PHONY: all clean run run-vmware run-serial run-serial-only debug iso setup
 
 all: $(KERNEL_ELF)
 
@@ -75,18 +82,36 @@ $(BUILD_DIR)/%.asm.o: $(SRC_DIR)/%.asm
 	@echo "[ASM]  $<"
 
 # ============================================================================
+#  Host Tools & Resources
+# ============================================================================
+
+$(IMG2RAW): tools/img2raw.c
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -O2 -Itools $< -lm -o $@
+
+$(LOGO_BIN): assets/logo.png $(IMG2RAW)
+	@mkdir -p $(dir $@)
+	$(IMG2RAW) $< $@ 256
+
+$(WALLPAPER_BIN): assets/owl_wallpaper.jpg $(IMG2RAW)
+	@mkdir -p $(dir $@)
+	$(IMG2RAW) $< $@ 1920
+
+# ============================================================================
 #  ISO Creation (Limine-based bootable ISO)
 # ============================================================================
 
-$(KERNEL_ISO): $(KERNEL_ELF)
+$(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN)
 	@echo "[ISO]  Building bootable ISO..."
 	@rm -rf $(ISO_DIR)
 	@mkdir -p $(ISO_DIR)/boot/limine
 	@mkdir -p $(ISO_DIR)/boot/grub
 	@mkdir -p $(ISO_DIR)/EFI/BOOT
 	
-	# Copy kernel
+	# Copy kernel and modules
 	cp $(KERNEL_ELF) $(ISO_DIR)/boot/$(KERNEL_NAME).elf
+	cp $(LOGO_BIN) $(ISO_DIR)/boot/logo.bin
+	cp $(WALLPAPER_BIN) $(ISO_DIR)/boot/wallpaper.bin
 	
 	# Copy limine config
 	cp limine.conf $(ISO_DIR)/boot/limine/limine.conf
@@ -128,12 +153,49 @@ run: $(KERNEL_ISO)
 		-no-reboot \
 		-no-shutdown
 
+# Run with GDB server enabled (listens on localhost:1234)
+debug: $(KERNEL_ISO)
+	qemu-system-x86_64 \
+		-cdrom $(KERNEL_ISO) \
+		-serial stdio \
+		-m 256M \
+		-smp 2 \
+		-boot d \
+		-s -S \
+		-no-reboot \
+		-no-shutdown
+
 # Run with UEFI (requires OVMF)
 run-uefi: $(KERNEL_ISO)
 	qemu-system-x86_64 \
 		-cdrom $(KERNEL_ISO) \
 		-bios /usr/share/OVMF/OVMF_CODE.fd \
 		-serial stdio \
+		-m 256M \
+		-smp 2 \
+		-boot d \
+		-no-reboot \
+		-no-shutdown
+
+# Run with serial output captured to a log file
+run-serial: $(KERNEL_ISO)
+	@echo "[SERIAL] Starting QEMU with serial log -> build/serial.log"
+	@echo "[SERIAL] View log:  tail -f build/serial.log"
+	qemu-system-x86_64 \
+		-cdrom $(KERNEL_ISO) \
+		-serial file:build/serial.log \
+		-m 256M \
+		-smp 2 \
+		-boot d \
+		-no-reboot \
+		-no-shutdown
+
+# Run headless — serial only, no graphical window (fastest for CI/debug)
+run-serial-only: $(KERNEL_ISO)
+	@echo "[SERIAL] Headless mode — all output on terminal"
+	qemu-system-x86_64 \
+		-cdrom $(KERNEL_ISO) \
+		-nographic \
 		-m 256M \
 		-smp 2 \
 		-boot d \

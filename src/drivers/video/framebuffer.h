@@ -28,6 +28,9 @@ void fb_write(const char *str, u32 fg);
 void fb_set_cursor(u32 col, u32 row);
 void fb_scroll(void);
 void fb_put_pixel(u32 x, u32 y, u32 color);
+void fb_draw_splash(void *wallpaper_data, void *logo_data);
+void fb_draw_spinner(int frame);
+void fb_enable_text(bool enable);
 
 /* Current framebuffer dimensions in characters */
 u32  fb_get_cols(void);

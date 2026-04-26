@@ -618,7 +618,12 @@ void shell_start(void) {
 
         for (;;) {
             char c = keyboard_get_char();
-            if (c == 0) { task_sleep_ms(10); continue; }
+            if (c == 0) { 
+                /* Hardware halt: Sleeps the CPU until an interrupt (like the keyboard) arrives.
+                 * This perfectly fixes the 100% CPU lockup when waiting for user input. */
+                __asm__ volatile ("sti; hlt");
+                continue; 
+            }
 
             if (c == '\n') {
                 kprintf("\n");
