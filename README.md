@@ -1,10 +1,10 @@
-# YamKernel
+# YamOS
 
-**A Graph-Based Adaptive Operating System Kernel**
+**A Graph-Based Adaptive Operating System**
 
-YamKernel is a completely novel OS kernel for x86_64 that introduces a unique architecture: the **YamGraph Resource Graph**. Every system resource — processes, memory, devices, files, IPC channels — lives as a node in a live directed graph, with permissions flowing through edges as unforgeable capability tokens.
+YamOS is a modern, self-contained operating system for x86_64 powered by the **YamKernel**. It introduces a unique architecture: the **YamGraph Resource Graph**. Every system resource — processes, memory, devices, files, IPC channels — lives as a node in a live directed graph, with permissions flowing through edges as unforgeable capability tokens.
 
-## YamKernel Features
+## YamOS Features
 
 | Subsystem | YamKernel Approach |
 |-----------|--------------------|
@@ -20,14 +20,14 @@ YamKernel is a completely novel OS kernel for x86_64 that introduces a unique ar
 | Virtual Memory | 4-level paging with **huge-page-aware** PT walker |
 | Per-CPU | **GS_BASE-backed `percpu_t`** arrays (Linux-style) with kernel/user GS swap on IRQ + SYSCALL |
 | ACPI / IRQ | **ACPI MADT** parsing, **LAPIC** + **IO-APIC**, APIC timer at 100 Hz |
-| Video | Software Framebuffer with build-time asset downscaling (`img2raw`) and caching |
-| Display Server | **Wayland-style Compositor** — multi-tasking window management, damage tracking shadow buffer, lock-free Evdev input ring |
+| Video | **Software Framebuffer** with build-time asset downscaling (`img2raw`) and hardware-halt splash animation |
+| Display Server | **Wayland-style Compositor** — login screen, glassmorphic UI, damage tracking, lock-free Evdev input ring |
 | GUI Apps | **Terminal**, **Calculator**, and **Web Browser** running as fully preempted isolated tasks |
 | Executables | **ELF64 Loader** — dynamic Ring 3 address space creation, PT_LOAD mapping, privilege dropping |
 | IPC | **Channels** — typed bidirectional graph edges |
 | Terminal | **macOS-Style Bash Shell** — full History Ring and extended scancode navigation |
-| Networking | **Multi-Layer Data Link** — e1000 Gigabit, Intel Wireless (wlan0), USB Bluetooth (hci0) |
-| Network Protocols | **Full Stack Scaffolding** — TCP, UDP, ICMP, ARP, DHCP, DNS |
+| Networking | **Multi-Layer Data Link** — e1000 Gigabit, Intel Wireless (wlan0), USB Bluetooth (hci0) (Scaffolding) |
+| Network Protocols | **Full Stack Scaffolding** — TCP, UDP, ICMP, ARP, DHCP, DNS skeletons active |
 
 ## Building
 
@@ -47,8 +47,8 @@ make run      # Launch in QEMU
 
 ### Output
 
-- `build/yamkernel.elf` — Kernel binary
-- `build/yamkernel.iso` — Bootable ISO (VMware, VirtualBox, bare metal)
+- `build/yamkernel.elf` — YamKernel binary
+- `build/yamkernel.iso` — Bootable YamOS ISO (VMware, VirtualBox, bare metal)
 
 ## Project Structure
 
@@ -104,12 +104,7 @@ kernel/
     │   ├── serial/       # COM1 serial output
     │   ├── timer/        # PIT system tick + RTC
     │   └── video/        # Framebuffer text rendering
-    ├── wayland/
-    │   ├── compositor.c/h# Wayland-style compositor & window manager
-    │   ├── wl_draw.c/h   # Graphic primitives (rects, text, alpha blending)
-    │   ├── wl_terminal.c # GUI Terminal Emulator client
-    │   ├── wl_calculator.c # GUI Calculator client
-    │   └── wl_browser.c  # GUI Web Browser client
+    ├── wayland/              # YamOS Desktop Environment (Compositor & Clients)
     ├── net/              # TCP / UDP / ICMP / ARP / DHCP / DNS skeletons
     ├── ipc/              # IPC mechanisms scaffolding
     ├── fs/               # VFS (FAT32 / ext4 / NTFS scaffolding) & ELF Loader
@@ -174,7 +169,11 @@ serial_init  →  fb_init  →  YamBoot menu
         ↓
    sched_init → spawn demo + ring-3 demo → APIC timer 100 Hz → sched_enable
         ↓
-   shell_start()  (runs as task #0; CFS-lite preempts via APIC timer)
+   Splash Screen Animation (Hardware Halt 0% CPU sleep)
+        ↓
+   (Normal) Wayland Compositor (Task #0)  →  Login Screen  →  Desktop
+        ↓
+   (Safe) shell_start()  (runs as task #0; CFS-lite preempts via APIC timer)
         ↓
    yam@kernel ~ %
 ```
@@ -208,10 +207,9 @@ History navigation: ↑ / ↓ arrow keys cycle through up to 15 previous command
 ## Architecture
 
 ### YamBoot
-### YamBoot
-Custom pre-kernel boot stage that runs after Limine but before the rest of `kernel_main`. Features a 5-second auto-boot timeout (via hardware port `0x80` delays) for headless virtualization support. Polls the PS/2 keyboard directly and lets the user pick:
-- **Normal Boot** — bring up every subsystem
-- **Safe Mode** — only PIT + keyboard + shell (skip PCI/USB/VFS/IPC/NET/Mouse)
+The YamOS boot manager. A custom pre-kernel boot stage that runs after Limine but before the rest of `kernel_main`. Features a 5-second auto-boot timeout (via hardware port `0x80` delays) for headless virtualization support. Polls the PS/2 keyboard directly and lets the user pick:
+- **Normal Boot** — bring up the full YamOS environment (GUI + Apps)
+- **Safe Mode** — only PIT + keyboard + shell (minimal debug environment)
 - **Reboot** — 8042 keyboard-controller reset
 
 ### YamGraph
@@ -221,7 +219,6 @@ The kernel's core is a directed graph where:
 - Operations like scheduling and IPC query the graph topology
 - Revoking a capability cascades through the graph
 
-### Cell Allocator
 ### Cell Allocator
 Physical memory uses YamKernel's novel fractal quad-tree algorithm:
 - Bootloader usable regions are partitioned strictly into powers of 4 (e.g. 4096, 16384, 65536) to prevent non-page-aligned subdivisions.
@@ -239,7 +236,7 @@ Physical memory uses YamKernel's novel fractal quad-tree algorithm:
 - `kmem_cache_create(name, size, align)` → fixed-size object cache.
 - One PMM page per slab; objects threaded onto a per-cache freelist via their first 8 bytes — alloc/free are O(1).
 - IRQ-safe via per-cache spinlock; tracks alloc/free counters.
-- Currently used by the scheduler for `task_t` allocations.
+- Used by the OS for `task_t` and graph node allocations.
 
 ### Scheduler (CFS-lite)
 - Single ready list; pick the task with the **lowest `vruntime`** each switch.
@@ -265,9 +262,14 @@ Physical memory uses YamKernel's novel fractal quad-tree algorithm:
 
 ### Wayland Compositor & GUI
 - A custom display server managing multiple Ring 3 isolated graphical clients.
-- Implements a windowed desktop environment with an `owl_wallpaper.jpg` background.
-- Uses **Evdev** ring buffers for lock-free routing of PS/2 mouse coordinates and clicks to focused surfaces.
+- **Glassmorphism**: Features real-time alpha blending and "frosted glass" effects for the Login Screen, Dock, and Window Titlebars.
+- **Input Routing**: Uses **Evdev** ring buffers for lock-free routing of PS/2 mouse coordinates and clicks to focused surfaces.
 - **Damage Tracking (Shadow Buffer)**: Compares rendering output to a RAM shadow-buffer and only writes changed pixels to the Uncacheable (UC) MMIO framebuffer using `rep movsb`. This completely eliminates KVM VM-Exit storms, ensuring < 5% idle CPU usage on Proxmox/Hypervisors.
+- **Features**: Multi-window management, floating dock, real-time clock, and a secure login screen (`root`/`password`).
+
+### Splash Screen
+- Branded boot animation showing the YamKernel logo and a progress spinner.
+- **Efficiency**: The animation loop uses the `hlt` instruction to sleep the CPU until the next PIT interrupt, achieving nearly 0% CPU usage during the transition to the GUI.
 
 
 ## Build Command 

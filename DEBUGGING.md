@@ -1,4 +1,4 @@
-# YamKernel Debugging & Testing Guide
+# YamOS Debugging & Testing Guide
 
 This repository contains a structured debugging and testing system for rapid kernel development.
 
@@ -11,12 +11,18 @@ kernel/
 ├── scripts/
 │   ├── test.sh          # WSL/Linux rapid test script
 │   └── test.ps1         # Windows PowerShell rapid test script
+├── assets/
+│   ├── logo.png         # Splash logo
+│   └── owl_wallpaper.jpg # Desktop background
 ├── .vscode/
 │   ├── launch.json      # VS Code GDB debugger config
 │   └── tasks.json       # VS Code build/launch tasks
-├── src/lib/
-│   ├── kdebug.h         # Debug logging macros (KTRACE, KDBG, KINFO, KWARN, KERR)
-│   └── kdebug.c         # Serial-only debug output implementation
+├── src/
+│   ├── wayland/         # Compositor & GUI clients
+│   ├── drivers/drm/     # Display Rendering Manager
+│   └── lib/
+│       ├── kdebug.h     # Debug logging macros
+│       └── kdebug.c     # Serial logging implementation
 ├── Makefile             # Build system with debug targets
 └── DEBUGGING.md         # This file
 ```
@@ -55,10 +61,18 @@ Logs **always** go to the COM1 serial port — they work even when the framebuff
 | Macro | Level | Use For |
 |-------|-------|---------|
 | `KTRACE(tag, fmt, ...)` | 0 | Function entry/exit, ultra-verbose |
-| `KDBG(tag, fmt, ...)`   | 1 | Internal state dumps |
-| `KINFO(tag, fmt, ...)`  | 2 | Normal boot progress |
-| `KWARN(tag, fmt, ...)`  | 3 | Recoverable issues |
-| `KERR(tag, fmt, ...)`   | 4 | Fatal/critical errors |
+| `KDBG(tag, fmt, ...)`   | 1 | Internal state dumps, graph topology |
+| `KINFO(tag, fmt, ...)`  | 2 | Boot progress, driver discovery |
+| `KWARN(tag, fmt, ...)`  | 3 | Recoverable issues, DHCP timeouts |
+| `KERR(tag, fmt, ...)`   | 4 | Fatal errors, Page Faults, Panics |
+
+### Common Tags
+- `BOOT`: General kernel startup phases.
+- `WAYLAND`: Compositor events, window creation, input routing.
+- `DRM`: Framebuffer and dumb buffer management.
+- `SPLASH`: Boot animation and module loading.
+- `SCHED`: Context switches and task spawning.
+- `YAMGRAPH`: Node/Edge operations and capability checks.
 
 ### Example Usage
 
@@ -142,7 +156,7 @@ The `.vscode/launch.json` is pre-configured to build, launch QEMU in debug mode,
 
 | Target | Description |
 |--------|-------------|
-| `make iso` | Build the bootable ISO |
+| `make iso` | Build the bootable ISO (including modules) |
 | `make run` | Build + launch in QEMU (graphical) |
 | `make run-serial` | Build + launch with serial log file |
 | `make run-serial-only` | Build + headless (serial on terminal) |
@@ -150,3 +164,15 @@ The `.vscode/launch.json` is pre-configured to build, launch QEMU in debug mode,
 | `make run-uefi` | Build + launch with UEFI firmware |
 | `make clean` | Remove all build artifacts |
 | `make setup` | Install build dependencies (Ubuntu/WSL) |
+
+---
+
+## 📊 System Monitoring (`top`)
+
+YamKernel includes a live `btop`-style dashboard available via the shell. It provides:
+- **CPU**: Real-time load percentage and thread count.
+- **MEM**: Physical memory usage (PMM) with a visual progress bar.
+- **NET**: Network traffic (RX/TX) and interface status.
+- **SYS**: Active YamGraph nodes and edges.
+
+To access it, type `top` at the YamOS shell. Note that in **Normal Boot**, the shell is suspended once the Wayland Compositor starts; use **Safe Mode** to access the full shell debug environment.
