@@ -1,0 +1,84 @@
+# YamOS: The Great Userspace Migration (v0.3.0 Roadmap)
+
+Currently, YamOS runs its primary graphical applications (Terminal, Calculator, Browser) as kernel-space threads. While efficient, this lacks true isolation and security. The next major movement is to migrate all non-essential subsystems and all applications to **Ring 3 Userspace**.
+
+---
+
+## Phase 1: The Syscall Bridge (Current Focus)
+To run apps in Ring 3, the kernel must provide a stable API for graphics and input.
+1. **Graphics Syscalls**:
+   - `sys_wl_create_surface`: Request a window from the compositor.
+   - `sys_wl_map_buffer`: Map the window's pixel buffer into the process's virtual memory.
+   - `sys_wl_commit`: Notify the compositor that a frame is ready.
+2. **Input Syscalls**:
+   - `sys_wl_poll_event`: Retrieve keyboard/mouse events from the surface's event queue.
+3. **Execution Syscalls**:
+   - `sys_exec`: Load an ELF binary from the VFS and replace the current process image.
+   - `sys_fork`: (Optional for now) Clone a process.
+
+## Phase 2: Shared Memory Graphics
+Instead of the kernel drawing for the app, the app should draw directly.
+1. **User-Space wl_draw**: Port `wl_draw.c` to a userspace library (`libyam`).
+2. **Shared Dumb Buffers**: The compositor allocates a buffer and uses `vmm_map_page` with `VMM_FLAG_USER` to share it with the app.
+
+## Phase 3: LibYam (The Standard Library)
+Apps need a common set of helpers.
+1. **String/Mem Ops**: `memcpy`, `memset`, `strlen`, `printf` (via `sys_write`).
+2. **Math**: Basic operations for the Calculator app.
+3. **Event Loop**: A standard `wl_app_run()` loop that handles polling and redrawing.
+
+## Phase 4: Migrating the Built-ins
+One by one, move the kernel-space tasks to separate ELF binaries:
+1. **Terminal**: Move `wl_terminal.c` to `src/user/terminal.c`.
+2. **Calculator**: Move `wl_calculator.c` to `src/user/calculator.c`.
+3. **Browser**: Move `wl_browser.c` to `src/user/browser.c`.
+4. **File Manager**: Move `wl_filemgr.c` to `src/user/filemgr.c`.
+5. **Music Player**: Move `wl_music.c` to `src/user/music.c`.
+6. **Text Editor**: Move `wl_editor.c` to `src/user/editor.c`.
+7. **Image Viewer**: Move `wl_image.c` to `src/user/image.c`.
+8. **Wallpaper Manager**: Move `wl_wallpaper.c` to `src/user/wallpaper.c`.
+9. **Network Manager**: Move `wl_netmgr.c` to `src/user/netmgr.c`.
+10. **Sound Manager**: Move `wl_sndmgr.c` to `src/user/sndmgr.c`.
+11. **System Monitor**: Move `wl_sysmon.c` to `src/user/sysmon.c`.
+12. **Clock**: Move `wl_clock.c` to `src/user/clock.c`.
+13. **Calendar**: Move `wl_calendar.c` to `src/user/calendar.c`.
+
+---
+
+# YamOS Modern Architecture Roadmap (v0.4.0)
+Goal: Absolute separation between Kernel-Space (API Provider) and OS-Space (Service Consumer).
+
+---
+
+## The Modern Tech Split:
+
+### 1. Kernel Level (The Engine)
+- **Minimalism**: The kernel should only handle CPU, Memory, and IPC.
+- **Syscall API**: "Everything is a Syscall". No internal cross-calls from OS level.
+- **Core Drivers**: APIC, DRM (Hardware access), Input (Raw HID).
+
+### 2. OS Level (The System Services)
+- **Compositor Service**: Runs in Ring 3. Owns the screen. Communicates via IPC.
+- **VFS Service**: Runs in Ring 3. Manages files and disks.
+- **WindowManager**: Handles window decorations and positioning.
+
+### 3. App Level (The User Experience)
+- Terminal, Browser, Calculator, etc.
+- These talk to OS Services via IPC, never directly to Kernel unless for basic mem/sync.
+
+---
+
+## Phase 1: Refining the Syscall Bridge (Complete)
+## Phase 2: Shared Memory Graphics (Complete)
+## Phase 3: LibYam & Service Discovery
+1. **Service API**: A way for apps to find the "Compositor Service" (using Namespipes).
+2. **Standard IPC**: Robust `send`/`recv` for message passing between OS processes.
+
+## Phase 4: Moving the Compositor to OS Level
+1. **DRM Syscalls**: Add `sys_drm_get_fb` and `sys_drm_flip` to allow a Ring 3 process to own the screen.
+2. **Compositor Port**: Move `src/wayland/compositor.c` to `src/os/compositor.c` and compile as an ELF.
+3. **Event Forwarding**: Kernel forwards raw mouse/kb events to the Compositor Service via a pipe.
+
+## Phase 5: OS Shell & Global Desktop
+1. **Dock/Taskbar**: Move dock logic from compositor to a separate `shell.elf`.
+2. **Theme Manager**: Central service for Dracula/Modern styles.

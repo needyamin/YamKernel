@@ -14,6 +14,7 @@ typedef struct percpu {
     u64 ticks;              /* +24 */
     u64 user_rsp_save;      /* +32  syscall scratch (asm uses gs:[32]) */
     u64 kernel_rsp;         /* +40  syscall kernel stack (asm uses gs:[40]) */
+    u64 idle_ticks;         /* +48  ticks spent in idle loop */
 } percpu_t;
 
 void      percpu_init(u32 cpu_id, u32 apic_id);

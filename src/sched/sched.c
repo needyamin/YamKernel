@@ -214,6 +214,9 @@ void sched_tick(void) {
     if (cur) {
         cur->ticks++;
         cur->vruntime += NICE_BASE / (cur->weight ? cur->weight : 1);
+        if (cur == pc->idle) {
+            pc->idle_ticks++;
+        }
     }
     /* Wake any sleepers whose deadline hit */
     u64 now = pc->ticks;

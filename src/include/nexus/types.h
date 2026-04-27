@@ -20,12 +20,16 @@ typedef u64                 usize;
 typedef i64                 isize;
 
 /* ---- Boolean ---- */
+#ifndef bool
 typedef _Bool               bool;
 #define true                1
 #define false               0
+#endif
 
 /* ---- NULL ---- */
+#ifndef NULL
 #define NULL                ((void*)0)
+#endif
 
 /* ---- Attributes ---- */
 #define PACKED              __attribute__((packed))
@@ -77,8 +81,8 @@ typedef enum {
     YAM_EDGE_MAX
 } yam_edge_type_t;
 
-/* ---- Inline helpers ---- */
-
+/* ---- Inline helpers (Kernel Only) ---- */
+#ifdef YAM_KERNEL
 ALWAYS_INLINE void outb(u16 port, u8 val) {
     __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
 }
@@ -124,5 +128,6 @@ ALWAYS_INLINE void sti(void) {
 ALWAYS_INLINE void hlt(void) {
     __asm__ volatile ("hlt");
 }
+#endif
 
 #endif /* _NEXUS_TYPES_H */

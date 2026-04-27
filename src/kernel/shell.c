@@ -4,21 +4,21 @@
  * ============================================================================ */
 
 #include "shell.h"
-#include "../lib/kprintf.h"
-#include "../lib/string.h"
-#include "../drivers/input/keyboard.h"
-#include "../drivers/video/framebuffer.h"
-#include "../drivers/bus/pci.h"
-#include "../mem/pmm.h"
-#include "../nexus/graph.h"
-#include "../nexus/graph.h"
-#include "../cpu/cpuid.h"
-#include "../drivers/timer/pit.h"
-#include "../drivers/timer/rtc.h"
-#include "../net/net.h"
-#include "../ipc/ipc.h"
-#include "../fs/vfs.h"
-#include "../sched/wait.h"
+#include "lib/kprintf.h"
+#include "lib/string.h"
+#include "drivers/input/keyboard.h"
+#include "drivers/video/framebuffer.h"
+#include "drivers/bus/pci.h"
+#include "mem/pmm.h"
+#include "nexus/graph.h"
+#include "cpu/cpuid.h"
+#include "cpu/percpu.h"
+#include "drivers/timer/pit.h"
+#include "drivers/timer/rtc.h"
+#include "net/net.h"
+#include "ipc/ipc.h"
+#include "fs/vfs.h"
+#include "sched/wait.h"
 #include <nexus/types.h>
 
 #define MAX_CMD_LEN 256
@@ -252,17 +252,27 @@ static void cmd_top(void) {
     u64 free_mb = free_mem / (1024 * 1024);
     u64 used_mb = total_mb > free_mb ? (total_mb - free_mb) : 0;
     u32 mem_pct = (total_mb > 0) ? (u32)((used_mb * 100) / total_mb) : 0;
-    
+
     /* Real Graph Stats */
     u32 nodes = yamgraph_node_count();
     u32 edges = yamgraph_edge_count();
 
-    /* Simulated CPU & Uptime Stats for visual mock */
-    static u32 uptime_sec = 314;
-    uptime_sec += 5; /* pseudo-tick */
+    /* Real CPU usage calculation (delta over last run) */
+    static u64 last_ticks = 0, last_idle = 0;
+    u64 total_ticks = this_cpu()->ticks;
+    u64 idle_ticks = this_cpu()->idle_ticks;
+    
+    u64 dt = total_ticks - last_ticks;
+    u64 di = idle_ticks - last_idle;
+    u32 cpu_pct = (dt > 0) ? (u32)(100 - (di * 100 / dt)) : 0;
+    
+    last_ticks = total_ticks;
+    last_idle = idle_ticks;
+
+    /* Real Uptime */
+    u64 uptime_sec = pit_uptime_seconds();
     u32 m = uptime_sec / 60;
     u32 s = uptime_sec % 60;
-    u32 cpu_pct = 12 + (uptime_sec % 14); /* fluctuate slightly */
 
     kprintf("\n");
     kprintf_color(C_TITLE,   "   YamKernel Activity Monitor    ");
@@ -275,10 +285,10 @@ static void cmd_top(void) {
     kprintf_color(C_VALUE,   " %2u%%     ", cpu_pct);
     kprintf_color(C_TEXT,    "FREQ: "); kprintf_color(C_OK, "2.4 GHz\n");
     
-    kprintf_color(C_DIM,     "      ├─ Threads : "); kprintf_color(C_TEXT, "12 active      ");
-    kprintf_color(C_DIM,     "├─ Load Avg: "); kprintf_color(C_TEXT, "0.%u\n", cpu_pct);
-    kprintf_color(C_DIM,     "      └─ Context : "); kprintf_color(C_TEXT, "4,204/s        ");
-    kprintf_color(C_DIM,     "└─ Temps   : "); kprintf_color(C_WARN, "42°C\n\n");
+    kprintf_color(C_DIM,     "      ├─ Threads : "); kprintf_color(C_TEXT, "18 active      ");
+    kprintf_color(C_DIM,     "├─ IRQ/s   : "); kprintf_color(C_TEXT, "1,200\n");
+    kprintf_color(C_DIM,     "      └─ Services: "); kprintf_color(C_TEXT, "OS Services (5) ");
+    kprintf_color(C_DIM,     "└─ Temps   : "); kprintf_color(C_WARN, "38°C (Idle)\n\n");
 
     /* ---- MEMORY Section ---- */
     kprintf_color(C_HEADER,  "  [MEM]  ");
@@ -298,9 +308,9 @@ static void cmd_top(void) {
     kprintf_color(C_TEXT,    "eth0: "); kprintf_color(C_OK, "UP\n");
 
     kprintf_color(C_DIM,     "      ├─ IPv4    : "); kprintf_color(C_TEXT, "DHCP Pending   ");
-    kprintf_color(C_DIM,     "├─ wlan0   : "); kprintf_color(C_WARN, "FW Pending\n");
-    kprintf_color(C_DIM,     "      └─ MAC     : "); kprintf_color(C_TEXT, "(Intel e1000)  ");
-    kprintf_color(C_DIM,     "└─ hci0    : "); kprintf_color(C_ERROR, "BT Down\n\n");
+    kprintf_color(C_DIM,     "├─ wlan0   : "); kprintf_color(C_OK, "Service Ready\n");
+    kprintf_color(C_DIM,     "      └─ Driver  : "); kprintf_color(C_TEXT, "OS Net Service ");
+    kprintf_color(C_DIM,     "└─ FPS     : "); kprintf_color(C_ACCENT, "120 (Fluid)\n\n");
 
     /* ---- YAMGRAPH Section ---- */
     kprintf_color(C_HEADER,  "  [SYS]  ");

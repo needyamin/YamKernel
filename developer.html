@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YamOS | Full Project Documentation & Development Guide</title>
+    <style>
+        :root {
+            --bg: #ffffff;
+            --text: #24292e;
+            --muted: #586069;
+            --border: #e1e4e8;
+            --code-bg: #f6f8fa;
+            --accent: #0366d6;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+            max-width: 1000px;
+            margin: 40px auto;
+            padding: 0 40px;
+            background-color: var(--bg);
+        }
+        h1 { font-size: 2.5em; border-bottom: 2px solid var(--border); padding-bottom: 0.3em; }
+        h2 { font-size: 1.8em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; margin-top: 40px; color: var(--accent); }
+        h3 { font-size: 1.4em; margin-top: 30px; }
+        p, li { font-size: 1.05em; }
+        code {
+            padding: 0.2em 0.4em;
+            background-color: var(--code-bg);
+            border-radius: 3px;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+            font-size: 90%;
+        }
+        pre {
+            padding: 20px;
+            background-color: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            overflow: auto;
+            font-size: 90%;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        th, td {
+            text-align: left;
+            padding: 12px;
+            border: 1px solid var(--border);
+        }
+        th { background-color: #fafbfc; }
+        .highlight { background-color: #fffbdd; padding: 2px 4px; border-radius: 3px; }
+        .toc { background: #f1f8ff; border: 1px solid #c8e1ff; padding: 20px; border-radius: 6px; margin-bottom: 40px; }
+        .toc h4 { margin-top: 0; }
+        .toc ul { list-style: none; padding-left: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .special-box { border: 2px solid #28a745; background: #f0fff4; padding: 20px; border-radius: 6px; margin: 30px 0; }
+    </style>
+</head>
+<body>
+
+    <h1>YamOS: Comprehensive Developer Portal</h1>
+    <p class="muted">Version 0.4.0 — "Modern Architecture Edition"</p>
+
+    <div class="toc">
+        <h4>Table of Contents</h4>
+        <ul>
+            <li><a href="#vision">1. Project Vision & "Special" Features</a></li>
+            <li><a href="#comparison">2. Market Comparison (YamOS vs Others)</a></li>
+            <li><a href="#structure">3. Detailed Project Structure</a></li>
+            <li><a href="#kernel-deep">4. Kernel Architecture (Ring 0)</a></li>
+            <li><a href="#os-deep">5. OS & Services (Ring 3)</a></li>
+            <li><a href="#recode">6. How to Recode & Develop</a></li>
+            <li><a href="#api">7. System Call Reference</a></li>
+        </ul>
+    </div>
+
+    <!-- 1. Vision -->
+    <h2 id="vision">1. Project Vision & "Special" Features</h2>
+    <p>YamOS is an <strong>Adaptive Microkernel</strong> operating system. Unlike traditional designs, it is built on the philosophy that "Hardware is just a data node."</p>
+    
+    <div class="special-box">
+        <strong>What makes YamOS special?</strong>
+        <ul>
+            <li><strong>YamGraph System:</strong> Instead of simple files or permissions, YamOS uses a directed graph to represent resources. To access a NIC or a screen buffer, a process must be "linked" to that node in the graph.</li>
+            <li><strong>Hot-Swap Drivers:</strong> Because drivers run in Ring 3 as standard ELFs, you can crash, upgrade, or restart a Video or Network driver without ever rebooting the kernel.</li>
+            <li><strong>Phase-Boot Architecture:</strong> A deterministic 7-phase boot process ensures system integrity via continuous self-tests.</li>
+        </ul>
+    </div>
+
+    <!-- 2. Market Comparison -->
+    <h2 id="comparison">2. Market Comparison</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Feature</th>
+                <th>Monolithic (Linux/Windows)</th>
+                <th>Microkernel (MINIX/L4)</th>
+                <th>YamOS (Adaptive)</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>Driver Safety</strong></td>
+                <td>Low (Crash = BSOD/Panic)</td>
+                <td>High (Isolated)</td>
+                <td><strong>Ultra-High</strong> (Isolated + Graph Security)</td>
+            </tr>
+            <tr>
+                <td><strong>Performance</strong></td>
+                <td>High (Direct access)</td>
+                <td>Medium (IPC Overhead)</td>
+                <td><strong>High</strong> (Shared-Memory Channels)</td>
+            </tr>
+            <tr>
+                <td><strong>Permissions</strong></td>
+                <td>User/Group/ACL</td>
+                <td>Message Passing Rights</td>
+                <td><strong>Dynamic YamGraph Edges</strong></td>
+            </tr>
+            <tr>
+                <td><strong>Graphic Native</strong></td>
+                <td>External Plugin</td>
+                <td>User-level app</td>
+                <td><strong>Deeply Integrated Wayland-Graph</strong></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <!-- 3. Project Structure -->
+    <h2 id="structure">3. Detailed Project Structure</h2>
+    <pre>
+/
+├── Makefile                # Unified build system for Kernel, Apps, and ISO
+├── linker.ld               # Kernel memory layout (High Half)
+├── src/
+│   ├── boot/               # Limine entry and 64-bit trampoline
+│   ├── cpu/                # GDT, IDT, APIC, Syscall stubs, ISR handlers
+│   ├── drivers/            # [KERNEL SPACE] Serial, Basic Input, Framebuffer
+│   ├── fs/                 # VFS management and ELF64 Binary Loader
+│   ├── include/            # Core header files (Nexus, types, limits)
+│   ├── ipc/                # Pipe, Channel, and Signal implementation
+│   ├── kernel/             # main.c, panic, and early shell
+│   ├── lib/                # kprintf, string, and math utilities
+│   ├── mem/                # PMM (Cell), VMM (Paging), Slab/Heap allocators
+│   ├── net/                # [KERNEL SPACE] In-kernel protocol stack (ARP/IP/TCP)
+│   ├── nexus/              # The YamGraph Resource Management engine
+│   ├── os/                 # [USER SPACE] The modern OS layer
+│   │   ├── apps/           # Terminal, Calculator, Browser (Ring 3)
+│   │   ├── drivers/        # Network, Audio, Video (Ring 3 Drivers)
+│   │   └── services/       # Wayland Compositor (Display Server)
+│   └── sched/              # CFS-lite Scheduler, Sleep, and Multicore (SMP)
+    </pre>
+
+    <!-- 4. Kernel Deep Dive -->
+    <h2 id="kernel-deep">4. Kernel Architecture (Ring 0)</h2>
+    <h3>Memory Layout</h3>
+    <ul>
+        <li><strong>Kernel Base:</strong> <code>0xffffffff80000000</code> (Linked at -2GB)</li>
+        <li><strong>Physical Direct Map:</strong> <code>0xffff800000000000</code> (Access all RAM)</li>
+        <li><strong>Allocation:</strong> Uses a <strong>Cell Allocator</strong> for physical pages and a <strong>Slab/Cache</strong> system for kernel structures (like <code>task_t</code>).</li>
+    </ul>
+    <h3>Scheduling & Multiprocessing</h3>
+    <p>The kernel wakes all CPUs found by Limine. Each CPU runs its own instance of the CFS-lite scheduler. Load balancing is handled via task migration during <code>sched_tick</code>.</p>
+
+    <!-- 5. OS & Services -->
+    <h2 id="os-deep">5. OS & Services (Ring 3)</h2>
+    <h3>The Driver Isolation Model</h3>
+    <p>Under the "Modern Tech" vision, drivers are <strong>not linked</strong> to the kernel. They are compiled as standalone ELFs and loaded by the kernel into Ring 3 address spaces. They interact with hardware via specific "Privileged Syscalls" (e.g., <code>SYS_PCI_CONFIG_READ</code>).</p>
+    <h3>Wayland Compositor</h3>
+    <p>The compositor (<code>src/os/services/compositor</code>) is the owner of the physical framebuffer. It provides a shared memory interface to apps for high-speed rendering without kernel intervention.</p>
+
+    <!-- 6. How to Recode -->
+    <h2 id="recode">6. How to Recode & Develop</h2>
+    <p>Follow these steps to contribute or modify the system:</p>
+    
+    <h3>A. Setting Up the Environment</h3>
+    <p>You need <code>gcc</code>, <code>ld</code>, <code>nasm</code>, <code>make</code>, and <code>xorriso</code>. We recommend a WSL (Ubuntu) or Linux environment.</p>
+    
+    <h3>B. Adding a New Ring 3 App</h3>
+    <ol>
+        <li>Create <code>src/os/apps/my_app.c</code>.</li>
+        <li>Include <code>"yam.h"</code>.</li>
+        <li>Add your app to the <code>Makefile</code> in the <code>APPS</code> list.</li>
+        <li>Call <code>make apps</code> and <code>make iso</code>.</li>
+    </ol>
+
+    <h3>C. Debugging</h3>
+    <p>Use the serial log. YamOS mirrors all kernel and user console output to the serial port (COM1). You can view it in your terminal when running with <code>make run</code>.</p>
+    <pre># Example debug print from a driver
+kprintf("[DRIVER] Found hardware at 0x%x\n", address);</pre>
+
+    <!-- 7. API Reference -->
+    <h2 id="api">7. System Call Reference</h2>
+    <p>The primary gateway for Ring 3 modules to interact with the system.</p>
+    <table>
+        <thead>
+            <tr><th>NR</th><th>Name</th><th>Usage</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>1</td><td><code>SYS_EXIT</code></td><td>Cleanup and terminate task</td></tr>
+            <tr><td>20</td><td><code>SYS_WL_CREATE_SURFACE</code></td><td>Create window (returns ID)</td></tr>
+            <tr><td>21</td><td><code>SYS_WL_MAP_BUFFER</code></td><td>Get pixel access to window</td></tr>
+            <tr><td>30</td><td><code>SYS_IOPORT_READ</code></td><td>Read from I/O port (width: 1, 2, 4)</td></tr>
+            <tr><td>33</td><td><code>SYS_MAP_MMIO</code></td><td>Map physical hardware registers</td></tr>
+        </tbody>
+    </table>
+
+    <footer style="margin-top: 100px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--muted);">
+        <p>&copy; 2026 YamOS Open Source Project. Documentation generated via Source Scan.</p>
+    </footer>
+
+</body>
+</html>

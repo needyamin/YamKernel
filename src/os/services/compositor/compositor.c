@@ -3,18 +3,25 @@
  * Handles window composition, input routing, and rendering.
  * ============================================================================ */
 #include "compositor.h"
-#include "../drivers/input/evdev.h"
-#include "../drivers/video/framebuffer.h"
-#include "../sched/sched.h"
-#include "../sched/wait.h"
-#include "../lib/string.h"
-#include "../lib/kprintf.h"
-#include "../mem/heap.h"
-#include "../drivers/timer/rtc.h"
+#include "drivers/input/evdev.h"
+#include "drivers/video/framebuffer.h"
+#include "sched/sched.h"
+#include "sched/wait.h"
+#include "lib/string.h"
+#include "lib/kprintf.h"
+#include "mem/heap.h"
+#include "drivers/timer/rtc.h"
 #include "wl_draw.h"
 #include <nexus/panic.h>
+#include "fs/elf.h"
 
 extern void *g_wallpaper_module;
+extern void *g_calc_module;
+extern usize g_calc_module_size;
+extern void *g_term_module;
+extern usize g_term_module_size;
+extern void *g_browser_module;
+extern usize g_browser_module_size;
 extern void wl_term_task(void *);
 extern void wl_browser_task(void *);
 extern void wl_calc_task(void *);
@@ -47,8 +54,8 @@ void wl_compositor_init(void) {
     g_compositor.login_focus_pass = true;
     g_compositor.login_failed = false;
 
-    kprintf_color(0xFF00DDFF, "[WAYLAND] Compositor initialized at %ux%u\n",
-                  mode.width, mode.height);
+    kprintf_color(0xFF00DDFF, "[WAYLAND] Compositor initialized at %ux%u (Mode: %s)\n",
+                  mode.width, mode.height, (g_compositor.state == COMPOSITOR_STATE_LOGIN) ? "LOGIN" : "DESKTOP");
 }
 
 wl_compositor_t *wl_get_compositor(void) {
@@ -675,31 +682,37 @@ static void process_input(void) {
                             if (g_compositor.cursor_y >= dock_y - mh - 10 && g_compositor.cursor_y < dock_y - 10) {
                                 i32 rel_y = g_compositor.cursor_y - (dock_y - mh - 10);
                                 if (rel_y >= 10 && rel_y < 40) {
-                                    sched_spawn("wl-term", wl_term_task, NULL, 2);
+                                    kprintf("[WAYLAND] Launching Terminal...\n");
+                                    if (g_term_module && g_term_module_size > 0) {
+                                        elf_load(g_term_module, g_term_module_size, "wl-term");
+                                    } else {
+                                        kprintf("[WAYLAND] Fallback to Kernel Terminal\n");
+                                        sched_spawn("wl-term-k", wl_term_task, NULL, 2);
+                                    }
                                 } else if (rel_y >= 40 && rel_y < 65) {
-                                    sched_spawn("wl-browser", wl_browser_task, NULL, 2);
+                                    kprintf("[WAYLAND] Launching Browser...\n");
+                                    if (g_browser_module && g_browser_module_size > 0) {
+                                        elf_load(g_browser_module, g_browser_module_size, "wl-browser");
+                                    } else {
+                                        kprintf("[WAYLAND] Fallback to Kernel Browser\n");
+                                        sched_spawn("wl-browser-k", wl_browser_task, NULL, 2);
+                                    }
                                 } else if (rel_y >= 65 && rel_y < 90) {
-                                    sched_spawn("wl-calc", wl_calc_task, NULL, 2);
+                                    kprintf("[WAYLAND] Launching Calculator...\n");
+                                    if (g_calc_module && g_calc_module_size > 0) {
+                                        elf_load(g_calc_module, g_calc_module_size, "wl-calc");
+                                    } else {
+                                        kprintf("[WAYLAND] Fallback to Kernel Calculator\n");
+                                        sched_spawn("wl-calc-k", wl_calc_task, NULL, 2);
+                                    }
                                 } else if (rel_y >= 120 && rel_y < 150) {
                                     /* RESTART */
                                     kprintf("[POWER] Restarting system...\n");
-                                    /* Method 1: 8042 Keyboard Controller */
                                     outb(0x64, 0xFE);
-                                    /* Method 2: PS/2 Pulse */
-                                    for(int i=0; i<5; i++) outb(0x64, 0xFE);
-                                    /* Fallback: wait a bit */
-                                    task_sleep_ms(100);
                                 } else if (rel_y >= 150 && rel_y < 190) {
                                     /* SHUTDOWN */
                                     kprintf("[POWER] Shutting down...\n");
-                                    /* Method 1: QEMU/Bochs ACPI (default) */
                                     outw(0x604, 0x2000);
-                                    /* Method 2: QEMU/Bochs ACPI (alt) */
-                                    outw(0xB004, 0x2000);
-                                    /* Method 3: VirtualBox */
-                                    outw(0x4004, 0x3400);
-                                    /* Method 4: Cloud-Hypervisor / QEMU */
-                                    outw(0x600, 0x34);
                                 }
                                 g_compositor.show_power_menu = false;
                                 continue;
@@ -709,11 +722,10 @@ static void process_input(void) {
 
                     /* Check Taskbar/Dock clicks */
                     if (ev.value == KEY_PRESSED && g_compositor.cursor_y >= dock_y && g_compositor.cursor_y <= dock_y + 44) {
-                        /* Clicked dock area */
                         /* Start button check (first 100px of dock) */
-                        if (g_compositor.cursor_x >= dock_x + 10 && g_compositor.cursor_x <= dock_x + 110) {
+                        if (g_compositor.cursor_x >= dock_x && g_compositor.cursor_x <= dock_x + 100) {
                             g_compositor.show_power_menu = !g_compositor.show_power_menu;
-                        } else if (ev.value == KEY_PRESSED) {
+                        } else {
                             /* Check Dock App Icons */
                             i32 abx = dock_x + 110;
                             for (int i = 0; i < WL_MAX_SURFACES; i++) {
@@ -727,7 +739,7 @@ static void process_input(void) {
                                 }
                             }
                         }
-                        continue; /* Prevent click from passing to windows behind dock */
+                        continue;
                     } else if (ev.code == 0x110) {
                         /* Mouse button */
                         if (ev.value == KEY_RELEASED) {

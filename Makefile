@@ -27,6 +27,8 @@ CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-stack-check \
           -Wall -Wextra -Werror -O2 -g \
           -Isrc/include -Isrc -Ivendor
 
+KERNEL_CFLAGS := $(CFLAGS) -DYAM_KERNEL
+
 ASFLAGS := -f elf64
 LDFLAGS := -nostdlib -static -T linker.ld -z max-page-size=0x1000
 
@@ -35,9 +37,9 @@ SRC_DIR   := src
 BUILD_DIR := build
 ISO_DIR   := $(BUILD_DIR)/iso_root
 
-# Source files
-C_SRCS := $(shell find $(SRC_DIR) -name '*.c' -type f)
-ASM_SRCS := $(shell find $(SRC_DIR) -name '*.asm' -type f)
+# Source files (Exclude OS-level apps and drivers from kernel build, keep services like compositor)
+C_SRCS := $(shell find $(SRC_DIR) -name '*.c' -type f -not -path '$(SRC_DIR)/os/apps/*' -not -path '$(SRC_DIR)/os/drivers/*')
+ASM_SRCS := $(shell find $(SRC_DIR) -name '*.asm' -type f -not -path '$(SRC_DIR)/os/apps/*' -not -path '$(SRC_DIR)/os/drivers/*')
 
 # Object files
 C_OBJS   := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(C_SRCS))
@@ -53,8 +55,21 @@ IMG2RAW       := $(BUILD_DIR)/img2raw
 LOGO_BIN      := $(BUILD_DIR)/logo.bin
 WALLPAPER_BIN := $(BUILD_DIR)/wallpaper.bin
 
-# User-space ELF test app
+# User-space ELF apps
 USER_ELF := $(BUILD_DIR)/test_app.elf
+CALC_ELF := $(BUILD_DIR)/calculator.elf
+TERM_ELF := $(BUILD_DIR)/terminal.elf
+BROWSER_ELF := $(BUILD_DIR)/browser.elf
+NET_ELF     := $(BUILD_DIR)/net_service.elf
+VIDEO_ELF   := $(BUILD_DIR)/video.elf
+AUDIO_ELF   := $(BUILD_DIR)/audio.elf
+IMG_ELF     := $(BUILD_DIR)/image.elf
+WIFI_ELF    := $(BUILD_DIR)/wifi.elf
+
+USER_CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-stack-check \
+               -fno-pie -fno-pic -no-pie -static -m64 -march=x86-64 -mno-80387 -mno-mmx \
+               -mno-sse -mno-sse2 -mno-red-zone -O2 -g \
+               -Isrc -Isrc/include -Isrc/os/apps
 
 # ============================================================================
 #  Targets
@@ -75,7 +90,7 @@ $(KERNEL_ELF): $(OBJS)
 # Compile C sources
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(KERNEL_CFLAGS) -c $< -o $@
 	@echo "[CC]   $<"
 
 # Assemble NASM sources
@@ -100,19 +115,56 @@ $(WALLPAPER_BIN): assets/owl_wallpaper.jpg $(IMG2RAW)
 	@mkdir -p $(dir $@)
 	$(IMG2RAW) $< $@ 1920
 
-$(USER_ELF): src/user/test_app.c src/user/user.ld
+$(USER_ELF): src/os/apps/test_app.c src/os/apps/user.ld
 	@mkdir -p $(dir $@)
-	$(CC) -std=c11 -ffreestanding -fno-stack-protector -fno-stack-check \
-	      -fno-pie -fno-pic -no-pie -static -m64 -march=x86-64 -mno-80387 -mno-mmx \
-	      -mno-sse -mno-sse2 -mno-red-zone -O2 -g \
-	      -nostdlib -Wl,-T,src/user/user.ld -o $@ src/user/test_app.c
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/test_app.c
 	@echo "[USER] $@"
+
+$(CALC_ELF): src/os/apps/calculator.c src/os/apps/font_data.c src/os/apps/user.ld
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/calculator.c src/os/apps/font_data.c
+	@echo "[CALC] $@"
+
+$(TERM_ELF): src/os/apps/terminal.c src/os/apps/font_data.c src/os/apps/user.ld
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/terminal.c src/os/apps/font_data.c
+	@echo "[TERM] $@"
+
+$(BROWSER_ELF): src/os/apps/browser.c src/os/apps/font_data.c src/os/apps/user.ld
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/browser.c src/os/apps/font_data.c
+	@echo "[BROWSER] $@"
+
+$(NET_ELF): src/os/drivers/net_service.c src/os/apps/user.ld
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/net_service.c
+	@echo "[DRV_NET] $@"
+
+$(VIDEO_ELF): src/os/drivers/video.c src/os/apps/user.ld
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/video.c
+	@echo "[DRV_VID] $@"
+
+$(AUDIO_ELF): src/os/drivers/audio.c src/os/apps/user.ld
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/audio.c
+	@echo "[DRV_AUD] $@"
+
+$(IMG_ELF): src/os/drivers/image.c src/os/apps/user.ld
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/image.c
+	@echo "[DRV_IMG] $@"
+
+$(WIFI_ELF): src/os/drivers/wifi.c src/os/apps/user.ld
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/wifi.c
+	@echo "[DRV_WIFI] $@"
 
 # ============================================================================
 #  ISO Creation (Limine-based bootable ISO)
 # ============================================================================
 
-$(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN) $(USER_ELF)
+$(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN) $(USER_ELF) $(CALC_ELF) $(TERM_ELF) $(BROWSER_ELF) $(NET_ELF) $(VIDEO_ELF) $(AUDIO_ELF) $(IMG_ELF) $(WIFI_ELF)
 	@echo "[ISO]  Building bootable ISO..."
 	@rm -rf $(ISO_DIR)
 	@mkdir -p $(ISO_DIR)/boot/limine
@@ -124,6 +176,14 @@ $(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN) $(USER_ELF)
 	cp $(LOGO_BIN) $(ISO_DIR)/boot/logo.bin
 	cp $(WALLPAPER_BIN) $(ISO_DIR)/boot/wallpaper.bin
 	cp $(USER_ELF) $(ISO_DIR)/boot/test_app.elf
+	cp $(CALC_ELF) $(ISO_DIR)/boot/calculator.elf
+	cp $(TERM_ELF) $(ISO_DIR)/boot/terminal.elf
+	cp $(BROWSER_ELF) $(ISO_DIR)/boot/browser.elf
+	cp $(NET_ELF) $(ISO_DIR)/boot/net_service.elf
+	cp $(VIDEO_ELF) $(ISO_DIR)/boot/video.elf
+	cp $(AUDIO_ELF) $(ISO_DIR)/boot/audio.elf
+	cp $(IMG_ELF) $(ISO_DIR)/boot/image.elf
+	cp $(WIFI_ELF) $(ISO_DIR)/boot/wifi.elf
 	
 	# Copy limine config
 	cp limine.conf $(ISO_DIR)/boot/limine/limine.conf

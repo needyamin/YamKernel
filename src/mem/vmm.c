@@ -128,8 +128,10 @@ static void free_pd(u64 *pd) {
     for (int i = 0; i < 512; i++) {
         if (pd[i] & VMM_FLAG_PRESENT) {
             if (!(pd[i] & (1ULL << 7))) { /* Not a huge page */
-                u64 phys = pd[i] & 0x000FFFFFFFFFF000ULL;
-                pmm_free_page(phys);
+                if (!(pd[i] & VMM_FLAG_DONT_FREE)) {
+                    u64 phys = pd[i] & 0x000FFFFFFFFFF000ULL;
+                    pmm_free_page(phys);
+                }
             }
         }
     }

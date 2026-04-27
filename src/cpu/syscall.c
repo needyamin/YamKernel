@@ -1,15 +1,19 @@
-/* YamKernel — SYSCALL setup + C-side dispatcher */
-#include "syscall.h"
+#include "kernel/api/syscall.h"
 #include "msr.h"
 #include "percpu.h"
-#include "../sched/sched.h"
-#include "../sched/wait.h"
-#include "../lib/kprintf.h"
-#include "../drivers/serial/serial.h"
-#include "../fs/vfs.h"
-#include "../fs/poll.h"
-#include "../mem/vmm.h"
-#include "../ipc/pipe.h"
+#include "sched/sched.h"
+#include "sched/wait.h"
+#include "lib/kprintf.h"
+#include "lib/string.h"
+#include "drivers/serial/serial.h"
+#include "fs/vfs.h"
+#include "fs/poll.h"
+#include "mem/pmm.h"
+#include "mem/vmm.h"
+#include "ipc/pipe.h"
+#include "os/services/compositor/compositor.h"
+#include "drivers/drm/drm.h"
+#include "drivers/bus/pci.h"
 
 extern void syscall_entry(void);   /* in syscall.asm */
 
@@ -68,6 +72,116 @@ static i64 sys_exit(u64 code) {
     return 0;
 }
 
+/* ---- Wayland / GUI Syscall Handlers ---- */
+
+static i64 sys_wl_create_surface(u64 utitle, i32 x, i32 y, u32 w, u32 h) {
+    task_t *t = this_cpu()->current;
+    const char *title = (const char *)utitle;
+    
+    /* TODO: Validation of title string (SMAP etc) */
+    wl_surface_t *s = wl_surface_create(title, x, y, w, h, t->id);
+    if (!s) return -1;
+    return (i64)s->id;
+}
+
+static i64 sys_wl_map_buffer(u32 surface_id, u64 uvaddr) {
+    task_t *t = this_cpu()->current;
+    if (!t->pml4) return -2;
+
+    wl_compositor_t *comp = wl_get_compositor();
+    wl_surface_t *s = NULL;
+    for (int i = 0; i < WL_MAX_SURFACES; i++) {
+        if (comp->surfaces[i].state != WL_SURFACE_FREE && comp->surfaces[i].id == surface_id) {
+            s = &comp->surfaces[i];
+            break;
+        }
+    }
+    if (!s) return -3;
+    if (s->owner_task_id != t->id) return -4;
+    if (!s->buffer || !s->buffer->pixels) return -5;
+
+    /* Map the dumb buffer's physical pages into the user address space */
+    u64 phys_base = vmm_virt_hhdm_to_phys(s->buffer->pixels);
+    u64 size = s->buffer->size;
+    u64 pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+
+    for (u64 i = 0; i < pages; i++) {
+        vmm_map_page(t->pml4, uvaddr + i * PAGE_SIZE, phys_base + i * PAGE_SIZE,
+                     VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_WRITE | VMM_FLAG_NX | VMM_FLAG_DONT_FREE);
+    }
+
+    return 0;
+}
+
+static i64 sys_wl_commit(u32 surface_id) {
+    wl_compositor_t *comp = wl_get_compositor();
+    for (int i = 0; i < WL_MAX_SURFACES; i++) {
+        if (comp->surfaces[i].state != WL_SURFACE_FREE && comp->surfaces[i].id == surface_id) {
+            wl_surface_commit(&comp->surfaces[i]);
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static i64 sys_wl_poll_event(u32 surface_id, u64 uev_ptr) {
+    task_t *t = this_cpu()->current;
+    wl_compositor_t *comp = wl_get_compositor();
+    wl_surface_t *s = NULL;
+    for (int i = 0; i < WL_MAX_SURFACES; i++) {
+        if (comp->surfaces[i].state != WL_SURFACE_FREE && comp->surfaces[i].id == surface_id) {
+            s = &comp->surfaces[i];
+            break;
+        }
+    }
+    if (!s || s->owner_task_id != t->id) return -1;
+
+    input_event_t ev;
+    if (wl_surface_pop_event(s, &ev)) {
+        /* Copy to user-space (SMAP-safe) */
+        bool smap = (read_cr4() & CR4_SMAP) != 0;
+        if (smap) __asm__ volatile ("stac");
+        memcpy((void *)uev_ptr, &ev, sizeof(input_event_t));
+        if (smap) __asm__ volatile ("clac");
+        return 1;
+    }
+    return 0;
+}
+
+/* ---- Privileged Driver Syscalls ---- */
+
+static i64 sys_ioport_read(u16 port, u8 width) {
+    if (width == 1) return (i64)inb(port);
+    if (width == 2) return (i64)inw(port);
+    if (width == 4) return (i64)inl(port);
+    return -1;
+}
+
+static i64 sys_ioport_write(u16 port, u8 width, u64 value) {
+    if (width == 1) outb(port, (u8)value);
+    else if (width == 2) outw(port, (u16)value);
+    else if (width == 4) outl(port, (u32)value);
+    return 0;
+}
+
+static i64 sys_pci_config_read(u8 bus, u8 slot, u8 func, u8 offset, u8 width) {
+    if (width == 4) return (i64)pci_read_32(bus, slot, func, offset);
+    if (width == 2) return (i64)pci_read_16(bus, slot, func, offset);
+    if (width == 1) return (i64)pci_read_8(bus, slot, func, offset);
+    return -1;
+}
+
+static i64 sys_map_mmio(u64 phys_addr, u64 virt_addr, u64 size) {
+    task_t *t = this_cpu()->current;
+    if (!t->pml4) return -1;
+    u64 pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+    for (u64 i = 0; i < pages; i++) {
+        vmm_map_page(t->pml4, virt_addr + i * PAGE_SIZE, phys_addr + i * PAGE_SIZE,
+                     VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_WRITE | VMM_FLAG_NX | VMM_FLAG_NOCACHE);
+    }
+    return 0;
+}
+
 i64 syscall_dispatch(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5) {
     (void)a4; (void)a5;
     switch (nr) {
@@ -84,6 +198,18 @@ i64 syscall_dispatch(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5) {
     case SYS_MUNMAP:   return (i64)sys_munmap((void *)a1, (usize)a2);
     case SYS_PIPE:     return (i64)sys_pipe((int *)a1);
     case SYS_POLL:     return (i64)sys_poll((pollfd_t *)a1, (u32)a2, (i64)a3);
+    
+    case SYS_WL_CREATE_SURFACE: return sys_wl_create_surface(a1, (i32)a2, (i32)a3, (u32)a4, (u32)a5);
+    case SYS_WL_MAP_BUFFER:     return sys_wl_map_buffer((u32)a1, a2);
+    case SYS_WL_COMMIT:         return sys_wl_commit((u32)a1);
+    case SYS_WL_POLL_EVENT:     return sys_wl_poll_event((u32)a1, a2);
+
+    /* Driver Syscalls */
+    case SYS_IOPORT_READ:       return sys_ioport_read((u16)a1, (u8)a2);
+    case SYS_IOPORT_WRITE:      return sys_ioport_write((u16)a1, (u8)a2, a3);
+    case SYS_PCI_CONFIG_READ:   return sys_pci_config_read((u8)a1, (u8)a2, (u8)a3, (u8)a4, (u8)a5);
+    case SYS_MAP_MMIO:          return sys_map_mmio(a1, a2, a3);
+
     default: return -1;
     }
 }

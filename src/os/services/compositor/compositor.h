@@ -10,8 +10,8 @@
 #define _WAYLAND_COMPOSITOR_H
 
 #include <nexus/types.h>
-#include "../drivers/drm/drm.h"
-#include "../drivers/input/evdev.h"
+#include "drivers/drm/drm.h"
+#include "drivers/input/evdev.h"
 
 /* Maximum surfaces the compositor can track */
 #define WL_MAX_SURFACES     32

@@ -12,6 +12,7 @@
 #define VMM_FLAG_WRITE      (1ULL << 1)
 #define VMM_FLAG_USER       (1ULL << 2)
 #define VMM_FLAG_NOCACHE    (1ULL << 4)
+#define VMM_FLAG_DONT_FREE  (1ULL << 10)  /* Bit 10: OS-specific, don't free physical page on PML4 destroy */
 #define VMM_FLAG_NX         (1ULL << 63)
 
 /* mmap flags */

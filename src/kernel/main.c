@@ -12,43 +12,43 @@
 #include <nexus/panic.h>
 #include <limine.h>
 
-#include "../cpu/gdt.h"
-#include "../cpu/idt.h"
-#include "../cpu/cpuid.h"
-#include "../cpu/security.h"
-#include "../cpu/acpi.h"
-#include "../cpu/apic.h"
-#include "../cpu/percpu.h"
-#include "../cpu/smp.h"
-#include "../cpu/syscall.h"
-#include "../sched/sched.h"
-#include "../mem/pmm.h"
-#include "../mem/vmm.h"
-#include "../mem/heap.h"
-#include "../drivers/serial/serial.h"
-#include "../drivers/video/framebuffer.h"
-#include "../drivers/timer/pit.h"
-#include "../drivers/timer/rtc.h"
-#include "../drivers/bus/api.h"
-#include "../net/net.h"
-#include "../ipc/ipc.h"
-#include "../fs/vfs.h"
-#include "../lib/kprintf.h"
-#include "../lib/string.h"
-#include "../lib/kdebug.h"
-#include "../nexus/graph.h"
-#include "../nexus/capability.h"
-#include "../nexus/channel.h"
-#include "../drivers/bus/pci.h"
-#include "../drivers/input/keyboard.h"
-#include "../drivers/input/mouse.h"
-#include "../drivers/input/evdev.h"
-#include "../drivers/drm/drm.h"
-#include "../wayland/compositor.h"
-#include "../wayland/demo_client.h"
-#include "../sched/wait.h"
-#include "../kernel/shell.h"
-#include "../boot/yamboot.h"
+#include "cpu/gdt.h"
+#include "cpu/idt.h"
+#include "cpu/cpuid.h"
+#include "cpu/security.h"
+#include "cpu/acpi.h"
+#include "cpu/apic.h"
+#include "cpu/percpu.h"
+#include "cpu/smp.h"
+#include "kernel/api/syscall.h"
+#include "sched/sched.h"
+#include "mem/pmm.h"
+#include "mem/vmm.h"
+#include "mem/heap.h"
+#include "drivers/serial/serial.h"
+#include "drivers/video/framebuffer.h"
+#include "drivers/timer/pit.h"
+#include "drivers/timer/rtc.h"
+#include "drivers/bus/api.h"
+#include "net/net.h"
+#include "ipc/ipc.h"
+#include "fs/vfs.h"
+#include "fs/elf.h"
+#include "lib/kprintf.h"
+#include "lib/string.h"
+#include "lib/kdebug.h"
+#include "nexus/graph.h"
+#include "nexus/capability.h"
+#include "os/services/compositor/compositor.h"
+#include "nexus/channel.h"
+#include "drivers/bus/pci.h"
+#include "drivers/input/keyboard.h"
+#include "drivers/input/mouse.h"
+#include "drivers/input/evdev.h"
+#include "drivers/drm/drm.h"
+#include "sched/wait.h"
+#include "kernel/shell.h"
+#include "boot/yamboot.h"
 
 #define YAM_DEMO_TASKS 0
 #define YAM_PREEMPTIVE 1
@@ -108,6 +108,22 @@ static volatile struct limine_module_request module_request = {
  * ============================================================================ */
 static void *g_elf_module = NULL;
 static usize g_elf_module_size = 0;
+void *g_calc_module = NULL;
+usize g_calc_module_size = 0;
+void *g_term_module = NULL;
+usize g_term_module_size = 0;
+void *g_browser_module = NULL;
+usize g_browser_module_size = 0;
+void *g_net_module = NULL;
+usize g_net_module_size = 0;
+void *g_video_module = NULL;
+usize g_video_module_size = 0;
+void *g_audio_module = NULL;
+usize g_audio_module_size = 0;
+void *g_img_module = NULL;
+usize g_img_module_size = 0;
+void *g_wifi_module = NULL;
+usize g_wifi_module_size = 0;
 void *g_wallpaper_module = NULL;
 
 /* ============================================================================
@@ -201,6 +217,33 @@ void kernel_main(void) {
                     g_elf_module = mod->address;
                     g_elf_module_size = mod->size;
                     KINFO("MODULE", "    -> matched ELF APP");
+                } else if (len >= 14 && strcmp(mod->path + len - 14, "calculator.elf") == 0) {
+                    g_calc_module = mod->address;
+                    g_calc_module_size = mod->size;
+                    KINFO("MODULE", "    -> matched CALC APP");
+                } else if (len >= 12 && strcmp(mod->path + len - 12, "terminal.elf") == 0) {
+                    g_term_module = mod->address;
+                    g_term_module_size = mod->size;
+                    KINFO("MODULE", "    -> matched TERM APP");
+                } else if (len >= 11 && strcmp(mod->path + len - 11, "browser.elf") == 0) {
+                    g_browser_module = mod->address;
+                    g_browser_module_size = mod->size;
+                    KINFO("MODULE", "    -> matched BROWSER APP");
+                } else if (len >= 15 && strcmp(mod->path + len - 15, "net_service.elf") == 0) {
+                    g_net_module = mod->address;
+                    g_net_module_size = mod->size;
+                } else if (len >= 9 && strcmp(mod->path + len - 9, "video.elf") == 0) {
+                    g_video_module = mod->address;
+                    g_video_module_size = mod->size;
+                } else if (len >= 9 && strcmp(mod->path + len - 9, "audio.elf") == 0) {
+                    g_audio_module = mod->address;
+                    g_audio_module_size = mod->size;
+                } else if (len >= 9 && strcmp(mod->path + len - 9, "image.elf") == 0) {
+                    g_img_module = mod->address;
+                    g_img_module_size = mod->size;
+                } else if (len >= 8 && strcmp(mod->path + len - 8, "wifi.elf") == 0) {
+                    g_wifi_module = mod->address;
+                    g_wifi_module_size = mod->size;
                 }
             }
         } else {
@@ -402,12 +445,18 @@ void kernel_main(void) {
         
         /* Load ELF user-space app if found */
         if (g_elf_module) {
-            extern bool elf_load(const void *, usize, const char *);
             elf_load(g_elf_module, g_elf_module_size, "test_app");
         }
         
         /* Spawn Wayland Compositor (highest priority) */
         sched_spawn("wayland", wl_compositor_task, NULL, 0);
+
+        /* Spawn OS Driver Services */
+        if (g_net_module)   elf_load(g_net_module, g_net_module_size, "os-net");
+        if (g_video_module) elf_load(g_video_module, g_video_module_size, "os-video");
+        if (g_audio_module) elf_load(g_audio_module, g_audio_module_size, "os-audio");
+        if (g_img_module)   elf_load(g_img_module, g_img_module_size, "os-img");
+        if (g_wifi_module)  elf_load(g_wifi_module, g_wifi_module_size, "os-wifi");
         
         /* Spawn Apps (only when clicked from GUI now) */
         /*

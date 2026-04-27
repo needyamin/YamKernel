@@ -18,7 +18,21 @@
 #define SYS_MUNMAP  11
 #define SYS_PIPE    12
 #define SYS_POLL    13
-#define SYS_MAX     32
+
+/* Wayland / GUI Syscalls */
+#define SYS_WL_CREATE_SURFACE 20
+#define SYS_WL_MAP_BUFFER     21
+#define SYS_WL_COMMIT         22
+#define SYS_WL_POLL_EVENT     23
+
+/* Privileged Driver Syscalls (OS Level) */
+#define SYS_IOPORT_READ       30
+#define SYS_IOPORT_WRITE      31
+#define SYS_IRQ_SUBSCRIBE     32
+#define SYS_MAP_MMIO          33
+#define SYS_PCI_CONFIG_READ   34
+
+#define SYS_MAX     64
 
 void syscall_init(void);
 
