@@ -3,214 +3,493 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YamOS | Full Project Documentation & Development Guide</title>
+    <title>YamKernel — Developer Documentation</title>
     <style>
         :root {
-            --bg: #ffffff;
-            --text: #24292e;
-            --muted: #586069;
-            --border: #e1e4e8;
-            --code-bg: #f6f8fa;
-            --accent: #0366d6;
+            --bg: #0d1117;
+            --panel: #161b22;
+            --panel2: #1c2230;
+            --text: #c9d1d9;
+            --muted: #8b949e;
+            --border: #30363d;
+            --accent: #58a6ff;
+            --good: #3fb950;
+            --warn: #d29922;
+            --bad: #f85149;
+            --code-bg: #1f2937;
         }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-            line-height: 1.6;
-            color: var(--text);
-            max-width: 1000px;
-            margin: 40px auto;
-            padding: 0 40px;
-            background-color: var(--bg);
-        }
-        h1 { font-size: 2.5em; border-bottom: 2px solid var(--border); padding-bottom: 0.3em; }
-        h2 { font-size: 1.8em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; margin-top: 40px; color: var(--accent); }
-        h3 { font-size: 1.4em; margin-top: 30px; }
-        p, li { font-size: 1.05em; }
-        code {
-            padding: 0.2em 0.4em;
-            background-color: var(--code-bg);
-            border-radius: 3px;
-            font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-            font-size: 90%;
-        }
-        pre {
-            padding: 20px;
-            background-color: var(--code-bg);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            overflow: auto;
-            font-size: 90%;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 20px 0;
-        }
-        th, td {
-            text-align: left;
-            padding: 12px;
-            border: 1px solid var(--border);
-        }
-        th { background-color: #fafbfc; }
-        .highlight { background-color: #fffbdd; padding: 2px 4px; border-radius: 3px; }
-        .toc { background: #f1f8ff; border: 1px solid #c8e1ff; padding: 20px; border-radius: 6px; margin-bottom: 40px; }
-        .toc h4 { margin-top: 0; }
-        .toc ul { list-style: none; padding-left: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        .special-box { border: 2px solid #28a745; background: #f0fff4; padding: 20px; border-radius: 6px; margin: 30px 0; }
+        body { font-family: "Segoe UI", system-ui, Arial, sans-serif; line-height: 1.55; color: var(--text); max-width: 1100px; margin: 28px auto; padding: 0 22px; background: var(--bg); }
+        h1, h2, h3, h4 { color: #f0f6fc; }
+        h1 { font-size: 2.2rem; border-bottom: 2px solid var(--border); padding-bottom: 10px; }
+        h2 { font-size: 1.45rem; border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-top: 36px; color: var(--accent); }
+        h3 { margin-top: 24px; font-size: 1.08rem; color: #c3d5ea; }
+        h4 { margin-top: 18px; font-size: 0.98rem; color: #b6c8de; }
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 5px; padding: 2px 6px; font-size: 0.9em; }
+        pre { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; overflow: auto; font-size: 0.88rem; }
+        table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 0.93rem; }
+        th, td { border: 1px solid var(--border); padding: 9px 10px; text-align: left; vertical-align: top; }
+        th { background: #1f2530; color: #dbe8f7; }
+        tr:nth-child(even) td { background: #131a24; }
+        .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; margin: 14px 0; }
+        .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+        @media (max-width: 800px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+        .tag { display: inline-block; font-size: 0.78rem; border-radius: 999px; padding: 2px 9px; margin: 2px 4px 2px 0; border: 1px solid var(--border); background: #1a2030; }
+        .ok   { color: var(--good); }
+        .warn { color: var(--warn); }
+        .bad  { color: var(--bad); }
+        .muted { color: var(--muted); }
+        .toc ul { margin: 0; padding-left: 20px; columns: 2; }
+        .pros, .cons { padding: 12px 14px; border-radius: 8px; }
+        .pros { background: #122a18; border: 1px solid #1f5d2e; }
+        .cons { background: #2a1313; border: 1px solid #5d1f1f; }
+        .pill { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; }
+        .pill.green { background: #1a3a25; color: #7ee2a8; }
+        .pill.amber { background: #3a2a14; color: #f5c97a; }
+        .pill.red { background: #3a1a1a; color: #ff8a8a; }
+        kbd { background: #232b39; border: 1px solid var(--border); border-bottom-width: 2px; padding: 1px 6px; border-radius: 4px; font-family: monospace; font-size: 0.85em; }
+        ul.dense li { margin: 2px 0; }
     </style>
 </head>
 <body>
 
-    <h1>YamOS: Comprehensive Developer Portal</h1>
-    <p class="muted">Version 0.4.0 — "Modern Architecture Edition"</p>
+<h1>YamKernel — Developer Documentation</h1>
+<p class="muted">A graph-based, x86_64 hybrid kernel with Limine boot, CFS-lite scheduler, fast SYSCALL/SYSRET, and slab-backed memory. This page is auto-aligned to the actual source tree.</p>
+<p>
+    <span class="tag">x86_64 long mode</span>
+    <span class="tag">Limine v3 protocol</span>
+    <span class="tag">Hybrid kernel</span>
+    <span class="tag">Ring 0 / Ring 3 split</span>
+    <span class="tag">CFS-lite scheduler</span>
+    <span class="tag">Slab + Cell allocator</span>
+    <span class="tag">YamGraph IPC</span>
+</p>
 
-    <div class="toc">
-        <h4>Table of Contents</h4>
-        <ul>
-            <li><a href="#vision">1. Project Vision & "Special" Features</a></li>
-            <li><a href="#comparison">2. Market Comparison (YamOS vs Others)</a></li>
-            <li><a href="#structure">3. Detailed Project Structure</a></li>
-            <li><a href="#kernel-deep">4. Kernel Architecture (Ring 0)</a></li>
-            <li><a href="#os-deep">5. OS & Services (Ring 3)</a></li>
-            <li><a href="#recode">6. How to Recode & Develop</a></li>
-            <li><a href="#api">7. System Call Reference</a></li>
-        </ul>
-    </div>
-
-    <!-- 1. Vision -->
-    <h2 id="vision">1. Project Vision & "Special" Features</h2>
-    <p>YamOS is an <strong>Adaptive Microkernel</strong> operating system. Unlike traditional designs, it is built on the philosophy that "Hardware is just a data node."</p>
-    
-    <div class="special-box">
-        <strong>What makes YamOS special?</strong>
-        <ul>
-            <li><strong>YamGraph System:</strong> Instead of simple files or permissions, YamOS uses a directed graph to represent resources. To access a NIC or a screen buffer, a process must be "linked" to that node in the graph.</li>
-            <li><strong>Hot-Swap Drivers:</strong> Because drivers run in Ring 3 as standard ELFs, you can crash, upgrade, or restart a Video or Network driver without ever rebooting the kernel.</li>
-            <li><strong>Phase-Boot Architecture:</strong> A deterministic 7-phase boot process ensures system integrity via continuous self-tests.</li>
-        </ul>
-    </div>
-
-    <!-- 2. Market Comparison -->
-    <h2 id="comparison">2. Market Comparison</h2>
-    <table>
-        <thead>
-            <tr>
-                <th>Feature</th>
-                <th>Monolithic (Linux/Windows)</th>
-                <th>Microkernel (MINIX/L4)</th>
-                <th>YamOS (Adaptive)</th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr>
-                <td><strong>Driver Safety</strong></td>
-                <td>Low (Crash = BSOD/Panic)</td>
-                <td>High (Isolated)</td>
-                <td><strong>Ultra-High</strong> (Isolated + Graph Security)</td>
-            </tr>
-            <tr>
-                <td><strong>Performance</strong></td>
-                <td>High (Direct access)</td>
-                <td>Medium (IPC Overhead)</td>
-                <td><strong>High</strong> (Shared-Memory Channels)</td>
-            </tr>
-            <tr>
-                <td><strong>Permissions</strong></td>
-                <td>User/Group/ACL</td>
-                <td>Message Passing Rights</td>
-                <td><strong>Dynamic YamGraph Edges</strong></td>
-            </tr>
-            <tr>
-                <td><strong>Graphic Native</strong></td>
-                <td>External Plugin</td>
-                <td>User-level app</td>
-                <td><strong>Deeply Integrated Wayland-Graph</strong></td>
-            </tr>
-        </tbody>
-    </table>
-
-    <!-- 3. Project Structure -->
-    <h2 id="structure">3. Detailed Project Structure</h2>
-    <pre>
-/
-├── Makefile                # Unified build system for Kernel, Apps, and ISO
-├── linker.ld               # Kernel memory layout (High Half)
-├── src/
-│   ├── boot/               # Limine entry and 64-bit trampoline
-│   ├── cpu/                # GDT, IDT, APIC, Syscall stubs, ISR handlers
-│   ├── drivers/            # [KERNEL SPACE] Serial, Basic Input, Framebuffer
-│   ├── fs/                 # VFS management and ELF64 Binary Loader
-│   ├── include/            # Core header files (Nexus, types, limits)
-│   ├── ipc/                # Pipe, Channel, and Signal implementation
-│   ├── kernel/             # main.c, panic, and early shell
-│   ├── lib/                # kprintf, string, and math utilities
-│   ├── mem/                # PMM (Cell), VMM (Paging), Slab/Heap allocators
-│   ├── net/                # [KERNEL SPACE] In-kernel protocol stack (ARP/IP/TCP)
-│   ├── nexus/              # The YamGraph Resource Management engine
-│   ├── os/                 # [USER SPACE] The modern OS layer
-│   │   ├── apps/           # Terminal, Calculator, Browser (Ring 3)
-│   │   ├── drivers/        # Network, Audio, Video (Ring 3 Drivers)
-│   │   └── services/       # Wayland Compositor (Display Server)
-│   └── sched/              # CFS-lite Scheduler, Sleep, and Multicore (SMP)
-    </pre>
-
-    <!-- 4. Kernel Deep Dive -->
-    <h2 id="kernel-deep">4. Kernel Architecture (Ring 0)</h2>
-    <h3>Memory Layout</h3>
+<div class="card toc">
+    <h3>Contents</h3>
     <ul>
-        <li><strong>Kernel Base:</strong> <code>0xffffffff80000000</code> (Linked at -2GB)</li>
-        <li><strong>Physical Direct Map:</strong> <code>0xffff800000000000</code> (Access all RAM)</li>
-        <li><strong>Allocation:</strong> Uses a <strong>Cell Allocator</strong> for physical pages and a <strong>Slab/Cache</strong> system for kernel structures (like <code>task_t</code>).</li>
+        <li><a href="#status">1. Implementation Status</a></li>
+        <li><a href="#architecture">2. High-Level Architecture</a></li>
+        <li><a href="#proscons">3. Pros &amp; Cons</a></li>
+        <li><a href="#kernel-arch">4. Kernel Architecture (Ring 0)</a></li>
+        <li><a href="#os-arch">5. OS Architecture (Ring 3 / Userland)</a></li>
+        <li><a href="#memory">6. Memory Subsystem</a></li>
+        <li><a href="#scheduler">7. Scheduler &amp; Concurrency</a></li>
+        <li><a href="#interrupts">8. Interrupts &amp; APIC</a></li>
+        <li><a href="#syscalls">9. Syscall ABI</a></li>
+        <li><a href="#yamgraph">10. YamGraph Resource Model</a></li>
+        <li><a href="#drivers">11. Driver Model</a></li>
+        <li><a href="#boot">12. Boot Pipeline</a></li>
+        <li><a href="#tree">13. Source Tree</a></li>
+        <li><a href="#build">14. Build / Run</a></li>
+        <li><a href="#debug">15. Debug Playbook</a></li>
+        <li><a href="#compare">16. Marketplace Comparison</a></li>
+        <li><a href="#roadmap">17. Roadmap</a></li>
     </ul>
-    <h3>Scheduling & Multiprocessing</h3>
-    <p>The kernel wakes all CPUs found by Limine. Each CPU runs its own instance of the CFS-lite scheduler. Load balancing is handled via task migration during <code>sched_tick</code>.</p>
+</div>
 
-    <!-- 5. OS & Services -->
-    <h2 id="os-deep">5. OS & Services (Ring 3)</h2>
-    <h3>The Driver Isolation Model</h3>
-    <p>Under the "Modern Tech" vision, drivers are <strong>not linked</strong> to the kernel. They are compiled as standalone ELFs and loaded by the kernel into Ring 3 address spaces. They interact with hardware via specific "Privileged Syscalls" (e.g., <code>SYS_PCI_CONFIG_READ</code>).</p>
-    <h3>Wayland Compositor</h3>
-    <p>The compositor (<code>src/os/services/compositor</code>) is the owner of the physical framebuffer. It provides a shared memory interface to apps for high-speed rendering without kernel intervention.</p>
+<!-- 1 -->
+<h2 id="status">1. Implementation Status</h2>
+<table>
+<thead><tr><th>Subsystem</th><th>State</th><th>Details</th></tr></thead>
+<tbody>
+<tr><td>Boot (Limine, long mode, framebuffer)</td><td><span class="pill green">Stable</span></td><td>Limine base revision 3, HHDM, RSDP, memmap requests.</td></tr>
+<tr><td>CPU init (GDT/IDT/TSS/CPUID)</td><td><span class="pill green">Stable</span></td><td>5 segments + TSS, 48 IDT vectors.</td></tr>
+<tr><td>Security flags</td><td><span class="pill green">Stable</span></td><td>NX, SMEP, SMAP, UMIP, WP — auto-enabled by CPU support.</td></tr>
+<tr><td>PMM (Cell allocator)</td><td><span class="pill green">Stable</span></td><td>Fractal quad-tree subdivision over physical RAM.</td></tr>
+<tr><td>VMM (4-level paging)</td><td><span class="pill green">Stable</span></td><td>Huge-page-aware walker, <code>invlpg</code> on map.</td></tr>
+<tr><td>Heap (kmalloc/kfree)</td><td><span class="pill green">Stable</span></td><td>256 KB initial bump heap.</td></tr>
+<tr><td>Slab (kmem_cache)</td><td><span class="pill green">Stable</span></td><td>Per-cache freelist, IRQ-safe spinlock.</td></tr>
+<tr><td>ACPI parser</td><td><span class="pill green">Stable</span></td><td>RSDP / RSDT / XSDT / MADT — on-demand HHDM mapping for low phys.</td></tr>
+<tr><td>LAPIC + IOAPIC</td><td><span class="pill green">Stable</span></td><td>MMIO mapped via dedicated virtual window with verification.</td></tr>
+<tr><td>APIC timer</td><td><span class="pill green">Stable</span></td><td>PIT-channel-2 calibration, periodic at 100 Hz.</td></tr>
+<tr><td>Per-CPU data (GS_BASE)</td><td><span class="pill green">Stable</span></td><td>Linux-style; <code>swapgs</code> on ring transitions.</td></tr>
+<tr><td>SMP CPU enumeration</td><td><span class="pill amber">Partial</span></td><td>BSP runs; AP boot trampoline pending.</td></tr>
+<tr><td>Scheduler (CFS-lite)</td><td><span class="pill green">In-tree</span></td><td>Ready list + sleeping list, vruntime-based pick.</td></tr>
+<tr><td>Preemptive multitasking</td><td><span class="pill amber">Toggle</span></td><td><code>YAM_PREEMPTIVE</code> in <code>main.c</code>; default off (stable shell mode).</td></tr>
+<tr><td>Wait queues / mutex / sleep_ms</td><td><span class="pill green">In-tree</span></td><td><code>sched/wait.c</code>.</td></tr>
+<tr><td>Ring 0/3 split</td><td><span class="pill green">Stable</span></td><td>SYSRET-compatible GDT layout.</td></tr>
+<tr><td>Fast syscalls (SYSCALL/SYSRET)</td><td><span class="pill green">Stable</span></td><td>5 syscalls implemented.</td></tr>
+<tr><td>Ring-3 demo loader</td><td><span class="pill amber">Toggle</span></td><td><code>YAM_DEMO_TASKS</code> in <code>main.c</code>; default off.</td></tr>
+<tr><td>YamGraph (resource graph)</td><td><span class="pill green">In-tree</span></td><td>Nodes, edges, capabilities, channels.</td></tr>
+<tr><td>Drivers (PCI/USB/I2C/SPI scaffolding)</td><td><span class="pill amber">Scaffold</span></td><td>Skipped in Safe Mode.</td></tr>
+<tr><td>Network (TCP/UDP/ICMP/ARP/DHCP/DNS)</td><td><span class="pill amber">Scaffold</span></td><td>Headers + e1000 / iwlwifi stubs.</td></tr>
+<tr><td>VFS / IPC / FS</td><td><span class="pill amber">Scaffold</span></td><td>Init paths exist, no real backends mounted yet.</td></tr>
+<tr><td>Shell (REPL)</td><td><span class="pill green">Stable</span></td><td>History, arrow keys, idle <code>task_sleep_ms</code> path.</td></tr>
+</tbody>
+</table>
 
-    <!-- 6. How to Recode -->
-    <h2 id="recode">6. How to Recode & Develop</h2>
-    <p>Follow these steps to contribute or modify the system:</p>
-    
-    <h3>A. Setting Up the Environment</h3>
-    <p>You need <code>gcc</code>, <code>ld</code>, <code>nasm</code>, <code>make</code>, and <code>xorriso</code>. We recommend a WSL (Ubuntu) or Linux environment.</p>
-    
-    <h3>B. Adding a New Ring 3 App</h3>
-    <ol>
-        <li>Create <code>src/os/apps/my_app.c</code>.</li>
-        <li>Include <code>"yam.h"</code>.</li>
-        <li>Add your app to the <code>Makefile</code> in the <code>APPS</code> list.</li>
-        <li>Call <code>make apps</code> and <code>make iso</code>.</li>
-    </ol>
+<!-- 2 -->
+<h2 id="architecture">2. High-Level Architecture</h2>
+<p>YamKernel is a <strong>monolithic-leaning hybrid</strong> kernel: it keeps memory, scheduling, IRQs, and core IPC in the kernel for performance, while exposing user-mode tasks via a fast SYSCALL path. A graph (<strong>YamGraph</strong>) sits underneath, modeling every resource (task, memory cell, device, channel, capability) as a node with typed edges.</p>
 
-    <h3>C. Debugging</h3>
-    <p>Use the serial log. YamOS mirrors all kernel and user console output to the serial port (COM1). You can view it in your terminal when running with <code>make run</code>.</p>
-    <pre># Example debug print from a driver
-kprintf("[DRIVER] Found hardware at 0x%x\n", address);</pre>
+<pre><code>+----------------------------- Ring 3 (user) ------------------------------+
+|  user-demo program / future apps  |  POSIX-ish runtime (planned)         |
++----------------------------- SYSCALL / SYSRET ---------------------------+
+|  syscall_dispatch  (sys_write / exit / getpid / yield / sleepms)         |
++--------------------------- Ring 0 services ------------------------------+
+|  Shell (task #0)  Scheduler (CFS-lite)  Wait queues / mutex / sleep      |
++--------------------------- Core kernel core -----------------------------+
+|  YamGraph  | IPC (channels, capabilities) | VFS / NET / IPC scaffolds    |
++--------------------------- Memory + CPU ---------------------------------+
+|  PMM (Cell alloc) | VMM (4-level paging) | Heap | Slab | Per-CPU data    |
+|  GDT/IDT/TSS | APIC + APIC timer | ACPI/MADT | SYSCALL MSRs | Security   |
++---------------------------- Hardware (Limine boot) ----------------------+
+|  CPU(s) | RAM | LAPIC/IOAPIC | PCI/USB/I2C/SPI | NIC | Display/FB | KBD  |
++--------------------------------------------------------------------------+
+</code></pre>
 
-    <!-- 7. API Reference -->
-    <h2 id="api">7. System Call Reference</h2>
-    <p>The primary gateway for Ring 3 modules to interact with the system.</p>
-    <table>
-        <thead>
-            <tr><th>NR</th><th>Name</th><th>Usage</th></tr>
-        </thead>
-        <tbody>
-            <tr><td>1</td><td><code>SYS_EXIT</code></td><td>Cleanup and terminate task</td></tr>
-            <tr><td>20</td><td><code>SYS_WL_CREATE_SURFACE</code></td><td>Create window (returns ID)</td></tr>
-            <tr><td>21</td><td><code>SYS_WL_MAP_BUFFER</code></td><td>Get pixel access to window</td></tr>
-            <tr><td>30</td><td><code>SYS_IOPORT_READ</code></td><td>Read from I/O port (width: 1, 2, 4)</td></tr>
-            <tr><td>33</td><td><code>SYS_MAP_MMIO</code></td><td>Map physical hardware registers</td></tr>
-        </tbody>
-    </table>
+<!-- 3 -->
+<h2 id="proscons">3. Pros &amp; Cons</h2>
+<div class="grid2">
+    <div class="pros">
+        <h3 style="margin-top:0; color:#7ee2a8;">Pros</h3>
+        <ul class="dense">
+            <li>Modern x86_64 base, Limine v3, NX/SMEP/SMAP/UMIP/WP enabled by default.</li>
+            <li>Fast SYSCALL/SYSRET path (no <code>int 0x80</code> overhead).</li>
+            <li>Per-CPU data via GS_BASE — Linux-grade ergonomics.</li>
+            <li>Slab + cell + heap allocators give tunable allocation classes.</li>
+            <li>CFS-lite + sleep/wake/mutex primitives in-tree.</li>
+            <li>YamGraph offers a cleaner permission model than UID/GID.</li>
+            <li>SMAP-aware syscall handlers (auto <code>STAC</code>/<code>CLAC</code>).</li>
+            <li>Hybrid model: monolithic speed + microkernel-style IPC primitives.</li>
+            <li>Boot/dev cycle is fast (single Makefile; auto-discovers <code>.c</code>/<code>.asm</code>).</li>
+            <li>YamBoot menu (Normal / Safe Mode / Reboot) for triage boots.</li>
+        </ul>
+    </div>
+    <div class="cons">
+        <h3 style="margin-top:0; color:#ff9a9a;">Cons</h3>
+        <ul class="dense">
+            <li>SMP AP execution not yet wired (only BSP runs code).</li>
+            <li>No ELF loader for user apps yet (raw blob copy demo only).</li>
+            <li>VFS/Net/IPC are scaffolds — no real disk/FS or live TCP yet.</li>
+            <li>No demand paging, no copy-on-write, no fork/exec.</li>
+            <li>No POSIX/C library; user-side ABI minimal.</li>
+            <li>Driver model is in-kernel only; no Ring-3 driver isolation yet.</li>
+            <li>Limited hardware coverage (PS/2 KBD, e1000 stub, framebuffer).</li>
+            <li>Scheduler runs single-CPU only until SMP lands.</li>
+            <li>No formal security audit / no signed boot chain.</li>
+        </ul>
+    </div>
+</div>
 
-    <footer style="margin-top: 100px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--muted);">
-        <p>&copy; 2026 YamOS Open Source Project. Documentation generated via Source Scan.</p>
-    </footer>
+<!-- 4 -->
+<h2 id="kernel-arch">4. Kernel Architecture (Ring 0)</h2>
 
+<h3>4.1 Kernel Layout</h3>
+<ul class="dense">
+    <li><strong>Higher-half kernel</strong> at <code>0xffffffff80000000</code> (linker.ld).</li>
+    <li><strong>HHDM</strong> at <code>0xffff800000000000</code> from Limine.</li>
+    <li><strong>Per-CPU</strong> structure addressed via <code>GS_BASE</code> (kernel) / <code>KERNEL_GS_BASE</code> (user).</li>
+    <li><strong>MMIO virtual window</strong> at <code>0xFFFFD00000000000</code> (with fallback windows) used by APIC/IOAPIC mapping.</li>
+</ul>
+
+<h3>4.2 CPU Init Path (in order)</h3>
+<ol>
+    <li><code>gdt_init</code> — 5 segments (null, kernel CS/SS, user CS/SS) + TSS for ring transitions.</li>
+    <li><code>idt_init</code> — 32 exception vectors + 16 IRQ vectors (48 total).</li>
+    <li><code>cpuid_init</code> — vendor/family/model/feature scan.</li>
+    <li><code>security_init</code> — enables NX (EFER.NXE), WP (CR0.WP), SMEP/SMAP/UMIP/FSGSBASE (CR4).</li>
+    <li><code>vmm_init</code> + <code>pmm_init</code> + <code>heap_init</code> — memory online.</li>
+    <li><code>acpi_init</code> → <code>apic_init</code> → <code>ioapic_init</code> → <code>percpu_init</code> → <code>smp_init</code>.</li>
+    <li><code>syscall_init</code> — STAR / LSTAR / SFMASK / EFER.SCE configured.</li>
+    <li><code>yamgraph_init</code> — kernel subsystems registered as graph nodes.</li>
+    <li><code>sched_init</code> + APIC timer + <code>shell_start</code>.</li>
+</ol>
+
+<h3>4.3 Privilege Model</h3>
+<ul class="dense">
+    <li>Ring 0: kernel.</li>
+    <li>Ring 3: user tasks (loaded as raw blobs today; ELF loader planned).</li>
+    <li>Transition: <code>SYSCALL</code> in (saves user RSP, swaps GS), <code>SYSRET</code> out.</li>
+    <li>IRQ-from-Ring 3: <code>isr_common</code> auto-<code>swapgs</code> on entry/exit when CS RPL=3.</li>
+    <li>SMAP: <code>sys_write</code> uses <code>STAC</code>/<code>CLAC</code> around user buffer reads.</li>
+</ul>
+
+<!-- 5 -->
+<h2 id="os-arch">5. OS Architecture (Ring 3 / Userland)</h2>
+<p>YamOS-on-YamKernel is intentionally minimal today — the goal is correctness of the kernel/user boundary first, then layering services on top.</p>
+
+<h3>5.1 Userland Today</h3>
+<ul class="dense">
+    <li>Position-independent demo program (<code>src/sched/user_demo.asm</code>) running at virtual <code>0x400000</code>.</li>
+    <li>User stack at <code>0x800000</code>, single 4 KiB page.</li>
+    <li>Issues <code>SYS_WRITE</code> + <code>SYS_SLEEPMS(250)</code> in a loop.</li>
+    <li>Toggle via <code>#define YAM_DEMO_TASKS 1</code> in <code>kernel/main.c</code>.</li>
+</ul>
+
+<h3>5.2 Userland Targets (planned)</h3>
+<ul class="dense">
+    <li>ELF64 static loader (<code>fs/</code> + <code>sched/user.c</code> hooks).</li>
+    <li>Minimal libc (string, IO via syscalls).</li>
+    <li>Wayland-style compositor that owns the framebuffer; apps get shared-memory surfaces.</li>
+    <li>Ring-3 driver framework backed by capability tokens.</li>
+</ul>
+
+<!-- 6 -->
+<h2 id="memory">6. Memory Subsystem</h2>
+
+<h3>6.1 PMM — Cell Allocator</h3>
+<p>Physical pages are tracked by a fractal quad-tree:</p>
+<ul class="dense">
+    <li>Root cell = entire physical RAM.</li>
+    <li>Split: each cell divides into 4 children when partially allocated.</li>
+    <li>Merge: when all 4 siblings are free, they coalesce.</li>
+    <li>Each cell can carry an owner reference (a YamGraph node id).</li>
+</ul>
+
+<h3>6.2 VMM</h3>
+<ul class="dense">
+    <li>4-level paging (PML4 → PDPT → PD → PT).</li>
+    <li>Walker is huge-page aware: refuses to descend into existing 2 MB / 1 GB entries (e.g. Limine HHDM).</li>
+    <li><code>vmm_map_page</code> issues <code>invlpg</code> after writing the leaf.</li>
+    <li>MMIO uses a dedicated upper window so it never collides with HHDM huge pages.</li>
+</ul>
+
+<h3>6.3 Heap</h3>
+<p>Bump-style heap initialized at <code>0xffff800000XXXXXX</code> (HHDM-mapped). Used for early kernel allocations and as a backing store for slab metadata.</p>
+
+<h3>6.4 Slab Allocator</h3>
+<ul class="dense">
+    <li><code>kmem_cache_create(name, obj_size, align)</code></li>
+    <li><code>kmem_cache_alloc(cache)</code> — O(1) freelist pop.</li>
+    <li><code>kmem_cache_free(cache, obj)</code> — O(1) push.</li>
+    <li>Each slab = 1 PMM page; objects threaded via their first 8 bytes.</li>
+    <li>Currently used for <code>task_t</code> allocations.</li>
+</ul>
+
+<!-- 7 -->
+<h2 id="scheduler">7. Scheduler &amp; Concurrency</h2>
+<h3>7.1 CFS-lite</h3>
+<ul class="dense">
+    <li>Single ready list; pick task with the lowest <code>vruntime</code>.</li>
+    <li><code>vruntime += 1024 / weight</code> per timer tick.</li>
+    <li>Weights by priority: <code>8 / 4 / 2 / 1</code>.</li>
+    <li>New tasks inherit the minimum vruntime to avoid monopolizing.</li>
+    <li>Per-task kernel stack: <code>switch_to()</code> updates TSS.rsp0 and per-CPU <code>kernel_rsp</code>.</li>
+</ul>
+
+<h3>7.2 Sleep / Wake</h3>
+<ul class="dense">
+    <li><code>task_sleep_ms(ms)</code> — block on the sleeping list.</li>
+    <li><code>sched_tick</code> wakes any sleepers whose <code>wakeup_tick &lt;= now</code>.</li>
+    <li>Wait queue: <code>wq_sleep</code> / <code>wq_wake_one</code> / <code>wq_wake_all</code>.</li>
+    <li><code>mutex_t</code> = atomic xchg fast path + wait queue slow path.</li>
+    <li>IRQ-safe spinlock with <code>pushfq/cli/popfq</code> pattern.</li>
+</ul>
+
+<h3>7.3 Preemption</h3>
+<p>APIC timer at 100 Hz drives <code>sched_tick → sched_yield</code>. In stability mode (<code>YAM_PREEMPTIVE = 0</code>) preemption is disabled and the shell runs cooperatively. Flip the macro in <code>kernel/main.c</code> to enable it.</p>
+
+<!-- 8 -->
+<h2 id="interrupts">8. Interrupts &amp; APIC</h2>
+<ul class="dense">
+    <li>Legacy 8259 PIC fully masked once APIC is online.</li>
+    <li>LAPIC + IOAPIC MMIO mapped through verified mapper (tries multiple virtual windows, validates <code>vmm_virt_to_phys</code> before use, falls back to HHDM if already valid, returns NULL on total failure).</li>
+    <li>APIC timer calibrated via PIT channel 2 polling — IRQ-free.</li>
+    <li>EOI policy: APIC mode auto-EOIs all vectors except <code>0x20</code> (timer self-EOIs in handler).</li>
+    <li>From Ring 3, ISR stub <code>isr_common</code> performs <code>swapgs</code> on entry/exit (RPL check on saved CS).</li>
+</ul>
+
+<!-- 9 -->
+<h2 id="syscalls">9. Syscall ABI</h2>
+<p>SYSCALL convention: <code>rax</code>=number, args in <code>rdi</code>, <code>rsi</code>, <code>rdx</code>, <code>r10</code>, <code>r8</code>, <code>r9</code>. Return in <code>rax</code> (signed).</p>
+<table>
+<thead><tr><th>NR</th><th>Name</th><th>Args</th><th>Behavior</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>SYS_WRITE</code></td><td><code>fd, ubuf, len</code></td><td>Writes to serial; SMAP-aware.</td></tr>
+<tr><td>2</td><td><code>SYS_EXIT</code></td><td><code>code</code></td><td>Marks task <code>TASK_DEAD</code>, yields, halts.</td></tr>
+<tr><td>3</td><td><code>SYS_GETPID</code></td><td>—</td><td>Returns current task id.</td></tr>
+<tr><td>4</td><td><code>SYS_YIELD</code></td><td>—</td><td>Voluntary reschedule.</td></tr>
+<tr><td>5</td><td><code>SYS_SLEEPMS</code></td><td><code>ms</code></td><td>Block current task on sleeping list.</td></tr>
+</tbody>
+</table>
+<p class="muted">Defined in <code>src/cpu/syscall.h</code>; max ID reserved = 16.</p>
+
+<!-- 10 -->
+<h2 id="yamgraph">10. YamGraph Resource Model</h2>
+<ul class="dense">
+    <li><strong>Nodes</strong>: tasks, memory regions, devices, files, channels, IRQs, namespaces.</li>
+    <li><strong>Edges</strong>: <code>OWNS</code>, <code>CAPABILITY</code>, <code>CHANNEL</code>, <code>MAPS</code>, <code>DEPENDS</code>.</li>
+    <li><strong>Capabilities</strong>: unforgeable tokens carried by edges.</li>
+    <li><strong>Channels</strong>: typed bidirectional graph edges for IPC.</li>
+    <li>The shell exposes the graph via <code>graph</code> command.</li>
+</ul>
+<p>Compared to UID/GID, this lets you revoke access cascade-style by removing edges and lets the scheduler/IPC reason about resource topology directly.</p>
+
+<!-- 11 -->
+<h2 id="drivers">11. Driver Model</h2>
+<ul class="dense">
+    <li>Today: in-kernel drivers (Ring 0). Files under <code>src/drivers/</code>.</li>
+    <li><strong>Working</strong>: serial COM1, framebuffer, PIT, RTC, PS/2 keyboard.</li>
+    <li><strong>Scaffold</strong>: PCI enumeration, USB stack, I2C, SPI, e1000 NIC, iwlwifi, Bluetooth HCI, mouse.</li>
+    <li><strong>Future</strong>: Ring-3 driver runtime — drivers loaded as ELFs, talk to hardware via privileged syscalls (<code>SYS_PCI_*</code>, <code>SYS_MAP_MMIO</code>) gated by capabilities.</li>
+</ul>
+
+<!-- 12 -->
+<h2 id="boot">12. Boot Pipeline</h2>
+<pre><code>Limine (BIOS or UEFI) -> kernel_main()
+  Phase 1  serial_init  -> framebuffer init
+  Phase 2  YamBoot menu (Normal / Safe / Reboot)
+  Phase 3  GDT / IDT / CPUID / security_init
+  Phase 4  VMM / PMM / Heap
+  Phase 5  ACPI -> LAPIC -> IOAPIC -> percpu -> smp -> syscall_init
+  Phase 6  YamGraph init + register kernel subsystems
+  Phase 7  Self-tests (PMM + YamGraph)
+  Phase 8  Drivers (PCI/USB/I2C/SPI/VFS/IPC/NET/MOUSE) - skipped in Safe Mode
+  Phase 9  Scheduler init  (preemption optional)
+  -&gt; shell_start()  // runs as task #0</code></pre>
+
+<!-- 13 -->
+<h2 id="tree">13. Source Tree</h2>
+<pre><code>src/
+  boot/        yamboot.c/h          // pre-kernel boot menu
+  cpu/         gdt, idt, isr.asm    // CPU tables + interrupt stubs
+               cpuid, msr.h         // feature detection + MSR helpers
+               security.c           // NX/SMEP/SMAP/UMIP/WP
+               acpi, apic, percpu   // ACPI parser, LAPIC/IOAPIC, per-CPU
+               smp                  // CPU enumeration (AP boot pending)
+               syscall.c/.asm/.h    // SYSCALL/SYSRET path
+  mem/         pmm, vmm, heap, slab // memory subsystem
+  sched/       sched, wait          // CFS-lite + wait queues / mutex / sleep
+               context.asm          // kernel context switch
+               enter_user.asm       // iretq into Ring 3
+               user.c, user_demo.asm// Ring 3 demo loader + payload
+               demo.c               // optional kernel-thread demo
+  drivers/     serial, timer, video, input, bus, net, bluetooth
+  kernel/      main.c, panic.c, shell.c
+  nexus/       graph, capability, channel  (YamGraph)
+  net/         tcp, udp, icmp, ip, arp, dhcp, dns, net (scaffolds)
+  ipc/         channel-style IPC (scaffold)
+  fs/          vfs (scaffold)
+  lib/         kprintf, string, spinlock.h
+  include/nexus/types.h, panic.h
+</code></pre>
+
+<!-- 14 -->
+<h2 id="build">14. Build / Run</h2>
+<pre><code># first-time setup (Ubuntu/WSL)
+make setup
+
+# build kernel + ISO
+make iso
+
+# run in QEMU (BIOS)
+make run
+
+# run with UEFI (OVMF)
+make run-uefi
+
+# clean
+make clean</code></pre>
+<p>Outputs:</p>
+<ul class="dense">
+    <li><code>build/yamkernel.elf</code> — kernel binary.</li>
+    <li><code>build/yamkernel.iso</code> — bootable ISO (QEMU / VirtualBox / VMware / USB).</li>
+</ul>
+
+<h3>14.1 Toggles</h3>
+<table>
+<thead><tr><th>Macro (in <code>src/kernel/main.c</code>)</th><th>Default</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>YAM_DEMO_TASKS</code></td><td><code>0</code></td><td>Spawn kernel + Ring-3 demo tasks at boot.</td></tr>
+<tr><td><code>YAM_PREEMPTIVE</code></td><td><code>0</code></td><td>Enable APIC-timer preemption (else cooperative).</td></tr>
+</tbody>
+</table>
+
+<!-- 15 -->
+<h2 id="debug">15. Debug Playbook</h2>
+
+<h3>15.1 Panic Triage</h3>
+<table>
+<thead><tr><th>Vector</th><th>Hint</th></tr></thead>
+<tbody>
+<tr><td>#13 GP fault</td><td>Bad segment selector / non-canonical address / GDT misalignment for SYSRET.</td></tr>
+<tr><td>#14 Page fault</td><td>Read CR2 (faulting VA). Bit 0 of error: 0=not present, 1=protection. Bit 1: 0=read, 1=write. Bit 2: 0=kernel, 1=user.</td></tr>
+<tr><td>#6 Invalid opcode</td><td>Likely jumped into garbage stack. Inspect RIP + nearby code.</td></tr>
+<tr><td>#8 Double fault</td><td>Probably bad TSS.rsp0 or recursion in early IDT path.</td></tr>
+</tbody>
+</table>
+
+<h3>15.2 Common Causes by CR2 range</h3>
+<ul class="dense">
+    <li><code>0x000000…</code> (low): NULL deref in kernel.</li>
+    <li><code>0xffff800000000xxx</code>: HHDM region — likely raw access to phys not yet mapped.</li>
+    <li><code>0xffff8000fexxxxxx</code>: APIC/IOAPIC MMIO — verify the dedicated MMIO window mapped successfully.</li>
+    <li><code>0x400000–0x800000</code>: user-space demo region — check page flags or SMAP.</li>
+</ul>
+
+<h3>15.3 Useful Steps</h3>
+<ul class="dense">
+    <li>Always read serial output (<code>make run</code> mirrors to stdio).</li>
+    <li>Disable <code>YAM_DEMO_TASKS</code> + <code>YAM_PREEMPTIVE</code> first when bisecting boot regressions.</li>
+    <li>For map-failure suspects: log the return value of <code>vmm_map_page</code> and re-verify with <code>vmm_virt_to_phys</code>.</li>
+    <li>Reduce visual noise by booting Safe Mode — it skips PCI/USB/I2C/SPI/VFS/IPC/NET/MOUSE.</li>
+</ul>
+
+<!-- 16 -->
+<h2 id="compare">16. Marketplace Comparison</h2>
+<table>
+<thead><tr>
+<th>Aspect</th><th>YamKernel (today)</th><th>Linux</th><th>Windows NT</th><th>seL4</th><th>Redox</th><th>FreeBSD</th>
+</tr></thead>
+<tbody>
+<tr><td>Kernel style</td><td>Hybrid (mono-leaning)</td><td>Monolithic</td><td>Hybrid</td><td>Microkernel (formal)</td><td>Microkernel</td><td>Monolithic</td></tr>
+<tr><td>Language</td><td>C + ASM</td><td>C + ASM</td><td>C + C++</td><td>C (proven)</td><td>Rust</td><td>C</td></tr>
+<tr><td>Architecture</td><td>x86_64</td><td>~30 archs</td><td>x86_64 / ARM64</td><td>x86_64 / ARM</td><td>x86_64 / ARM</td><td>x86_64 / ARM</td></tr>
+<tr><td>Bootloader</td><td>Limine v3</td><td>GRUB / systemd-boot / EFI stub</td><td>Boot Manager</td><td>Custom / GRUB</td><td>Limine</td><td>FreeBSD loader</td></tr>
+<tr><td>Resource model</td><td><strong>YamGraph</strong> (capabilities + edges)</td><td>UID/GID + cgroups + LSM</td><td>SID + ACL + tokens</td><td>Capabilities (formal)</td><td>Capabilities (Rust)</td><td>UID/GID + jails</td></tr>
+<tr><td>Memory allocator</td><td>Cell + Slab + Heap</td><td>Buddy + Slub</td><td>Pool + low-fragmentation heap</td><td>Static-ish + caps</td><td>Buddy + Slab (Rust)</td><td>UMA + jemalloc</td></tr>
+<tr><td>Scheduler</td><td>CFS-lite (vruntime)</td><td>CFS / EEVDF</td><td>Multilevel feedback</td><td>Static / mixed-criticality</td><td>Round-robin</td><td>ULE</td></tr>
+<tr><td>Syscall path</td><td>SYSCALL/SYSRET</td><td>SYSCALL / SYSENTER</td><td>SYSCALL</td><td>SYSCALL via IPC</td><td>SYSCALL</td><td>SYSCALL</td></tr>
+<tr><td>SMP</td><td>BSP only (planned)</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+<tr><td>Drivers in Ring 3</td><td>Planned</td><td>No (mostly Ring 0)</td><td>Mixed</td><td>Yes</td><td>Yes</td><td>No (mostly Ring 0)</td></tr>
+<tr><td>POSIX</td><td>Minimal (planned)</td><td>Full</td><td>Subsystem</td><td>Library OS</td><td>Partial</td><td>Full</td></tr>
+<tr><td>Formal verification</td><td>No</td><td>No</td><td>No</td><td><strong>Yes (kernel proof)</strong></td><td>No</td><td>No</td></tr>
+<tr><td>Hardware support</td><td>Tiny set</td><td>Massive</td><td>Massive</td><td>Embedded-focused</td><td>Modest</td><td>Wide (server/desktop)</td></tr>
+<tr><td>Ecosystem</td><td>None yet</td><td>Huge</td><td>Huge</td><td>Niche</td><td>Growing</td><td>Mature</td></tr>
+</tbody>
+</table>
+<p class="muted">YamKernel’s differentiator is the YamGraph resource model + a clean modern x86_64 kernel base; its weakness is breadth (drivers, FS, network) compared to mainstream OSes.</p>
+
+<!-- 17 -->
+<h2 id="roadmap">17. Roadmap</h2>
+<div class="grid3">
+    <div class="card">
+        <h3>Tier 1 — Stabilize</h3>
+        <ul class="dense">
+            <li>SMP AP startup (INIT-SIPI-SIPI).</li>
+            <li>ELF64 user loader.</li>
+            <li>Per-CPU run queues.</li>
+            <li>Better panic dumps (stack trace, symbol table).</li>
+        </ul>
+    </div>
+    <div class="card">
+        <h3>Tier 2 — Beat-Linux Targets</h3>
+        <ul class="dense">
+            <li>Demand paging + CoW.</li>
+            <li>Real VFS (FAT32 + ext2).</li>
+            <li>TCP/IP fast path.</li>
+            <li>Capability-based fork/exec.</li>
+            <li>Compositor in Ring 3 with shared-memory surfaces.</li>
+        </ul>
+    </div>
+    <div class="card">
+        <h3>Tier 3 — Frontier</h3>
+        <ul class="dense">
+            <li>RCU.</li>
+            <li>eBPF-style in-kernel programs.</li>
+            <li>Formal verification on critical paths.</li>
+            <li>NUMA-aware slab.</li>
+            <li>Signed boot chain + measured boot.</li>
+        </ul>
+    </div>
+</div>
+
+<footer style="margin-top: 56px; border-top: 1px solid var(--border); padding-top: 16px; color: var(--muted);">
+    <p>YamKernel developer reference. Reflects current source tree and toggles. Edit <code>src/kernel/main.c</code> macros to switch boot personality.</p>
+</footer>
 </body>
 </html>

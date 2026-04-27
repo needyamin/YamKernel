@@ -7,6 +7,7 @@
 #include "string.h"
 #include "../drivers/serial/serial.h"
 #include "../drivers/video/framebuffer.h"
+#include "kdebug.h"
 
 /* Variadic argument handling (GCC built-in) */
 typedef __builtin_va_list va_list;
@@ -150,6 +151,7 @@ void kprintf(const char *fmt, ...) {
 
     serial_write(buf);
     fb_write(buf, g_kprintf_color);
+    kdebug_push_raw(buf);
 }
 
 void kprintf_color(u32 color, const char *fmt, ...) {
@@ -161,6 +163,7 @@ void kprintf_color(u32 color, const char *fmt, ...) {
 
     serial_write(buf);
     fb_write(buf, color);
+    kdebug_push_raw(buf);
 }
 
 int ksnprintf(char *buf, usize size, const char *fmt, ...) {

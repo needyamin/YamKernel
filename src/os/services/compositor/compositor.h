@@ -25,6 +25,8 @@ typedef enum {
     WL_SURFACE_MINIMIZED,
 } wl_surface_state_t;
 
+#include "../../../lib/spinlock.h"
+
 /* A Wayland surface — represents a single client window */
 typedef struct wl_surface {
     u32                 id;
@@ -47,6 +49,7 @@ typedef struct wl_surface {
     /* Owner task ID */
     u64                 owner_task_id;
     
+    spinlock_t          lock;
     /* Event queue for routing input to client */
     struct {
         u32 head;
@@ -90,6 +93,7 @@ typedef struct wl_compositor {
     
     /* Power Menu */
     bool            show_power_menu;
+    bool            show_debug_overlay;
 } wl_compositor_t;
 
 /* Initialize the Wayland compositor */

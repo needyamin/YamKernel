@@ -8,6 +8,7 @@
 #include "vmm.h"
 #include "../lib/string.h"
 #include "../lib/kprintf.h"
+#include "../lib/spinlock.h"
 
 /* Heap block header */
 typedef struct heap_block {
@@ -26,6 +27,7 @@ typedef struct heap_block {
 static heap_block_t *heap_head = NULL;
 static u64 heap_base = 0;
 static u64 heap_size = 0;
+static spinlock_t heap_lock = SPINLOCK_INIT;
 
 /* Align up to HEAP_ALIGN */
 static inline usize align_up(usize val, usize align) {
@@ -59,10 +61,12 @@ void *kmalloc(usize size) {
     if (size == 0) return NULL;
     size = align_up(size, HEAP_ALIGN);
 
+    u64 f = spin_lock_irqsave(&heap_lock);
     heap_block_t *block = heap_head;
     while (block) {
         if (block->magic != HEAP_MAGIC) {
             kprintf_color(0xFFFF3333, "[HEAP] Corruption detected!\n");
+            spin_unlock_irqrestore(&heap_lock, f);
             return NULL;
         }
 
@@ -82,13 +86,16 @@ void *kmalloc(usize size) {
             }
 
             block->free = false;
-            return (void *)((u8 *)block + sizeof(heap_block_t));
+            void *result = (void *)((u8 *)block + sizeof(heap_block_t));
+            spin_unlock_irqrestore(&heap_lock, f);
+            return result;
         }
 
         block = block->next;
     }
 
-    /* Out of heap space — could expand by allocating more pages */
+    /* Out of heap space */
+    spin_unlock_irqrestore(&heap_lock, f);
     kprintf_color(0xFFFF3333, "[HEAP] Out of memory (requested %lu bytes)\n", size);
     return NULL;
 }
@@ -103,9 +110,11 @@ void *kcalloc(usize count, usize size) {
 void kfree(void *ptr) {
     if (!ptr) return;
 
+    u64 f = spin_lock_irqsave(&heap_lock);
     heap_block_t *block = (heap_block_t *)((u8 *)ptr - sizeof(heap_block_t));
     if (block->magic != HEAP_MAGIC) {
         kprintf_color(0xFFFF3333, "[HEAP] kfree: invalid pointer or corruption!\n");
+        spin_unlock_irqrestore(&heap_lock, f);
         return;
     }
 
@@ -124,6 +133,7 @@ void kfree(void *ptr) {
         block->prev->next = block->next;
         if (block->next) block->next->prev = block->prev;
     }
+    spin_unlock_irqrestore(&heap_lock, f);
 }
 
 void *krealloc(void *ptr, usize new_size) {

@@ -60,6 +60,13 @@ static void pic_disable(void) {
     outb(0x21, 0xFF); outb(0xA1, 0xFF);
 }
 
+void apic_init_local(void) {
+    if (!g_lapic) return;
+    /* Enable LAPIC via MSR + spurious vector. */
+    wrmsr(MSR_APIC_BASE, rdmsr(MSR_APIC_BASE) | (1ULL << 11));
+    lapic_write(LAPIC_SVR, 0x100 | APIC_VEC_SPURIOUS);
+}
+
 void apic_init(u64 hhdm) {
     const acpi_info_t *a = acpi_get();
     if (!a->lapic_addr) { kprintf_color(0xFFFF3333, "[APIC] no LAPIC\n"); return; }
@@ -67,9 +74,7 @@ void apic_init(u64 hhdm) {
     g_lapic = mmio_map(a->lapic_addr, hhdm);
     if (!g_lapic) { kprintf_color(0xFFFF3333, "[APIC] LAPIC map failed\n"); return; }
 
-    /* Enable LAPIC via MSR + spurious vector, mask legacy 8259 PIC. */
-    wrmsr(MSR_APIC_BASE, rdmsr(MSR_APIC_BASE) | (1ULL << 11));
-    lapic_write(LAPIC_SVR, 0x100 | APIC_VEC_SPURIOUS);
+    apic_init_local();
     pic_disable();
 
     kprintf_color(0xFF00FF88, "[APIC] LAPIC @ %p  id=%u\n",

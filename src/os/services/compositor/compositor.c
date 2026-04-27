@@ -9,6 +9,7 @@
 #include "sched/wait.h"
 #include "lib/string.h"
 #include "lib/kprintf.h"
+#include "lib/kdebug.h"
 #include "mem/heap.h"
 #include "drivers/timer/rtc.h"
 #include "wl_draw.h"
@@ -28,6 +29,9 @@ extern void wl_calc_task(void *);
 
 static wl_compositor_t g_compositor;
 static u32 g_next_surface_id = 1;
+
+static void composite_debug_overlay(void);
+static void composite_heartbeat(void);
 
 void wl_compositor_init(void) {
     memset(&g_compositor, 0, sizeof(wl_compositor_t));
@@ -99,7 +103,8 @@ wl_surface_t *wl_surface_create(const char *title, i32 x, i32 y, u32 w, u32 h, u
     /* Zero the new buffer to prevent ghosting from previous apps */
     memset(s->buffer->pixels, 0, w * h * 4);
     
-    /* Clear event queue */
+    /* Clear event queue and init lock */
+    spin_init(&s->lock);
     s->event_queue.head = 0;
     s->event_queue.tail = 0;
     memset(s->event_queue.events, 0, sizeof(s->event_queue.events));
@@ -182,17 +187,25 @@ void wl_surface_commit(wl_surface_t *surface) {
 
 void wl_surface_push_event(wl_surface_t *surface, input_event_t ev) {
     if (!surface || surface->state != WL_SURFACE_ACTIVE) return;
+    u64 f = spin_lock_irqsave(&surface->lock);
     u32 next_head = (surface->event_queue.head + 1) % 32;
     if (next_head != surface->event_queue.tail) {
         surface->event_queue.events[surface->event_queue.head] = ev;
         surface->event_queue.head = next_head;
     }
+    spin_unlock_irqrestore(&surface->lock, f);
 }
 
 bool wl_surface_pop_event(wl_surface_t *surface, input_event_t *ev) {
-    if (!surface || surface->state != WL_SURFACE_ACTIVE || surface->event_queue.head == surface->event_queue.tail) return false;
+    if (!surface || surface->state != WL_SURFACE_ACTIVE) return false;
+    u64 f = spin_lock_irqsave(&surface->lock);
+    if (surface->event_queue.head == surface->event_queue.tail) {
+        spin_unlock_irqrestore(&surface->lock, f);
+        return false;
+    }
     *ev = surface->event_queue.events[surface->event_queue.tail];
     surface->event_queue.tail = (surface->event_queue.tail + 1) % 32;
+    spin_unlock_irqrestore(&surface->lock, f);
     return true;
 }
 
@@ -276,6 +289,8 @@ static void composite_surface(wl_surface_t *s) {
         }
     }
 }
+
+/* (Unused composite_desktop removed) */
 
 static void composite_cursor(void) {
     if (!g_compositor.cursor_visible) return;
@@ -560,6 +575,84 @@ static void composite_taskbar(void) {
     wl_draw_text(&ds, clock_x + 15, clock_y + 28, date_str, 0xFF6272A4, 0);
 }
 
+static void composite_debug_overlay(void) {
+    if (!g_compositor.show_debug_overlay) return;
+
+    u32 dw = g_compositor.scanout->width;
+    u32 dh = g_compositor.scanout->height;
+    wl_surface_t ds = { .buffer = g_compositor.scanout, .width = dw, .height = dh };
+
+    /* Draw Semi-transparent background */
+    wl_draw_rect(&ds, 20, 20, 400, dh - 100, 0xCC11111B);
+    
+    wl_draw_text(&ds, 40, 40, "--- YamOS DIAGNOSTICS ---", 0xFF89B4FA, 0);
+    
+    /* Mouse Info Info */
+    wl_draw_text(&ds, 40, 70, "Input Status: OK (120Hz)", 0xFFF8F8F2, 0);
+
+    /* Recent Kernel Logs */
+    wl_draw_text(&ds, 40, 100, "RECENT KERNEL EVENTS:", 0xFFFAB387, 0);
+    char logs[512];
+    kdebug_get_recent(logs, 512);
+    
+    /* Display logs line by line */
+    int ly = 120;
+    char *lptr = logs;
+    for(int i=0; i<15; i++) {
+        char line[64] = {0};
+        int j = 0;
+        while(*lptr && *lptr != '\n' && j < 63) line[j++] = *lptr++;
+        if(*lptr == '\n') lptr++;
+        wl_draw_text(&ds, 50, ly, line, 0xFFA6ADC8, 0);
+        ly += 20;
+        if(!*lptr) break;
+    }
+
+    wl_draw_text(&ds, 40, ly + 20, "APP STATUS:", 0xFFF9E2AF, 0);
+    ly += 40;
+    for (int i = 0; i < WL_MAX_SURFACES; i++) {
+        if (g_compositor.surfaces[i].state == WL_SURFACE_ACTIVE) {
+            wl_draw_text(&ds, 50, ly, g_compositor.surfaces[i].title, 0xFF94E2D5, 0);
+            ly += 20;
+        }
+    }
+}
+
+/* ---- Asynchronous App Loader ---- */
+typedef struct {
+    void *data;
+    usize size;
+    char name[32];
+} app_load_request_t;
+
+static void app_loader_task(void *arg) {
+    app_load_request_t *req = (app_load_request_t *)arg;
+    elf_load(req->data, req->size, req->name);
+    kfree(req);
+}
+
+static void spawn_app_async(void *data, usize size, const char *name) {
+    app_load_request_t *req = (app_load_request_t *)kmalloc(sizeof(app_load_request_t));
+    if (!req) return;
+    req->data = data;
+    req->size = size;
+    for(int i=0; i<31 && name[i]; i++) req->name[i] = name[i];
+    req->name[31] = '\0';
+    sched_spawn("app-loader", app_loader_task, req, 1);
+}
+
+static void composite_heartbeat(void) {
+    /* Blinking dot in bottom-right to show compositor is alive */
+    rtc_time_t t;
+    rtc_read(&t);
+    if (t.second % 2 == 0) {
+        u32 *dst = g_compositor.scanout->pixels;
+        u32 dw = g_compositor.scanout->width;
+        u32 dh = g_compositor.scanout->height;
+        dst[(dh - 5) * dw + (dw - 5)] = 0xFF50FA7B; /* Green blink */
+    }
+}
+
 static const char sc_ascii[128] = {
     0,  27, '1','2','3','4','5','6','7','8','9','0','-','=','\b',
     '\t','q','w','e','r','t','y','u','i','o','p','[',']','\n',
@@ -576,7 +669,9 @@ static bool shift_held = false;
 
 static void process_input(void) {
     input_event_t ev;
-    while (evdev_pop_event(&ev)) {
+    int processed = 0;
+    while (evdev_pop_event(&ev) && processed < 32) {
+        processed++;
         if (ev.type == EV_REL) {
             /* Apply 2x sensitivity multiplier */
             i32 move = ev.value * 2;
@@ -605,6 +700,25 @@ static void process_input(void) {
                We distinguish: if cursor is over a surface AND it's a low scancode
                we check if it's a mouse event (from mouse driver) vs keyboard. 
                Simple heuristic: mouse driver uses code >= 0x110. */
+            
+            if (ev.type == EV_KEY && ev.value == KEY_PRESSED) {
+                /* Global Hotkeys */
+                if (ev.code == 0x3F) { /* F5: Refresh (Restart compositor loop) */
+                    fb_clear(0xFF1E1E2E);
+                    continue;
+                }
+                if (ev.code == 0x58 || ev.code == 0x3B) { /* F12 or F1: Debug Overlay */
+                    g_compositor.show_debug_overlay = !g_compositor.show_debug_overlay;
+                    kprintf("[DEBUG] Overlay toggled: %s\n", g_compositor.show_debug_overlay ? "ON" : "OFF");
+                    continue;
+                }
+                /* Emergency Bypass: CTRL(0x1D) + SHIFT(0x2A) + B(0x30) */
+                if (ev.code == 0x30 && shift_held) {
+                    kprintf("[WAYLAND] Emergency login bypass triggered\n");
+                    g_compositor.state = COMPOSITOR_STATE_DESKTOP;
+                    continue;
+                }
+            }
             
             bool is_mouse_btn = (ev.code >= 0x110);
             
@@ -682,25 +796,25 @@ static void process_input(void) {
                             if (g_compositor.cursor_y >= dock_y - mh - 10 && g_compositor.cursor_y < dock_y - 10) {
                                 i32 rel_y = g_compositor.cursor_y - (dock_y - mh - 10);
                                 if (rel_y >= 10 && rel_y < 40) {
-                                    kprintf("[WAYLAND] Launching Terminal...\n");
+                                    kprintf("[WAYLAND] Launching Terminal (async)...\n");
                                     if (g_term_module && g_term_module_size > 0) {
-                                        elf_load(g_term_module, g_term_module_size, "wl-term");
+                                        spawn_app_async(g_term_module, g_term_module_size, "wl-term");
                                     } else {
                                         kprintf("[WAYLAND] Fallback to Kernel Terminal\n");
                                         sched_spawn("wl-term-k", wl_term_task, NULL, 2);
                                     }
                                 } else if (rel_y >= 40 && rel_y < 65) {
-                                    kprintf("[WAYLAND] Launching Browser...\n");
+                                    kprintf("[WAYLAND] Launching Browser (async)...\n");
                                     if (g_browser_module && g_browser_module_size > 0) {
-                                        elf_load(g_browser_module, g_browser_module_size, "wl-browser");
+                                        spawn_app_async(g_browser_module, g_browser_module_size, "wl-browser");
                                     } else {
                                         kprintf("[WAYLAND] Fallback to Kernel Browser\n");
                                         sched_spawn("wl-browser-k", wl_browser_task, NULL, 2);
                                     }
                                 } else if (rel_y >= 65 && rel_y < 90) {
-                                    kprintf("[WAYLAND] Launching Calculator...\n");
+                                    kprintf("[WAYLAND] Launching Calculator (async)...\n");
                                     if (g_calc_module && g_calc_module_size > 0) {
-                                        elf_load(g_calc_module, g_calc_module_size, "wl-calc");
+                                        spawn_app_async(g_calc_module, g_calc_module_size, "wl-calc");
                                     } else {
                                         kprintf("[WAYLAND] Fallback to Kernel Calculator\n");
                                         sched_spawn("wl-calc-k", wl_calc_task, NULL, 2);
@@ -753,10 +867,10 @@ static void process_input(void) {
                                 if (g_compositor.cursor_x >= s->x && g_compositor.cursor_x < s->x + (i32)s->width &&
                                     g_compositor.cursor_y >= s->y && g_compositor.cursor_y < s->y + (i32)s->height) {
                                     
-                                    if (ev.value == KEY_PRESSED && g_compositor.cursor_y < s->y + 24) {
+                                    if (ev.value == KEY_PRESSED && g_compositor.cursor_y < s->y + 28) {
                                         /* Clicked Titlebar area */
-                                        if (g_compositor.cursor_x > s->x + (i32)s->width - 30) {
-                                            /* Close button (wider hitbox) */
+                                        if (g_compositor.cursor_x > s->x + (i32)s->width - 32) {
+                                            /* Close button (32px hitbox) */
                                             wl_surface_destroy(s);
                                         } else {
                                             /* Start Dragging */
@@ -805,38 +919,30 @@ void wl_compositor_task(void *arg) {
     while (g_compositor.running) {
         process_input();
 
-        /* Background fill */
+        /* Background fill: Centered wallpaper module with fast centering */
         if (g_wallpaper_module) {
             u32 *wp = (u32 *)g_wallpaper_module;
-            u32 wp_w = wp[0];
-            u32 wp_h = wp[1];
+            u32 wp_w = wp[0], wp_h = wp[1];
             u32 *wp_pixels = &wp[2];
             u32 *dst = g_compositor.scanout->pixels;
-            u32 dw = g_compositor.scanout->width;
-            u32 dh = g_compositor.scanout->height;
+            u32 dw = g_compositor.scanout->width, dh = g_compositor.scanout->height;
             
-            /* Center the wallpaper (assuming it's larger or same size as screen) */
             i32 off_x = (wp_w > dw) ? (wp_w - dw) / 2 : 0;
             i32 off_y = (wp_h > dh) ? (wp_h - dh) / 2 : 0;
             
             for (u32 y = 0; y < dh; y++) {
-                u32 src_y = off_y + y;
                 u32 *dst_row = dst + (y * dw);
+                u32 src_y = off_y + y;
                 if (src_y < wp_h) {
                     u32 *src_row = wp_pixels + (src_y * wp_w);
                     u32 copy_w = (dw < wp_w - off_x) ? dw : (wp_w - off_x);
                     memcpy(dst_row, src_row + off_x, copy_w * 4);
-                    
-                    /* Fill any remaining width with background color */
-                    if (copy_w < dw) {
-                        for (u32 x = copy_w; x < dw; x++) dst_row[x] = 0xFF1E1E2E;
-                    }
                 } else {
-                    for (u32 x = 0; x < dw; x++) dst_row[x] = 0xFF1E1E2E;
+                    for (u32 x = 0; x < dw; x++) dst_row[x] = 0xFF11111B;
                 }
             }
         } else {
-            u32 bg_color = 0xFF1E1E2E;
+            u32 bg_color = 0xFF11111B;
             for(u32 i = 0; i < g_compositor.scanout->size/4; i++){
                 g_compositor.scanout->pixels[i] = bg_color;
             }
@@ -864,7 +970,13 @@ void wl_compositor_task(void *arg) {
             composite_taskbar();
         }
 
-        /* 4. Draw cursor */
+        /* 4. Draw Debug Overlay (Always accessible) */
+        composite_debug_overlay();
+        
+        /* 5. Draw Heartbeat */
+        composite_heartbeat();
+
+        /* 6. Draw cursor */
         composite_cursor();
 
         /* 5. Page flip */

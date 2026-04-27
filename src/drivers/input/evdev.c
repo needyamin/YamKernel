@@ -19,13 +19,18 @@ void evdev_init(void) {
 }
 
 void evdev_push_event(u16 type, u16 code, i32 value) {
+    u64 flags = spin_lock_irqsave(&g_lock);
     u32 next = (g_head + 1) % EVDEV_RING_SIZE;
-    if (next == g_tail) return;  /* Ring full — drop oldest */
+    if (next == g_tail) {
+        spin_unlock_irqrestore(&g_lock, flags);
+        return;  /* Ring full — drop oldest */
+    }
 
     g_ring[g_head].type  = type;
     g_ring[g_head].code  = code;
     g_ring[g_head].value = value;
     g_head = next;
+    spin_unlock_irqrestore(&g_lock, flags);
 }
 
 bool evdev_pop_event(input_event_t *out) {

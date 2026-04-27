@@ -67,6 +67,12 @@ void kdebug_log(int level, const char *tag, const char *fmt, ...)
 /* Hex dump: prints `len` bytes at `addr` in classic hex-dump format */
 void kdebug_hexdump(const char *tag, const void *addr, u32 len);
 
+/* Retrieve recent log history for GUI overlays */
+void kdebug_get_recent(char *out, u32 max_len);
+
+/* Push a raw string to the debug buffer */
+void kdebug_push_raw(const char *s);
+
 /* Assert macro — use KASSERT from <nexus/panic.h> */
 
 #endif /* _KDEBUG_H */

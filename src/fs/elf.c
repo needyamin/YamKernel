@@ -82,8 +82,8 @@ bool elf_load(const void *file_data, usize file_size, const char *name) {
         if (phdr->p_type != PT_LOAD) continue;
         if (phdr->p_memsz == 0) continue;
 
-        kprintf_color(0xFF88DDFF, "[ELF]   LOAD vaddr=0x%lx filesz=%lu memsz=%lu flags=%u\n",
-                      phdr->p_vaddr, phdr->p_filesz, phdr->p_memsz, phdr->p_flags);
+        /* kprintf_color(0xFF88DDFF, "[ELF]   LOAD vaddr=0x%lx filesz=%lu memsz=%lu flags=%u\n",
+                      phdr->p_vaddr, phdr->p_filesz, phdr->p_memsz, phdr->p_flags); */
 
         /* Calculate VMM flags */
         u64 pflags = VMM_FLAG_PRESENT | VMM_FLAG_USER;

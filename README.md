@@ -8,26 +8,29 @@ YamOS is a modern, self-contained operating system for x86_64 powered by the **Y
 
 | Subsystem | YamKernel Approach |
 |-----------|--------------------|
-| Boot | **YamBoot** — custom pre-kernel menu (Normal / Safe Mode / Reboot) with 5-second headless timeout |
-| Resource Model | **YamGraph** — live directed graph of all resources |
-| Permissions | **Capability tokens** flowing through graph edges |
-| CPU Topology | **Full Symmetric Multiprocessing (SMP)** — all logical cores booted and managed via LAPIC |
-| Privilege | **Ring 0 / Ring 3 split** with SYSCALL/SYSRET fast path, SMAP/SMEP/UMIP/NX |
-| Scheduling | **CFS-lite** — vruntime-based fair scheduler, per-task kernel stacks, APIC-timer preemption |
-| Context Switch | Seamless general-purpose & **FPU/SIMD (`XSAVE`/`FXSAVE`/`AVX`)** register snapshotting |
-| Sync | **Spinlocks**, **blocking mutexes**, **wait queues**, `task_sleep_ms()` |
-| Memory | **Cell Allocator** (PMM, fractal quad-tree, strict power-of-4 splits) + **Slab allocator** (`kmem_cache`) + heap |
-| Virtual Memory | 4-level paging with **huge-page-aware** PT walker |
-| Per-CPU | **GS_BASE-backed `percpu_t`** arrays (Linux-style) with kernel/user GS swap on IRQ + SYSCALL |
-| ACPI / IRQ | **ACPI MADT** parsing, **LAPIC** + **IO-APIC**, APIC timer at 100 Hz |
-| Video | **Software Framebuffer** with build-time asset downscaling (`img2raw`) and hardware-halt splash animation |
-| Display Server | **Wayland-style Compositor** — login screen, glassmorphic UI, damage tracking, lock-free Evdev input ring |
-| GUI Apps | **Terminal**, **Calculator**, and **Web Browser** running as fully preempted isolated tasks |
-| Executables | **ELF64 Loader** — dynamic Ring 3 address space creation, PT_LOAD mapping, privilege dropping |
-| IPC | **Channels** — typed bidirectional graph edges |
-| Terminal | **macOS-Style Bash Shell** — full History Ring and extended scancode navigation |
-| Networking | **Multi-Layer Data Link** — e1000 Gigabit, Intel Wireless (wlan0), USB Bluetooth (hci0) (Scaffolding) |
-| Network Protocols | **Full Stack Scaffolding** — TCP, UDP, ICMP, ARP, DHCP, DNS skeletons active |
+| Subsystem | YamKernel Approach | Status |
+|-----------|--------------------|--------|
+| Boot | **YamBoot** — custom pre-kernel menu (Normal / Safe Mode / Reboot) with 5-second headless timeout | Stable |
+| Resource Model | **YamGraph** — live directed graph of all resources | Stable |
+| Permissions | **Capability tokens** flowing through graph edges | Stable |
+| CPU Topology | **SMP enumeration** via LAPIC/MADT (BSP runs; AP boot trampoline pending) | Partial |
+| Privilege | **Ring 0 / Ring 3 split** with SYSCALL/SYSRET fast path, SMAP/SMEP/UMIP/NX | Stable |
+| Scheduling | **CFS-lite** — vruntime-based fair scheduler, per-task kernel stacks, APIC-timer preemption | Stable (toggle) |
+| Context Switch | Seamless general-purpose & **FPU/SIMD (`XSAVE`/`FXSAVE`/`AVX`)** register snapshotting | Stable |
+| Sync | **Spinlocks**, **blocking mutexes**, **wait queues**, `task_sleep_ms()` | Stable |
+| Memory | **Cell Allocator** (PMM, fractal quad-tree, strict power-of-4 splits) + **Slab allocator** (`kmem_cache`) + heap | Stable |
+| Virtual Memory | 4-level paging with **huge-page-aware** PT walker, `invlpg` on map | Stable |
+| Per-CPU | **GS_BASE-backed `percpu_t`** arrays (Linux-style) with kernel/user GS swap on IRQ + SYSCALL | Stable |
+| ACPI / IRQ | **ACPI MADT** parsing, **LAPIC** + **IO-APIC**, APIC timer at 100 Hz | Stable |
+| Video | **Software Framebuffer** with build-time asset downscaling (`img2raw`) and hardware-halt splash animation | Stable |
+| Display Server | **Wayland-style Compositor** — login screen, glassmorphic UI, damage tracking, lock-free Evdev input ring | Scaffold |
+| GUI Apps | **Terminal**, **Calculator**, and **Web Browser** isolated tasks | Scaffold |
+| Executables | **ELF64 Loader** — dynamic Ring 3 address space, PT_LOAD mapping, privilege drop | Scaffold |
+| IPC | **Channels** — typed bidirectional graph edges | In-tree |
+| Terminal | **Bash-style Shell** — history ring + extended scancode navigation | Stable |
+| Networking | e1000, iwlwifi (wlan0), USB Bluetooth (hci0) | Scaffold |
+| Network Protocols | TCP / UDP / ICMP / ARP / DHCP / DNS skeletons | Scaffold |
+| Syscalls | `SYS_WRITE / EXIT / GETPID / YIELD / SLEEPMS` | Stable |
 
 ## Building
 
@@ -42,13 +45,22 @@ make setup    # Installs: nasm, gcc, xorriso, qemu, limine
 ```bash
 make          # Build kernel ELF
 make iso      # Build bootable ISO
-make run      # Launch in QEMU
+make run      # Launch in QEMU (BIOS)
+make run-uefi # Launch in QEMU with OVMF
+make clean    # Remove build artifacts
 ```
 
 ### Output
 
 - `build/yamkernel.elf` — YamKernel binary
 - `build/yamkernel.iso` — Bootable YamOS ISO (VMware, VirtualBox, bare metal)
+
+### Build Toggles (in `src/kernel/main.c`)
+
+| Macro | Default | Effect |
+|-------|---------|--------|
+| `YAM_DEMO_TASKS` | `0` | Spawn kernel + Ring-3 demo tasks at boot |
+| `YAM_PREEMPTIVE` | `0` | Enable APIC-timer preemption (else cooperative shell) |
 
 ## Project Structure
 
@@ -272,7 +284,43 @@ Physical memory uses YamKernel's novel fractal quad-tree algorithm:
 - **Efficiency**: The animation loop uses the `hlt` instruction to sleep the CPU until the next PIT interrupt, achieving nearly 0% CPU usage during the transition to the GUI.
 
 
-## Build Command 
+## Pros & Cons
+
+**Pros**
+- Modern x86_64 base, Limine v3, NX/SMEP/SMAP/UMIP/WP enabled by default.
+- Fast SYSCALL/SYSRET path (no `int 0x80` overhead).
+- Per-CPU data via `GS_BASE` with proper `swapgs` on ring transitions.
+- Slab + cell + heap allocators give tunable allocation classes.
+- CFS-lite scheduler with sleep/wake/mutex/wait-queue primitives.
+- YamGraph capability-edge model — cleaner than UID/GID for revocation.
+- SMAP-aware syscall handlers (auto `STAC`/`CLAC`).
+- Single Makefile auto-discovers `.c`/`.asm`; YamBoot menu enables triage boots.
+
+**Cons**
+- SMP AP execution not yet wired (only BSP runs code).
+- ELF user loader, demand paging, CoW, fork/exec all pending.
+- VFS / network / IPC are scaffolds — no live disk FS or TCP traffic yet.
+- Drivers run in Ring 0 today (no Ring-3 driver isolation yet).
+- Limited hardware coverage (PS/2 KBD, framebuffer, e1000 stub).
+- No POSIX/libc layer; Ring-3 ABI minimal.
+
+## Comparison
+
+| Aspect | YamKernel | Linux | Windows NT | seL4 | Redox |
+|--------|-----------|-------|------------|------|-------|
+| Style | Hybrid (mono-leaning) | Monolithic | Hybrid | Microkernel (formal) | Microkernel |
+| Language | C + ASM | C + ASM | C + C++ | C (proven) | Rust |
+| Resource model | YamGraph (caps + edges) | UID/GID + cgroups | SID + ACL | Capabilities | Capabilities |
+| Memory | Cell + Slab + Heap | Buddy + Slub | Pool + LFH | Static + caps | Buddy + Slab |
+| Scheduler | CFS-lite | CFS / EEVDF | MLF | Mixed-criticality | Round-robin |
+| SMP | BSP only (planned) | Yes | Yes | Yes | Yes |
+| Drivers in Ring 3 | Planned | No | Mixed | Yes | Yes |
+| Formal verification | No | No | No | **Yes** | No |
+
+See `developer.html` for the deeper architecture/debug reference.
+
+## Build Command (Windows + WSL)
+
 ```bash
 wsl -d Ubuntu -- bash -c "cd /mnt/c/laragon/www/kernel && make clean && make iso"
 ```

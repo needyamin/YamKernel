@@ -451,12 +451,14 @@ void kernel_main(void) {
         /* Spawn Wayland Compositor (highest priority) */
         sched_spawn("wayland", wl_compositor_task, NULL, 0);
 
-        /* Spawn OS Driver Services */
+        /* Spawn OS Driver Services (Disabled for stability during app launch tests) */
+        /*
         if (g_net_module)   elf_load(g_net_module, g_net_module_size, "os-net");
         if (g_video_module) elf_load(g_video_module, g_video_module_size, "os-video");
         if (g_audio_module) elf_load(g_audio_module, g_audio_module_size, "os-audio");
         if (g_img_module)   elf_load(g_img_module, g_img_module_size, "os-img");
         if (g_wifi_module)  elf_load(g_wifi_module, g_wifi_module_size, "os-wifi");
+        */
         
         /* Spawn Apps (only when clicked from GUI now) */
         /*

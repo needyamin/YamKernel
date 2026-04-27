@@ -17,6 +17,7 @@
 #include "pmm.h"
 #include "../lib/kprintf.h"
 #include "../lib/string.h"
+#include "../lib/spinlock.h"
 #include <limine.h>
 
 /* Cell pool */
@@ -25,6 +26,8 @@ static u16 cell_count = 0;
 static u64 total_mem = 0;
 static u64 free_mem = 0;
 static u64 hhdm_off = 0;
+static spinlock_t pmm_lock = SPINLOCK_INIT;
+static u16 last_used_cell = 0;
 
 /* ---- Cell pool management ---- */
 
@@ -198,12 +201,15 @@ u64 pmm_alloc_page(void) {
 
 u64 pmm_alloc_pages(u64 count) {
     u64 req_size = count * PAGE_SIZE;
+    u64 result = 0;
 
-    /* Search all root cells */
+    u64 f = spin_lock_irqsave(&pmm_lock);
+    /* Search all root cells, starting from last hint */
     for (u16 i = 0; i < cell_count; i++) {
-        if (cells[i].parent != 0xFFFF) continue; /* Only roots */
+        u16 idx = (last_used_cell + i) % cell_count;
+        if (cells[idx].parent != 0xFFFF) continue; /* Only roots */
 
-        u16 found = find_free_cell(i, req_size);
+        u16 found = find_free_cell(idx, req_size);
         if (found == 0xFFFF) continue;
 
         /* Split down to target size if needed */
@@ -215,11 +221,16 @@ u64 pmm_alloc_pages(u64 count) {
 
         cells[found].state = CELL_USED;
         free_mem -= cells[found].size;
-        return cells[found].base;
+        result = cells[found].base;
+        last_used_cell = idx;
+        break;
     }
+    spin_unlock_irqrestore(&pmm_lock, f);
 
-    kprintf_color(0xFFFF3333, "[PMM] ALLOC FAILED: no cell for %lu pages\n", count);
-    return 0;
+    if (!result) {
+        kprintf_color(0xFFFF3333, "[PMM] ALLOC FAILED: no cell for %lu pages\n", count);
+    }
+    return result;
 }
 
 void pmm_free_page(u64 phys_addr) {
@@ -228,6 +239,7 @@ void pmm_free_page(u64 phys_addr) {
 
 void pmm_free_pages(u64 phys_addr, u64 count) {
     (void)count;
+    u64 f = spin_lock_irqsave(&pmm_lock);
     /* Find the cell with this base address */
     for (u16 i = 0; i < cell_count; i++) {
         if (cells[i].base == phys_addr && cells[i].state == CELL_USED) {
@@ -235,9 +247,11 @@ void pmm_free_pages(u64 phys_addr, u64 count) {
             cells[i].owner = 0;
             free_mem += cells[i].size;
             cell_try_merge(i);
+            spin_unlock_irqrestore(&pmm_lock, f);
             return;
         }
     }
+    spin_unlock_irqrestore(&pmm_lock, f);
 }
 
 void pmm_set_owner(u64 phys_addr, yam_node_id_t owner) {

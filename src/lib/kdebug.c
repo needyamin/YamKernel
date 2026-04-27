@@ -8,6 +8,13 @@
 #include "kdebug.h"
 #include "../drivers/serial/serial.h"
 #include "../drivers/timer/pit.h"
+#include "../lib/spinlock.h"
+
+/* Circular Debug Buffer for OS-level debugging */
+#define DEBUG_BUF_SIZE (16 * 1024)
+static char g_debug_buf[DEBUG_BUF_SIZE];
+static u32  g_debug_ptr = 0;
+static spinlock_t g_debug_lock = SPINLOCK_INIT;
 
 /* Variadic args */
 typedef __builtin_va_list va_list;
@@ -55,6 +62,8 @@ static void serial_put_i64(i64 val) {
 void kdebug_log(int level, const char *tag, const char *fmt, ...) {
     if (level < 0) level = 0;
     if (level > 4) level = 4;
+
+    u64 f = spin_lock_irqsave(&g_debug_lock);
 
     /* Print: [LEVEL] [TAG] message\n */
     serial_write(level_prefix[level]);
@@ -124,6 +133,40 @@ void kdebug_log(int level, const char *tag, const char *fmt, ...) {
     va_end(ap);
 
     serial_write("\r\n");
+
+    /* Also store in internal buffer for the Compositor Debug Overlay */
+    char entry[128];
+    int len = 0;
+    /* Basic snprintf equivalent logic for the entry */
+    for(int i=0; i<32 && len < 120; i++) {
+        if(tag[i] == '\0') break;
+        entry[len++] = tag[i];
+    }
+    entry[len++] = ':'; entry[len++] = ' ';
+    /* Simplified message copy for the overlay */
+    for(int i=0; i<100 && len < 127; i++) {
+        if(fmt[i] == '\0') break;
+        entry[len++] = (fmt[i] == '\n' || fmt[i] == '\r') ? ' ' : fmt[i];
+    }
+    entry[len++] = '\n';
+
+    /* Copy to circular buffer */
+    for(int i=0; i<len; i++) {
+        g_debug_buf[g_debug_ptr % DEBUG_BUF_SIZE] = entry[i];
+        g_debug_ptr++;
+    }
+    spin_unlock_irqrestore(&g_debug_lock, f);
+}
+
+/* Retrieve the last 'n' lines from the debug buffer */
+void kdebug_get_recent(char *out, u32 max_len) {
+    u64 f = spin_lock_irqsave(&g_debug_lock);
+    u32 start = (g_debug_ptr > max_len) ? g_debug_ptr - max_len : 0;
+    for(u32 i=0; i < max_len && i < g_debug_ptr; i++) {
+        out[i] = g_debug_buf[(start + i) % DEBUG_BUF_SIZE];
+    }
+    out[max_len-1] = '\0';
+    spin_unlock_irqrestore(&g_debug_lock, f);
 }
 
 /* ---- Hex dump utility ---- */
@@ -159,4 +202,14 @@ void kdebug_hexdump(const char *tag, const void *addr, u32 len) {
         }
         serial_write("|\r\n");
     }
+}
+
+/* Push a raw string to the debug buffer */
+void kdebug_push_raw(const char *s) {
+    u64 f = spin_lock_irqsave(&g_debug_lock);
+    while(*s) {
+        g_debug_buf[g_debug_ptr % DEBUG_BUF_SIZE] = *s++;
+        g_debug_ptr++;
+    }
+    spin_unlock_irqrestore(&g_debug_lock, f);
 }

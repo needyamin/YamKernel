@@ -40,26 +40,15 @@ static void ap_trampoline(struct limine_smp_info *info) {
     __asm__ volatile ("mov %0, %%cr3" :: "r"(vmm_virt_hhdm_to_phys(vmm_get_kernel_pml4())));
 
     /* 6. Enable LAPIC for this core */
-    /* wrmsr APIC_BASE enable bit and spurious vector */
-    u64 apic_base = rdmsr(0x1B);
-    wrmsr(0x1B, apic_base | (1ULL << 11));
-    /* LAPIC_SVR is mapped, but we don't have global pointer here. 
-     * Actually, apic_init(hhdm) maps it globally, so we can just call it? 
-     * No, apic_init() maps it, but the pointer is static in apic.c. 
-     * We can just use the physical address from ACPI. Or just wait for scheduler timer.
-     * We'll add a helper apic_init_ap() later. For now, APs don't receive IRQs until needed. */
-    
-    /* 7. Setup idle task for AP */
-    /* We can create a basic idle task for this CPU or just spin for now. */
+    apic_init_local();
     
     /* Signal BSP that we are up */
     __sync_fetch_and_add(&g_aps_booted, 1);
 
-    /* Spin in hlt loop waiting for scheduler / IPIs */
-    __asm__ volatile ("sti");
-    for (;;) {
-        __asm__ volatile ("hlt");
-    }
+    /* 7. Start the scheduler on this core */
+    sched_init();
+    apic_timer_start(100);
+    sched_start();
 }
 
 void smp_init(struct limine_smp_response *smp_resp) {

@@ -210,7 +210,7 @@ void *sys_mmap(void *addr, usize length, u32 prot, u32 flags, int fd, usize offs
             if (!phys) return MAP_FAILED;
             u64 pflags = VMM_FLAG_PRESENT | VMM_FLAG_WRITE | VMM_FLAG_USER;
             if (!(prot & PROT_EXEC)) pflags |= VMM_FLAG_NX;
-            vmm_map_page(vmm_get_kernel_pml4(), vaddr + i * PAGE_SIZE, phys, pflags);
+            vmm_map_page(t->pml4, vaddr + i * PAGE_SIZE, phys, pflags);
             void *mapped = vmm_phys_to_virt(phys);
             memset(mapped, 0, PAGE_SIZE);
         }
@@ -224,7 +224,10 @@ int sys_munmap(void *addr, usize length) {
     usize pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
 
     /* Unmap pages and free physical memory */
-    u64 *pml4 = vmm_get_kernel_pml4();
+    task_t *t = sched_current();
+    if (!t || !t->pml4) return -1;
+
+    u64 *pml4 = t->pml4;
     for (usize i = 0; i < pages; i++) {
         u64 va = vaddr + i * PAGE_SIZE;
         u64 phys = vmm_virt_to_phys(pml4, va);
@@ -235,7 +238,6 @@ int sys_munmap(void *addr, usize length) {
     }
 
     /* Remove VMA from task list */
-    task_t *t = sched_current();
     if (t) {
         vma_t **prev = (vma_t **)&t->vma_head;
         for (vma_t *v = (vma_t *)t->vma_head; v; v = v->next) {
@@ -270,7 +272,7 @@ bool vmm_handle_page_fault(u64 fault_addr, u64 error_code) {
             if (v->prot & PROT_WRITE) pflags |= VMM_FLAG_WRITE;
             if (!(v->prot & PROT_EXEC)) pflags |= VMM_FLAG_NX;
 
-            vmm_map_page(vmm_get_kernel_pml4(), page_addr, phys, pflags);
+            vmm_map_page(t->pml4, page_addr, phys, pflags);
 
             /* Zero the page */
             void *mapped = vmm_phys_to_virt(phys);
