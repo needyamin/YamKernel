@@ -50,6 +50,7 @@ void          yamgraph_init(void);
 yam_node_id_t yamgraph_node_create(yam_node_type_t type, const char *name, void *data);
 yam_node_t   *yamgraph_node_get(yam_node_id_t id);
 bool          yamgraph_node_destroy(yam_node_id_t id);
+yam_node_id_t yamgraph_find_node_by_name(const char *name);
 
 /* Edge operations */
 yam_edge_id_t yamgraph_edge_link(yam_node_id_t src, yam_node_id_t dst, 

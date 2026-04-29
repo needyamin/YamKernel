@@ -47,8 +47,14 @@
 #include "drivers/input/evdev.h"
 #include "drivers/drm/drm.h"
 #include "sched/wait.h"
+#include "sched/cgroup.h"
 #include "kernel/shell.h"
 #include "boot/yamboot.h"
+#include "mem/oom.h"
+#include "cpu/power.h"
+#include "drivers/ai/ai_accel.h"
+#include "drivers/input/touch.h"
+#include "drivers/input/gesture.h"
 
 #define YAM_DEMO_TASKS 0
 #define YAM_PREEMPTIVE 1
@@ -120,10 +126,9 @@ void *g_video_module = NULL;
 usize g_video_module_size = 0;
 void *g_audio_module = NULL;
 usize g_audio_module_size = 0;
-void *g_img_module = NULL;
-usize g_img_module_size = 0;
-void *g_wifi_module = NULL;
-usize g_wifi_module_size = 0;
+void *g_img_module = NULL;    usize g_img_module_size = 0;
+void *g_wifi_module = NULL;   usize g_wifi_module_size = 0;
+void *g_authd_module = NULL;  usize g_authd_module_size = 0;
 void *g_wallpaper_module = NULL;
 
 /* ============================================================================
@@ -146,9 +151,10 @@ static void print_banner(void) {
         "  ╩ ╩╚═╝╩╚═╝╚╝╚═╝╩═╝\n"
     );
     kprintf_color(0xFF00FF88,
-        "\n  YamKernel v0.2.0 — Graph-Based Adaptive OS\n");
+        "\n  YamKernel v0.3.0 — Graph-Based Adaptive OS\n");
     kprintf_color(0xFF888888,
         "  Architecture: x86_64 | Model: YamGraph Resource Graph\n"
+        "  Features: Zone-PMM CoW CFS AI Touch cgroups OOM Power\n"
         "  Built: " __DATE__ " " __TIME__ "\n\n");
 }
 
@@ -244,6 +250,10 @@ void kernel_main(void) {
                 } else if (len >= 8 && strcmp(mod->path + len - 8, "wifi.elf") == 0) {
                     g_wifi_module = mod->address;
                     g_wifi_module_size = mod->size;
+                } else if (len >= 9 && strcmp(mod->path + len - 9, "authd.elf") == 0) {
+                    g_authd_module = mod->address;
+                    g_authd_module_size = mod->size;
+                    KINFO("MODULE", "    -> matched AUTHD APP");
                 }
             }
         } else {
@@ -355,7 +365,7 @@ void kernel_main(void) {
     kprintf_color(0xFF00FF88,
         "\n"
         "  ╔══════════════════════════════════════════════════╗\n"
-        "  ║        YamKernel v0.2.0 — BOOT COMPLETE         ║\n"
+        "  ║        YamKernel v0.3.0 — BOOT COMPLETE         ║\n"
         "  ╠══════════════════════════════════════════════════╣\n");
     kprintf_color(0xFF00DDFF,
         "  ║  Memory : %lu MB total, %lu MB free             \n",
@@ -364,6 +374,9 @@ void kernel_main(void) {
     kprintf_color(0xFF00DDFF,
         "  ║  Graph  : %u nodes, %u edges                    \n",
         yamgraph_node_count(), yamgraph_edge_count());
+    kprintf_color(0xFF00DDFF,
+        "  ║  Tasks  : %lu | AI Devices: %u                  \n",
+        sched_task_count(), ai_device_count());
     kprintf_color(0xFF00FF88,
         "  ║  Status : All subsystems operational             ║\n"
         "  ╚══════════════════════════════════════════════════╝\n"
@@ -395,15 +408,31 @@ void kernel_main(void) {
         KTRACE("INIT", "Evdev OK. Initializing Mouse...");
         mouse_init();
         KTRACE("INIT", "Mouse OK");
+        KTRACE("INIT", "Touch init...");
+        touch_init();
+        KTRACE("INIT", "Touch OK. Gesture init...");
+        gesture_init();
+        KTRACE("INIT", "Gesture OK");
     } else {
-        kprintf_color(0xFFFF8833, "[YAMBOOT] Safe Mode: skipping PCI/USB/I2C/SPI/VFS/IPC/NET/MOUSE\n");
+        kprintf_color(0xFFFF8833, "[YAMBOOT] Safe Mode: skipping PCI/USB/I2C/SPI/VFS/IPC/NET/MOUSE/TOUCH\n");
     }
 
-    /* ---- Phase 9: Preemptive Multitasking ---- */
-    KINFO("INIT", "Phase 6: Preemptive Scheduler");
-    kprintf_color(0xFFFFDD00, "\n=== Phase 6: Preemptive Scheduler ===\n");
+    /* ---- Phase 9: Preemptive Multitasking + Modern Subsystems ---- */
+    KINFO("INIT", "Phase 6: Preemptive Scheduler + Modern Subsystems");
+    kprintf_color(0xFFFFDD00, "\n=== Phase 6: Preemptive Scheduler + Modern Subsystems ===\n");
     sched_init();
     sched_install_timer();
+
+    /* v0.3.0: cgroups, OOM killer, power management, AI acceleration */
+    cgroup_init();
+    KTRACE("INIT", "cgroups OK");
+    oom_init();
+    KTRACE("INIT", "OOM Killer OK");
+    power_init();
+    KTRACE("INIT", "Power management OK");
+    ai_accel_init();
+    KTRACE("INIT", "AI Acceleration OK");
+
     extern void sched_demo_spawn(void);
     extern void user_demo_load(void);
     if (YAM_DEMO_TASKS) {
@@ -446,6 +475,11 @@ void kernel_main(void) {
         /* Load ELF user-space app if found */
         if (g_elf_module) {
             elf_load(g_elf_module, g_elf_module_size, "test_app");
+        }
+        
+        /* Spawn Auth Daemon (runs in background) */
+        if (g_authd_module) {
+            elf_load(g_authd_module, g_authd_module_size, "authd");
         }
         
         /* Spawn Wayland Compositor (highest priority) */

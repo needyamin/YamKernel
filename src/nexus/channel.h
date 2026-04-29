@@ -32,8 +32,10 @@ typedef struct {
     bool           active;
 } yam_channel_t;
 
-/* Create a bidirectional channel between two nodes */
-yam_channel_t *channel_create(yam_node_id_t a, yam_node_id_t b);
+yam_channel_t *channel_create(const char *name, yam_node_id_t a, yam_node_id_t b);
+
+/* Get a channel by its YamGraph node ID */
+yam_channel_t *channel_get(yam_node_id_t node_id);
 
 /* Send a message through a channel */
 bool channel_send(yam_channel_t *chan, yam_node_id_t sender,

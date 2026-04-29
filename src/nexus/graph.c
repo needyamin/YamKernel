@@ -108,6 +108,19 @@ bool yamgraph_node_destroy(yam_node_id_t id) {
     return true;
 }
 
+yam_node_id_t yamgraph_find_node_by_name(const char *name) {
+    if (!name) return (yam_node_id_t)-1;
+    for (u32 i = 0; i < YAMGRAPH_MAX_NODES; i++) {
+        yam_node_t *n = &nodes[i];
+        if (n->alive && n->name) {
+            if (strcmp(n->name, name) == 0) {
+                return n->id;
+            }
+        }
+    }
+    return (yam_node_id_t)-1;
+}
+
 /* ---- Edge operations ---- */
 
 yam_edge_id_t yamgraph_edge_link(yam_node_id_t src, yam_node_id_t dst,

@@ -37,9 +37,9 @@ SRC_DIR   := src
 BUILD_DIR := build
 ISO_DIR   := $(BUILD_DIR)/iso_root
 
-# Source files (Exclude OS-level apps and drivers from kernel build, keep services like compositor)
-C_SRCS := $(shell find $(SRC_DIR) -name '*.c' -type f -not -path '$(SRC_DIR)/os/apps/*' -not -path '$(SRC_DIR)/os/drivers/*')
-ASM_SRCS := $(shell find $(SRC_DIR) -name '*.asm' -type f -not -path '$(SRC_DIR)/os/apps/*' -not -path '$(SRC_DIR)/os/drivers/*')
+# Source files (Exclude OS-level apps, drivers, and userspace libs from kernel build, keep services like compositor)
+C_SRCS := $(shell find $(SRC_DIR) -name '*.c' -type f -not -path '$(SRC_DIR)/os/apps/*' -not -path '$(SRC_DIR)/os/drivers/*' -not -path '$(SRC_DIR)/os/lib/*')
+ASM_SRCS := $(shell find $(SRC_DIR) -name '*.asm' -type f -not -path '$(SRC_DIR)/os/apps/*' -not -path '$(SRC_DIR)/os/drivers/*' -not -path '$(SRC_DIR)/os/lib/*')
 
 # Object files
 C_OBJS   := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(C_SRCS))
@@ -65,6 +65,7 @@ VIDEO_ELF   := $(BUILD_DIR)/video.elf
 AUDIO_ELF   := $(BUILD_DIR)/audio.elf
 IMG_ELF     := $(BUILD_DIR)/image.elf
 WIFI_ELF    := $(BUILD_DIR)/wifi.elf
+AUTHD_ELF   := $(BUILD_DIR)/authd.elf
 
 USER_CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-stack-check \
                -fno-pie -fno-pic -no-pie -static -m64 -march=x86-64 -mno-80387 -mno-mmx \
@@ -160,11 +161,16 @@ $(WIFI_ELF): src/os/drivers/wifi.c src/os/apps/user.ld
 	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/wifi.c
 	@echo "[DRV_WIFI] $@"
 
+$(AUTHD_ELF): src/os/apps/authd.c src/os/apps/user.ld
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/authd.c
+	@echo "[SVC_AUTH] $@"
+
 # ============================================================================
 #  ISO Creation (Limine-based bootable ISO)
 # ============================================================================
 
-$(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN) $(USER_ELF) $(CALC_ELF) $(TERM_ELF) $(BROWSER_ELF) $(NET_ELF) $(VIDEO_ELF) $(AUDIO_ELF) $(IMG_ELF) $(WIFI_ELF)
+$(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN) $(USER_ELF) $(CALC_ELF) $(TERM_ELF) $(BROWSER_ELF) $(NET_ELF) $(VIDEO_ELF) $(AUDIO_ELF) $(IMG_ELF) $(WIFI_ELF) $(AUTHD_ELF)
 	@echo "[ISO]  Building bootable ISO..."
 	@rm -rf $(ISO_DIR)
 	@mkdir -p $(ISO_DIR)/boot/limine
@@ -184,6 +190,7 @@ $(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN) $(USER_ELF) $(CALC_ELF
 	cp $(AUDIO_ELF) $(ISO_DIR)/boot/audio.elf
 	cp $(IMG_ELF) $(ISO_DIR)/boot/image.elf
 	cp $(WIFI_ELF) $(ISO_DIR)/boot/wifi.elf
+	cp $(AUTHD_ELF) $(ISO_DIR)/boot/authd.elf
 	
 	# Copy limine config
 	cp limine.conf $(ISO_DIR)/boot/limine/limine.conf

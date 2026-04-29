@@ -49,6 +49,11 @@ typedef struct wl_surface {
     /* Owner task ID */
     u64                 owner_task_id;
     
+    /* Animations */
+    u8                  anim_scale; /* 0 to 100 */
+    u8                  anim_alpha; /* 0 to 255 */
+    bool                anim_closing;
+    
     spinlock_t          lock;
     /* Event queue for routing input to client */
     struct {

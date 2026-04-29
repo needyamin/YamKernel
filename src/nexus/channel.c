@@ -12,7 +12,7 @@
 static yam_channel_t channels[MAX_CHANNELS];
 static u32 channel_count = 0;
 
-yam_channel_t *channel_create(yam_node_id_t a, yam_node_id_t b) {
+yam_channel_t *channel_create(const char *name, yam_node_id_t a, yam_node_id_t b) {
     if (channel_count >= MAX_CHANNELS) {
         kprintf_color(0xFFFF3333, "[CHANNEL] Channel limit reached!\n");
         return NULL;
@@ -22,7 +22,7 @@ yam_channel_t *channel_create(yam_node_id_t a, yam_node_id_t b) {
     memset(chan, 0, sizeof(yam_channel_t));
 
     /* Create a channel node in the YamGraph */
-    chan->node_id = yamgraph_node_create(YAM_NODE_CHANNEL, "channel", chan);
+    chan->node_id = yamgraph_node_create(YAM_NODE_CHANNEL, name, chan);
     chan->endpoint_a = a;
     chan->endpoint_b = b;
     chan->head = 0;
@@ -37,6 +37,15 @@ yam_channel_t *channel_create(yam_node_id_t a, yam_node_id_t b) {
                        YAM_PERM_READ | YAM_PERM_WRITE);
 
     return chan;
+}
+
+yam_channel_t *channel_get(yam_node_id_t node_id) {
+    for (u32 i = 0; i < channel_count; i++) {
+        if (channels[i].active && channels[i].node_id == node_id) {
+            return &channels[i];
+        }
+    }
+    return NULL;
 }
 
 bool channel_send(yam_channel_t *chan, yam_node_id_t sender,

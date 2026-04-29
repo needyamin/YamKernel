@@ -7,11 +7,19 @@
 #include "drivers/video/framebuffer.h"
 #include "sched/sched.h"
 #include "sched/wait.h"
-#include "lib/string.h"
-#include "lib/kprintf.h"
-#include "lib/kdebug.h"
-#include "mem/heap.h"
-#include "drivers/timer/rtc.h"
+#include "compositor.h"
+#include "../../../sched/sched.h"
+#include "../../../sched/wait.h"
+#include "../../../mem/heap.h"
+#include "../../../lib/kprintf.h"
+#include "../../../lib/string.h"
+#include "../../../lib/kdebug.h"
+#include "../../../cpu/percpu.h"
+#include "../../../cpu/apic.h"
+#include "../../../cpu/msr.h"
+#include "../../../drivers/timer/rtc.h"
+#include "../../../nexus/channel.h"
+#include "../../../nexus/graph.h"
 #include "wl_draw.h"
 #include <nexus/panic.h>
 #include "fs/elf.h"
@@ -94,6 +102,11 @@ wl_surface_t *wl_surface_create(const char *title, i32 x, i32 y, u32 w, u32 h, u
     s->title_bg     = 0xFF222233;
     s->title_fg     = 0xFFFFFFFF;
     s->focused      = false;
+    
+    /* Init animation state */
+    s->anim_scale   = 50;  /* 50% */
+    s->anim_alpha   = 0;   /* 0 alpha */
+    s->anim_closing = false;
 
     s->buffer = drm_create_dumb_buffer(w, h);
     if (!s->buffer) {
@@ -122,6 +135,12 @@ wl_surface_t *wl_surface_create(const char *title, i32 x, i32 y, u32 w, u32 h, u
 void wl_surface_destroy(wl_surface_t *surface) {
     if (!surface || surface->state == WL_SURFACE_FREE) return;
     
+    /* If we haven't started closing animation, trigger it and return */
+    if (!surface->anim_closing) {
+        surface->anim_closing = true;
+        return;
+    }
+    
     /* 1. Mark as FREE immediately so app tasks stop drawing and compositor stops rendering */
     surface->state = WL_SURFACE_FREE;
     u32 old_id = surface->id;
@@ -143,10 +162,16 @@ void wl_surface_destroy(wl_surface_t *surface) {
         }
     }
 
-    /* 4. Tiny delay to ensure other tasks see the state change and finish current scanlines */
-    task_sleep_ms(5);
+    /* 4. Kill the owner task IMMEDIATELY so it doesn't keep drawing */
+    if (surface->owner_task_id) {
+        sched_kill_task(surface->owner_task_id);
+    }
 
-    /* 5. Now it's safe to free the memory */
+    /* 5. Wait 20ms (two timer ticks) to guarantee that if the task was running on another CPU, 
+       it has been preempted and will never be scheduled again (since it's TASK_DEAD). */
+    task_sleep_ms(20);
+
+    /* 6. Now it's 100% safe to free the physical memory pages */
     if (surface->buffer) {
         drm_destroy_dumb_buffer(surface->buffer);
         surface->buffer = NULL;
@@ -212,18 +237,43 @@ bool wl_surface_pop_event(wl_surface_t *surface, input_event_t *ev) {
 static void composite_surface(wl_surface_t *s) {
     if (s->state != WL_SURFACE_ACTIVE || !s->buffer) return;
 
+    /* Animation Update */
+    if (s->anim_closing) {
+        s->anim_scale = (s->anim_scale > 10) ? s->anim_scale - 10 : 0;
+        s->anim_alpha = (s->anim_alpha > 25) ? s->anim_alpha - 25 : 0;
+        if (s->anim_scale <= 50 || s->anim_alpha == 0) {
+            wl_surface_destroy(s); /* Finish destruction */
+            return;
+        }
+    } else {
+        if (s->anim_scale < 100) {
+            s->anim_scale += 10;
+            if (s->anim_scale > 100) s->anim_scale = 100;
+        }
+        if (s->anim_alpha < 255) {
+            int new_alpha = (int)s->anim_alpha + 25;
+            s->anim_alpha = (new_alpha > 255) ? 255 : (u8)new_alpha;
+        }
+    }
+
     u32 *dst = g_compositor.scanout->pixels;
     u32 *src = s->buffer->pixels;
-    u32 sw = s->width;
-    u32 sh = s->height;
     u32 dw = g_compositor.scanout->width;
     u32 dh = g_compositor.scanout->height;
     
+    /* Animated Size */
+    u32 sw = (s->width * s->anim_scale) / 100;
+    u32 sh = (s->height * s->anim_scale) / 100;
+    
+    /* Keep centered during scale */
+    i32 ax = s->x + (s->width - sw) / 2;
+    i32 ay = s->y + (s->height - sh) / 2;
+    
     /* Bounding box */
-    i32 start_y = s->y < 0 ? 0 : s->y;
-    i32 start_x = s->x < 0 ? 0 : s->x;
-    i32 end_y = s->y + sh > dh ? dh : s->y + sh;
-    i32 end_x = s->x + sw > dw ? dw : s->x + sw;
+    i32 start_y = ay < 0 ? 0 : ay;
+    i32 start_x = ax < 0 ? 0 : ax;
+    i32 end_y = ay + sh > dh ? dh : ay + sh;
+    i32 end_x = ax + sw > dw ? dw : ax + sw;
 
     /* Window decorations (border) */
     u32 border = s->focused ? s->border_color : 0xFF555555;
@@ -231,13 +281,13 @@ static void composite_surface(wl_surface_t *s) {
     u32 border_w = 2;
     
     for (i32 y = start_y; y < end_y; y++) {
-        u32 sy = y - s->y;
+        u32 sy = y - ay;
         i32 x = start_x;
         
         if (sy < title_h || sy >= sh - border_w) {
             /* Entire row is border or titlebar */
             for (; x < end_x; x++) {
-                u32 sx = x - s->x;
+                u32 sx = x - ax;
                 u32 color = border;
                 if (sy >= border_w && sy < title_h && sx >= border_w && sx < sw - border_w) {
                     /* Glassmorphic titlebar */
@@ -261,25 +311,55 @@ static void composite_surface(wl_surface_t *s) {
                         else color = 0xFFFF3333;
                     }
                 }
+                
+                /* Apply alpha fade */
+                if (s->anim_alpha < 255) {
+                    u32 dc = dst[y * dw + x];
+                    u32 sr = (color >> 16) & 0xFF, sg = (color >> 8) & 0xFF, sb = color & 0xFF;
+                    u32 dr = (dc >> 16) & 0xFF, dg = (dc >> 8) & 0xFF, db = dc & 0xFF;
+                    u32 alpha = s->anim_alpha;
+                    u32 nr = (sr * alpha + dr * (255 - alpha)) / 255;
+                    u32 ng = (sg * alpha + dg * (255 - alpha)) / 255;
+                    u32 nb = (sb * alpha + db * (255 - alpha)) / 255;
+                    color = 0xFF000000 | (nr << 16) | (ng << 8) | nb;
+                }
+                
                 dst[y * dw + x] = color;
             }
         } else {
             /* Content row with side borders */
             /* Left border */
-            for (; x < s->x + (i32)border_w && x < end_x; x++) {
+            for (; x < ax + (i32)border_w && x < end_x; x++) {
                 dst[y * dw + x] = border;
             }
             
-            /* Content (use memcpy for speed) */
-            i32 content_end_x = s->x + (i32)sw - (i32)border_w;
+            /* Content */
+            i32 content_end_x = ax + (i32)sw - (i32)border_w;
             if (content_end_x > end_x) content_end_x = end_x;
             
-            if (x < content_end_x) {
-                u32 copy_w = content_end_x - x;
-                u32 sx = x - s->x;
-                /* Offset src by title_h so app's (0,0) is below titlebar */
-                memcpy(&dst[y * dw + x], &src[(sy - title_h) * sw + sx], copy_w * 4);
-                x += copy_w;
+            for (; x < content_end_x; x++) {
+                u32 sx = x - ax;
+                
+                /* Map scaled coords to original buffer coords */
+                u32 orig_x = (sx * s->width) / sw;
+                u32 orig_y = ((sy - title_h) * s->height) / sh;
+                if (orig_x >= s->width) orig_x = s->width - 1;
+                if (orig_y >= s->height) orig_y = s->height - 1;
+                
+                u32 sc = src[orig_y * s->width + orig_x];
+                
+                if (s->anim_alpha < 255) {
+                    u32 dc = dst[y * dw + x];
+                    u32 sr = (sc >> 16) & 0xFF, sg = (sc >> 8) & 0xFF, sb = sc & 0xFF;
+                    u32 dr = (dc >> 16) & 0xFF, dg = (dc >> 8) & 0xFF, db = dc & 0xFF;
+                    u32 alpha = s->anim_alpha;
+                    u32 nr = (sr * alpha + dr * (255 - alpha)) / 255;
+                    u32 ng = (sg * alpha + dg * (255 - alpha)) / 255;
+                    u32 nb = (sb * alpha + db * (255 - alpha)) / 255;
+                    dst[y * dw + x] = 0xFF000000 | (nr << 16) | (ng << 8) | nb;
+                } else {
+                    dst[y * dw + x] = sc;
+                }
             }
             
             /* Right border */
@@ -736,12 +816,44 @@ static void process_input(void) {
                     if (sc < 128) c = shift_held ? sc_ascii_shift[sc] : sc_ascii[sc];
                     
                     if (c == '\n') {
-                        if (strcmp(g_compositor.login_user, "root") == 0 &&
-                            strcmp(g_compositor.login_pass, "password") == 0) {
-                            g_compositor.state = COMPOSITOR_STATE_DESKTOP;
+                        static yam_channel_t *auth_chan = NULL;
+                        if (!auth_chan) {
+                            yam_node_id_t authd_node = yamgraph_find_node_by_name("authd");
+                            if (authd_node != (yam_node_id_t)-1) {
+                                yam_node_id_t comp_node = sched_current()->graph_node;
+                                auth_chan = channel_create("auth_channel", comp_node, authd_node);
+                            }
+                        }
+                        
+                        if (auth_chan) {
+                            int len = strlen(g_compositor.login_pass);
+                            channel_send(auth_chan, sched_current()->graph_node, 1, g_compositor.login_pass, len);
+                            
+                            yam_message_t reply;
+                            int retries = 50;
+                            bool success = false;
+                            while (retries-- > 0) {
+                                if (channel_recv(auth_chan, &reply)) {
+                                    if (reply.msg_type == 2) success = true;
+                                    break;
+                                }
+                                task_sleep_ms(10);
+                            }
+                            
+                            if (success) {
+                                g_compositor.state = COMPOSITOR_STATE_DESKTOP;
+                            } else {
+                                g_compositor.login_failed = true;
+                                g_compositor.login_pass[0] = '\0';
+                            }
                         } else {
-                            g_compositor.login_failed = true;
-                            g_compositor.login_pass[0] = '\0';
+                            /* Fallback if authd is dead */
+                            if (strcmp(g_compositor.login_pass, "password") == 0) {
+                                g_compositor.state = COMPOSITOR_STATE_DESKTOP;
+                            } else {
+                                g_compositor.login_failed = true;
+                                g_compositor.login_pass[0] = '\0';
+                            }
                         }
                     } else if (c == '\b') {
                         if (g_compositor.login_focus_pass) {

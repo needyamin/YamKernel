@@ -10,6 +10,7 @@
 #include "../lib/kprintf.h"
 #include "../mem/vmm.h"
 #include "../sched/sched.h"
+#include "../kernel/api/syscall.h"
 #include <limine.h>
 
 static u32 g_smp_cpu_count = 1;
@@ -41,6 +42,9 @@ static void ap_trampoline(struct limine_smp_info *info) {
 
     /* 6. Enable LAPIC for this core */
     apic_init_local();
+    
+    /* 6.5. Enable SYSCALL instruction (EFER.SCE) on this core */
+    syscall_init();
     
     /* Signal BSP that we are up */
     __sync_fetch_and_add(&g_aps_booted, 1);

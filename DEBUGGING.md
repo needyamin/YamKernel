@@ -71,8 +71,16 @@ Logs **always** go to the COM1 serial port — they work even when the framebuff
 - `WAYLAND`: Compositor events, window creation, input routing.
 - `DRM`: Framebuffer and dumb buffer management.
 - `SPLASH`: Boot animation and module loading.
-- `SCHED`: Context switches and task spawning.
+- `SCHED`: Context switches, task spawning, fork, nice changes.
 - `YAMGRAPH`: Node/Edge operations and capability checks.
+- `PMM`: Zone allocation, refcount changes, watermark triggers.
+- `VMM`: CoW faults, huge page mapping, mprotect, brk.
+- `OOM`: Memory pressure detection, task scoring, kills.
+- `AI`: Tensor alloc/free, job submission, device queries.
+- `TOUCH`: Slot updates, calibration, palm rejection.
+- `GESTURE`: Tap/swipe/pinch recognition events.
+- `CGROUP`: Resource limit enforcement, memory charging.
+- `POWER`: C-state transitions, idle residency.
 
 ### Example Usage
 
@@ -170,9 +178,22 @@ The `.vscode/launch.json` is pre-configured to build, launch QEMU in debug mode,
 ## 📊 System Monitoring (`top`)
 
 YamKernel includes a live `btop`-style dashboard available via the shell. It provides:
-- **CPU**: Real-time load percentage and thread count.
-- **MEM**: Physical memory usage (PMM) with a visual progress bar.
+- **CPU**: Real-time load percentage, thread count, nice distribution.
+- **MEM**: Zone-aware PMM usage (DMA/DMA32/Normal) with watermark indicators.
 - **NET**: Network traffic (RX/TX) and interface status.
 - **SYS**: Active YamGraph nodes and edges.
+- **AI**: Tensor pool usage, active compute jobs, device utilization.
+- **TOUCH**: Active touch slots, last gesture recognized.
 
 To access it, type `top` at the YamOS shell. Note that in **Normal Boot**, the shell is suspended once the Wayland Compositor starts; use **Safe Mode** to access the full shell debug environment.
+
+## 🧠 v0.3.0 Debug Tips
+
+| Subsystem | How to Debug |
+|-----------|-------------|
+| **CoW faults** | Set `KDEBUG_LEVEL=0` in vmm.c — logs every CoW page copy with old/new phys addrs |
+| **OOM kills** | Watch for `[OOM]` serial output — shows scored task list before killing |
+| **AI jobs** | `ai_print_stats()` from shell shows device utilization and completed jobs |
+| **Touch** | Boot QEMU with `-device usb-tablet` for absolute pointing device |
+| **Scheduler** | `sched_print_stats()` shows per-CPU queue depths and min vruntime |
+| **cgroups** | `cgroup_print_stats()` shows active groups with CPU/mem/PID usage |
