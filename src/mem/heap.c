@@ -251,6 +251,10 @@ void kfree(void *ptr) {
         spin_unlock_irqrestore(&heap_lock, f);
         return;
     }
+    if (block->free) {
+        spin_unlock_irqrestore(&heap_lock, f);
+        return;
+    }
 
     block->free = true;
     stat_free_count++;

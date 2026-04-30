@@ -13,6 +13,7 @@
 #include "graph.h"
 #include "../lib/kprintf.h"
 #include "../lib/string.h"
+#include "../lib/kdebug.h"
 #include "../mem/heap.h"
 
 /* Static pools (heap not always available at init) */

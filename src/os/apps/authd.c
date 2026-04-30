@@ -1,8 +1,15 @@
-#include "../lib/libc/stdlib.c"
-#include "../lib/libc/string.c"
-#include "../lib/libc/stdio.c"
-#include "../lib/libyam/syscall.h"
-#include "../lib/libyam/ipc.h"
+#include "stdlib.h"
+#include "string.h"
+#include "stdio.h"
+#include "ctype.h"
+#include "../libyam/syscall.h"
+#include "../libyam/ipc.h"
+
+int main();
+
+void _start(void) {
+    exit(main());
+}
 
 int main() {
     printf("[AUTHD] Authentication Daemon started in Ring 3!\n");
@@ -34,7 +41,7 @@ int main() {
                 
                 // Hardcoded password verification
                 bool success = false;
-                if (strcmp(password, "yamin") == 0) {
+                if (strcmp(password, "password") == 0) {
                     success = true;
                     printf("[AUTHD] Access GRANTED!\n");
                 } else {

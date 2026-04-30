@@ -64,3 +64,23 @@ void wl_draw_text(wl_surface_t *s, i32 x, i32 y, const char *str, u32 fg, u32 bg
         str++;
     }
 }
+
+void wl_draw_filled_circle(wl_surface_t *s, i32 cx, i32 cy, u32 r, u32 color) {
+    if (!s || !s->buffer || !s->buffer->pixels) return;
+    u32 *pixels = s->buffer->pixels;
+    u32 sw = s->width;
+    u32 sh = s->height;
+
+    i32 r2 = (i32)(r * r);
+    for (i32 y = -(i32)r; y <= (i32)r; y++) {
+        for (i32 x = -(i32)r; x <= (i32)r; x++) {
+            if (x*x + y*y <= r2) {
+                i32 px = cx + x;
+                i32 py = cy + y;
+                if (px >= 0 && px < (i32)sw && py >= 0 && py < (i32)sh) {
+                    pixels[py * sw + px] = color;
+                }
+            }
+        }
+    }
+}

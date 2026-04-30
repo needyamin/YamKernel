@@ -3,11 +3,25 @@
 
 #include <nexus/types.h>
 
-void *malloc(usize size);
-void free(void *ptr);
-void *calloc(usize num, usize size);
-void *realloc(void *ptr, usize size);
+void  *malloc(usize size);
+void   free(void *ptr);
+void  *calloc(usize num, usize size);
+void  *realloc(void *ptr, usize new_size);
 
-void exit(int status);
+int    atoi(const char *s);
+long   atol(const char *s);
+long   strtol(const char *s, char **end, int base);
+unsigned long strtoul(const char *s, char **end, int base);
+
+void   qsort(void *base, usize nmemb, usize size,
+             int (*compar)(const void *, const void *));
+void  *bsearch(const void *key, const void *base, usize nmemb, usize size,
+               int (*compar)(const void *, const void *));
+
+int    abs(int n);
+long   labs(long n);
+
+void   exit(int status) __attribute__((noreturn));
+void   abort(void) __attribute__((noreturn));
 
 #endif

@@ -342,9 +342,9 @@ void sched_tick(void) {
         }
     }
 
-    /* Involuntary preemption */
+    /* Involuntary preemption disabled from IRQ: yielding here calls context_switch while
+       the IST/interrupt stack is active and breaks IRET frames (bogus RIP/CR2 at ~NULL+off). */
     if (cur) cur->invol_switches++;
-    sched_yield();
 }
 
 static void timer_isr(interrupt_frame_t *f) { (void)f; apic_eoi(); sched_tick(); }

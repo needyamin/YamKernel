@@ -6,6 +6,7 @@
 #include "channel.h"
 #include "../lib/kprintf.h"
 #include "../lib/string.h"
+#include "../lib/kdebug.h"
 
 /* Channel pool */
 #define MAX_CHANNELS 256
@@ -25,10 +26,10 @@ yam_channel_t *channel_create(const char *name, yam_node_id_t a, yam_node_id_t b
     chan->node_id = yamgraph_node_create(YAM_NODE_CHANNEL, name, chan);
     chan->endpoint_a = a;
     chan->endpoint_b = b;
-    chan->head = 0;
-    chan->tail = 0;
-    chan->count = 0;
+    chan->a_to_b.head = chan->a_to_b.tail = chan->a_to_b.count = 0;
+    chan->b_to_a.head = chan->b_to_a.tail = chan->b_to_a.count = 0;
     chan->active = true;
+    KINFO("CHANNEL", "Created '%s' id=%lu (%lu <-> %lu)", name, (u64)chan->node_id, (u64)a, (u64)b);
 
     /* Link both endpoints to the channel via graph edges */
     yamgraph_edge_link(a, chan->node_id, YAM_EDGE_CHANNEL,
@@ -52,7 +53,6 @@ bool channel_send(yam_channel_t *chan, yam_node_id_t sender,
                   u32 msg_type, const void *data, u32 length) {
     if (!chan || !chan->active) return false;
     if (length > CHANNEL_MSG_MAX_SIZE) return false;
-    if (chan->count >= CHANNEL_RING_SIZE) return false; /* Ring full */
 
     /* Verify sender is an endpoint */
     if (sender != chan->endpoint_a && sender != chan->endpoint_b) {
@@ -66,27 +66,48 @@ bool channel_send(yam_channel_t *chan, yam_node_id_t sender,
         return false;
     }
 
-    yam_message_t *msg = &chan->ring[chan->tail];
-    msg->sender   = sender;
-    msg->msg_type = msg_type;
-    msg->length   = length;
-    if (data && length > 0) {
-        memcpy(msg->data, data, length);
+    /* Determine direction */
+    if (sender == chan->endpoint_a) {
+        if (chan->a_to_b.count >= CHANNEL_RING_SIZE) return false;
+        yam_message_t *msg = &chan->a_to_b.ring[chan->a_to_b.tail];
+        msg->sender = sender;
+        msg->msg_type = msg_type;
+        msg->length = length;
+        if (data && length > 0) memcpy(msg->data, data, length);
+        chan->a_to_b.tail = (chan->a_to_b.tail + 1) % CHANNEL_RING_SIZE;
+        chan->a_to_b.count++;
+    } else {
+        if (chan->b_to_a.count >= CHANNEL_RING_SIZE) return false;
+        yam_message_t *msg = &chan->b_to_a.ring[chan->b_to_a.tail];
+        msg->sender = sender;
+        msg->msg_type = msg_type;
+        msg->length = length;
+        if (data && length > 0) memcpy(msg->data, data, length);
+        chan->b_to_a.tail = (chan->b_to_a.tail + 1) % CHANNEL_RING_SIZE;
+        chan->b_to_a.count++;
     }
-
-    chan->tail = (chan->tail + 1) % CHANNEL_RING_SIZE;
-    chan->count++;
     return true;
 }
 
-bool channel_recv(yam_channel_t *chan, yam_message_t *out) {
+bool channel_recv(yam_channel_t *chan, yam_node_id_t receiver, yam_message_t *out) {
     if (!chan || !chan->active) return false;
-    if (chan->count == 0) return false;
 
-    memcpy(out, &chan->ring[chan->head], sizeof(yam_message_t));
-    chan->head = (chan->head + 1) % CHANNEL_RING_SIZE;
-    chan->count--;
-    return true;
+    if (receiver == chan->endpoint_b) {
+        /* B receives from A */
+        if (chan->a_to_b.count == 0) return false;
+        memcpy(out, &chan->a_to_b.ring[chan->a_to_b.head], sizeof(yam_message_t));
+        chan->a_to_b.head = (chan->a_to_b.head + 1) % CHANNEL_RING_SIZE;
+        chan->a_to_b.count--;
+        return true;
+    } else if (receiver == chan->endpoint_a) {
+        /* A receives from B */
+        if (chan->b_to_a.count == 0) return false;
+        memcpy(out, &chan->b_to_a.ring[chan->b_to_a.head], sizeof(yam_message_t));
+        chan->b_to_a.head = (chan->b_to_a.head + 1) % CHANNEL_RING_SIZE;
+        chan->b_to_a.count--;
+        return true;
+    }
+    return false;
 }
 
 void channel_close(yam_channel_t *chan) {
@@ -95,6 +116,9 @@ void channel_close(yam_channel_t *chan) {
     yamgraph_node_destroy(chan->node_id);
 }
 
-bool channel_has_message(yam_channel_t *chan) {
-    return chan && chan->active && chan->count > 0;
+bool channel_has_message(yam_channel_t *chan, yam_node_id_t receiver) {
+    if (!chan || !chan->active) return false;
+    if (receiver == chan->endpoint_b) return chan->a_to_b.count > 0;
+    if (receiver == chan->endpoint_a) return chan->b_to_a.count > 0;
+    return false;
 }

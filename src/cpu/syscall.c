@@ -71,8 +71,18 @@ static i64 sys_clock_gettime(void) {
 
 static i64 sys_wl_create_surface(u64 utitle, i32 x, i32 y, u32 w, u32 h) {
     task_t *t = this_cpu()->current;
-    const char *title = (const char *)utitle;
-    wl_surface_t *s = wl_surface_create(title, x, y, w, h, t->id);
+    char ktitle[WL_TITLE_MAX];
+    ktitle[0] = '\0';
+    ktitle[WL_TITLE_MAX - 1] = '\0';
+    if (utitle) {
+        bool smap = (read_cr4() & CR4_SMAP) != 0;
+        if (smap) __asm__ volatile ("stac");
+        strncpy(ktitle, (const char *)utitle, WL_TITLE_MAX - 1);
+        if (smap) __asm__ volatile ("clac");
+    } else {
+        strncpy(ktitle, "(untitled)", WL_TITLE_MAX - 1);
+    }
+    wl_surface_t *s = wl_surface_create(ktitle, x, y, w, h, t->id);
     if (!s) return -1;
     return (i64)s->id;
 }
@@ -188,18 +198,19 @@ static i64 sys_channel_send(u32 node_id, u32 msg_type, u64 udata, u32 length) {
     
     bool smap = (read_cr4() & CR4_SMAP) != 0;
     if (smap) __asm__ volatile ("stac");
-    bool ret = channel_send(chan, t->id, msg_type, (const void *)udata, length);
+    bool ret = channel_send(chan, t->graph_node, msg_type, (const void *)udata, length);
     if (smap) __asm__ volatile ("clac");
     
     return ret ? 0 : -2;
 }
 
 static i64 sys_channel_recv(u32 node_id, u64 uout) {
+    task_t *t = this_cpu()->current;
     yam_channel_t *chan = channel_get(node_id);
     if (!chan) return -1;
     
     yam_message_t msg;
-    if (!channel_recv(chan, &msg)) return -2;
+    if (!channel_recv(chan, t->graph_node, &msg)) return -2;
     
     bool smap = (read_cr4() & CR4_SMAP) != 0;
     if (smap) __asm__ volatile ("stac");
@@ -210,8 +221,11 @@ static i64 sys_channel_recv(u32 node_id, u64 uout) {
 }
 
 static i64 sys_channel_lookup(u64 uname) {
+    bool smap = (read_cr4() & CR4_SMAP) != 0;
+    if (smap) __asm__ volatile ("stac");
     const char *name = (const char *)uname;
     yam_node_id_t id = yamgraph_find_node_by_name(name);
+    if (smap) __asm__ volatile ("clac");
     return (i64)id;
 }
 

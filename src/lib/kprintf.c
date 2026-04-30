@@ -1,6 +1,6 @@
 /* ============================================================================
  * YamKernel — Kernel Printf Implementation
- * Supports: %d, %u, %x, %X, %p, %s, %c, %%, %ld, %lu, %lx
+ * Supports: %d, %i, %u, %x, %X, %p, %s, %c, %%, %ld,%lu,%lx, %llx, %[0..]xu
  * ============================================================================ */
 
 #include "kprintf.h"
@@ -63,39 +63,82 @@ static int kvsnprintf(char *buf, usize size, const char *fmt, va_list ap) {
         }
         fmt++; /* skip '%' */
 
-        /* Check for 'l' modifier */
+        int width = -1;
+        char pad = ' ';
+        /* Optional field width (%2d %04x ...) */
+        if (*fmt == '0' && fmt[1] >= '1' && fmt[1] <= '9') {
+            pad = '0';
+            fmt++;
+            width = 0;
+            while (*fmt >= '0' && *fmt <= '9')
+                width = width * 10 + (int)(*fmt++ - '0');
+        } else if (*fmt >= '1' && *fmt <= '9') {
+            width = 0;
+            pad = ' ';
+            while (*fmt >= '0' && *fmt <= '9')
+                width = width * 10 + (int)(*fmt++ - '0');
+        }
+
         int is_long = 0;
-        if (*fmt == 'l') {
+        int is_ll = 0;
+        if (*fmt == 'l' && fmt[1] == 'l') {
+            is_ll = 1;
+            fmt += 2;
+        } else if (*fmt == 'l') {
             is_long = 1;
             fmt++;
         }
 
-        char tmp[24];
+        char tmp[32];
         int len;
 
         switch (*fmt) {
             case 'd':
             case 'i': {
-                i64 val = is_long ? va_arg(ap, i64) : (i64)va_arg(ap, int);
+                i64 val;
+                if (is_ll) val = (i64)va_arg(ap, i64);
+                else if (is_long) val = (i64)va_arg(ap, long);
+                else val = (i64)va_arg(ap, int);
                 len = int_to_str(tmp, val);
+                if (width > 0 && len < width) {
+                    for (int i = 0; i < width - len; i++) PUT(pad);
+                }
                 for (int i = 0; i < len; i++) PUT(tmp[i]);
                 break;
             }
             case 'u': {
-                u64 val = is_long ? va_arg(ap, u64) : (u64)va_arg(ap, unsigned);
+                u64 val;
+                if (is_ll) val = va_arg(ap, u64);
+                else if (is_long) val = (u64)va_arg(ap, unsigned long);
+                else val = (u64)(unsigned int)va_arg(ap, unsigned);
                 len = uint_to_str(tmp, val, 10, 0);
+                if (width > 0 && len < width) {
+                    for (int i = 0; i < width - len; i++) PUT(pad);
+                }
                 for (int i = 0; i < len; i++) PUT(tmp[i]);
                 break;
             }
             case 'x': {
-                u64 val = is_long ? va_arg(ap, u64) : (u64)va_arg(ap, unsigned);
+                u64 val;
+                if (is_ll) val = va_arg(ap, u64);
+                else if (is_long) val = (u64)va_arg(ap, unsigned long);
+                else val = (u64)(unsigned int)va_arg(ap, unsigned);
                 len = uint_to_str(tmp, val, 16, 0);
+                if (width > 0 && len < width) {
+                    for (int i = 0; i < width - len; i++) PUT(pad);
+                }
                 for (int i = 0; i < len; i++) PUT(tmp[i]);
                 break;
             }
             case 'X': {
-                u64 val = is_long ? va_arg(ap, u64) : (u64)va_arg(ap, unsigned);
+                u64 val;
+                if (is_ll) val = va_arg(ap, u64);
+                else if (is_long) val = (u64)va_arg(ap, unsigned long);
+                else val = (u64)(unsigned int)va_arg(ap, unsigned);
                 len = uint_to_str(tmp, val, 16, 1);
+                if (width > 0 && len < width) {
+                    for (int i = 0; i < width - len; i++) PUT(pad);
+                }
                 for (int i = 0; i < len; i++) PUT(tmp[i]);
                 break;
             }

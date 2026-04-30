@@ -17,6 +17,12 @@
 /* Relative axes */
 #define REL_X       0x00
 #define REL_Y       0x01
+#define REL_WHEEL   0x08
+
+/* Standard Mouse Buttons */
+#define BTN_LEFT    0x110
+#define BTN_RIGHT   0x111
+#define BTN_MIDDLE  0x112
 
 /* Key states */
 #define KEY_RELEASED    0

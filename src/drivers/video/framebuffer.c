@@ -66,15 +66,17 @@ void fb_clear(u32 color) {
  * instead of calling fb_put_pixel 128 times per character */
 static void fb_draw_char(u32 col, u32 row, char c, u32 fg, u32 bg) {
     if (!g_pixels) return;
+    fb_draw_char_at(g_pixels, g_pitch4, col * FONT_W, row * FONT_H, c, fg, bg);
+}
+
+void fb_draw_char_at(u32 *pixels, u32 pitch_pixels, int x0, int y0, char c, u32 fg, u32 bg) {
+    if (!pixels) return;
     int idx = (int)c - 32;
     if (idx < 0 || idx >= 95) idx = 0; /* Fallback to space */
 
-    u32 x0 = col * FONT_W;
-    u32 y0 = row * FONT_H;
-
     for (int y = 0; y < FONT_H; y++) {
         u8 row_bits = yam_font_data[idx][y];
-        u32 *scanline = g_pixels + (y0 + y) * g_pitch4 + x0;
+        u32 *scanline = pixels + (y0 + y) * pitch_pixels + x0;
         /* Unrolled 8-pixel row write */
         scanline[0] = (row_bits & 0x80) ? fg : bg;
         scanline[1] = (row_bits & 0x40) ? fg : bg;
@@ -137,6 +139,12 @@ void fb_putchar(char c, u32 fg, u32 bg) {
 void fb_write(const char *str, u32 fg) {
     while (*str) {
         fb_putchar(*str++, fg, FB_COLOR_DARK_BG);
+    }
+}
+
+void fb_puts_user(const char *s, usize len) {
+    for (usize i = 0; i < len; i++) {
+        fb_putchar(s[i], FB_COLOR_WHITE, FB_COLOR_DARK_BG);
     }
 }
 

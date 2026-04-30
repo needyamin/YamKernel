@@ -73,7 +73,7 @@ static void browser_load_page(u32 sid, wl_user_buffer_t *buf) {
 }
 
 void _start(void) {
-    i32 sid = wl_create_surface("YamBrowser", 150, 420, 600, 400);
+    i32 sid = wl_create_surface("Browser", 150, 420, 600, 400);
     if (sid < 0) exit(1);
     void *buffer_vaddr = (void *)0x30000000;
     if (wl_map_buffer(sid, buffer_vaddr) < 0) exit(2);

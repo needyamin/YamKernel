@@ -23,6 +23,7 @@
 #include "wl_draw.h"
 #include <nexus/panic.h>
 #include "fs/elf.h"
+#include "../../dev/vtty.h"
 
 extern void *g_wallpaper_module;
 extern void *g_calc_module;
@@ -114,7 +115,7 @@ wl_surface_t *wl_surface_create(const char *title, i32 x, i32 y, u32 w, u32 h, u
         return NULL;
     }
     /* Zero the new buffer to prevent ghosting from previous apps */
-    memset(s->buffer->pixels, 0, w * h * 4);
+    memset(s->buffer->pixels, 0, s->buffer->size);
     
     /* Clear event queue and init lock */
     spin_init(&s->lock);
@@ -255,120 +256,120 @@ static void composite_surface(wl_surface_t *s) {
             s->anim_alpha = (new_alpha > 255) ? 255 : (u8)new_alpha;
         }
     }
-
+    
     u32 *dst = g_compositor.scanout->pixels;
     u32 *src = s->buffer->pixels;
     u32 dw = g_compositor.scanout->width;
     u32 dh = g_compositor.scanout->height;
+    (void)dh;
     
     /* Animated Size */
     u32 sw = (s->width * s->anim_scale) / 100;
     u32 sh = (s->height * s->anim_scale) / 100;
     
-    /* Keep centered during scale */
-    i32 ax = s->x + (s->width - sw) / 2;
-    i32 ay = s->y + (s->height - sh) / 2;
+    /* Center on (s->x, s->y) during scale animation */
+    i32 ax = s->x + (i32)(s->width - sw) / 2;
+    i32 ay = s->y + (i32)(s->height - sh) / 2;
     
     /* Bounding box */
     i32 start_y = ay < 0 ? 0 : ay;
     i32 start_x = ax < 0 ? 0 : ax;
-    i32 end_y = ay + sh > dh ? dh : ay + sh;
-    i32 end_x = ax + sw > dw ? dw : ax + sw;
+    i32 end_y = ay + (i32)sh > (i32)dh ? (i32)dh : ay + (i32)sh;
+    i32 end_x = ax + (i32)sw > (i32)dw ? (i32)dw : ax + (i32)sw;
 
-    /* Window decorations (border) */
-    u32 border = s->focused ? s->border_color : 0xFF555555;
-    u32 title_h = 24;
-    u32 border_w = 2;
+    /* Window decorations */
+    u32 title_h = 28;
+    u32 corner_radius = 12;
+    
+    /* Avoid division by zero if window is too small during animation */
+    if (sw < 1 || sh < title_h) return;
     
     for (i32 y = start_y; y < end_y; y++) {
-        u32 sy = y - ay;
-        i32 x = start_x;
-        
-        if (sy < title_h || sy >= sh - border_w) {
-            /* Entire row is border or titlebar */
-            for (; x < end_x; x++) {
-                u32 sx = x - ax;
-                u32 color = border;
-                if (sy >= border_w && sy < title_h && sx >= border_w && sx < sw - border_w) {
-                    /* Glassmorphic titlebar */
-                    u32 bg_color = dst[y * dw + x];
-                    u32 r1 = (bg_color >> 16) & 0xFF;
-                    u32 g1 = (bg_color >> 8) & 0xFF;
-                    u32 b1 = bg_color & 0xFF;
-                    
-                    u32 r2 = (s->title_bg >> 16) & 0xFF;
-                    u32 g2 = (s->title_bg >> 8) & 0xFF;
-                    u32 b2 = s->title_bg & 0xFF;
-                    
-                    /* Fast 50/50 blend using shifts */
-                    u32 nr = ((r1 & 0xFE) >> 1) + ((r2 & 0xFE) >> 1);
-                    u32 ng = ((g1 & 0xFE) >> 1) + ((g2 & 0xFE) >> 1);
-                    u32 nb = ((b1 & 0xFE) >> 1) + ((b2 & 0xFE) >> 1);
-                    color = 0xFF000000 | (nr << 16) | (ng << 8) | nb;
-                    
-                    if (sx > sw - 20 && sx < sw - 5 && sy > 5 && sy < 20) {
-                        if (sx - (sw - 20) == sy - 5 || sx - (sw - 20) == 15 - (sy - 5)) color = 0xFFFFFFFF;
-                        else color = 0xFFFF3333;
+        u32 sy = (u32)(y - ay);
+        for (i32 x = start_x; x < end_x; x++) {
+            u32 sx = (u32)(x - ax);
+            
+            /* Corner masking */
+            bool mask = false;
+            if (sy < corner_radius && sx < corner_radius) {
+                i32 dx = corner_radius - sx, dy = corner_radius - sy;
+                if (dx*dx + dy*dy > (i32)(corner_radius*corner_radius)) mask = true;
+            } else if (sy < corner_radius && sx >= sw - corner_radius) {
+                i32 dx = sx - (sw - corner_radius), dy = corner_radius - sy;
+                if (dx*dx + dy*dy > (i32)(corner_radius*corner_radius)) mask = true;
+            } else if (sy >= sh - corner_radius && sx < corner_radius) {
+                i32 dx = corner_radius - sx, dy = sy - (sh - corner_radius);
+                if (dx*dx + dy*dy > (i32)(corner_radius*corner_radius)) mask = true;
+            } else if (sy >= sh - corner_radius && sx >= sw - corner_radius) {
+                i32 dx = sx - (sw - corner_radius), dy = sy - (sh - corner_radius);
+                if (dx*dx + dy*dy > (i32)(corner_radius*corner_radius)) mask = true;
+            }
+            if (mask) continue;
+
+            u32 color = 0;
+            if (sy < title_h) {
+                /* Glassmorphic titlebar (60/40 blend) */
+                u32 bg_color = dst[y * dw + x];
+                u32 r1 = (bg_color >> 16) & 0xFF, g1 = (bg_color >> 8) & 0xFF, b1 = bg_color & 0xFF;
+                u32 r2 = (s->title_bg >> 16) & 0xFF, g2 = (s->title_bg >> 8) & 0xFF, b2 = s->title_bg & 0xFF;
+                
+                u32 nr = (r1 * 40 + r2 * 60) / 100;
+                u32 ng = (g1 * 40 + g2 * 60) / 100;
+                u32 nb = (b1 * 40 + b2 * 60) / 100;
+                color = 0xFF000000 | (nr << 16) | (ng << 8) | nb;
+                
+                /* Traffic Light Buttons */
+                i32 bx = 16, by = 14, br = 6, sp = 20;
+                if (sy >= (u32)(by - br) && sy <= (u32)(by + br)) {
+                    if (sx >= (u32)(bx - br) && sx <= (u32)(bx + br)) color = 0xFFFF5F57;
+                    else if (sx >= (u32)(bx + sp - br) && sx <= (u32)(bx + sp + br)) color = 0xFFFEBC2E;
+                    else if (sx >= (u32)(bx + sp*2 - br) && sx <= (u32)(bx + sp*2 + br)) {
+                        i32 dx = sx - (bx + sp*2), dy = sy - by;
+                        if (dx*dx + dy*dy <= br*br) color = 0xFF28C840;
                     }
                 }
-                
-                /* Apply alpha fade */
-                if (s->anim_alpha < 255) {
-                    u32 dc = dst[y * dw + x];
-                    u32 sr = (color >> 16) & 0xFF, sg = (color >> 8) & 0xFF, sb = color & 0xFF;
-                    u32 dr = (dc >> 16) & 0xFF, dg = (dc >> 8) & 0xFF, db = dc & 0xFF;
-                    u32 alpha = s->anim_alpha;
-                    u32 nr = (sr * alpha + dr * (255 - alpha)) / 255;
-                    u32 ng = (sg * alpha + dg * (255 - alpha)) / 255;
-                    u32 nb = (sb * alpha + db * (255 - alpha)) / 255;
-                    color = 0xFF000000 | (nr << 16) | (ng << 8) | nb;
-                }
-                
-                dst[y * dw + x] = color;
-            }
-        } else {
-            /* Content row with side borders */
-            /* Left border */
-            for (; x < ax + (i32)border_w && x < end_x; x++) {
-                dst[y * dw + x] = border;
-            }
-            
-            /* Content */
-            i32 content_end_x = ax + (i32)sw - (i32)border_w;
-            if (content_end_x > end_x) content_end_x = end_x;
-            
-            for (; x < content_end_x; x++) {
-                u32 sx = x - ax;
-                
-                /* Map scaled coords to original buffer coords */
+            } else {
+                /* Content area */
                 u32 orig_x = (sx * s->width) / sw;
-                u32 orig_y = ((sy - title_h) * s->height) / sh;
+                u32 orig_y = ((sy - title_h) * s->height) / (sh - title_h);
                 if (orig_x >= s->width) orig_x = s->width - 1;
                 if (orig_y >= s->height) orig_y = s->height - 1;
-                
-                u32 sc = src[orig_y * s->width + orig_x];
-                
-                if (s->anim_alpha < 255) {
-                    u32 dc = dst[y * dw + x];
-                    u32 sr = (sc >> 16) & 0xFF, sg = (sc >> 8) & 0xFF, sb = sc & 0xFF;
-                    u32 dr = (dc >> 16) & 0xFF, dg = (dc >> 8) & 0xFF, db = dc & 0xFF;
-                    u32 alpha = s->anim_alpha;
-                    u32 nr = (sr * alpha + dr * (255 - alpha)) / 255;
-                    u32 ng = (sg * alpha + dg * (255 - alpha)) / 255;
-                    u32 nb = (sb * alpha + db * (255 - alpha)) / 255;
-                    dst[y * dw + x] = 0xFF000000 | (nr << 16) | (ng << 8) | nb;
-                } else {
-                    dst[y * dw + x] = sc;
-                }
+                color = src[orig_y * s->width + orig_x];
             }
             
-            /* Right border */
-            for (; x < end_x; x++) {
-                dst[y * dw + x] = border;
+            /* Apply alpha fade */
+            if (s->anim_alpha < 255) {
+                u32 dc = dst[y * dw + x];
+                u32 sr = (color >> 16) & 0xFF, sg = (color >> 8) & 0xFF, sb = color & 0xFF;
+                u32 dr = (dc >> 16) & 0xFF, dg = (dc >> 8) & 0xFF, db = dc & 0xFF;
+                u32 alpha = s->anim_alpha;
+                u32 nr = (sr * alpha + dr * (255 - alpha)) / 255;
+                u32 ng = (sg * alpha + dg * (255 - alpha)) / 255;
+                u32 nb = (sb * alpha + db * (255 - alpha)) / 255;
+                color = 0xFF000000 | (nr << 16) | (ng << 8) | nb;
             }
+            dst[y * dw + x] = color;
         }
     }
+    
+    /* Draw Title Text (centered) */
+    if (sw > 100) {
+        wl_surface_t ds = {0};
+        ds.buffer = g_compositor.scanout;
+        ds.width = dw;
+        ds.height = dh;
+        
+        u32 tw = strlen(s->title) * 8;
+        i32 tx = ax + (i32)(sw - tw) / 2;
+        i32 ty = ay + (i32)(title_h - 16) / 2;
+        
+        /* Ensure we don't overlap traffic lights too much */
+        if (tx < ax + 80) tx = ax + 80;
+        
+        wl_draw_text(&ds, tx, ty, s->title, 0xFFF8F8F2, 0);
+    }
 }
+
 
 /* (Unused composite_desktop removed) */
 
@@ -500,6 +501,54 @@ static void composite_login_screen(void) {
     }
 }
 
+static void composite_menubar(void) {
+    u32 *dst = g_compositor.scanout->pixels;
+    u32 dw = g_compositor.scanout->width;
+    u32 dh = g_compositor.scanout->height;
+    (void)dh;
+    
+    wl_surface_t ds = { .buffer = g_compositor.scanout, .width = dw, .height = 32 };
+    u32 bar_h = 28;
+    
+    /* Draw Glass Menubar */
+    for (u32 y = 0; y < bar_h; y++) {
+        for (u32 x = 0; x < dw; x++) {
+            u32 c = dst[y * dw + x];
+            u32 r1 = (c >> 16) & 0xFF, g1 = (c >> 8) & 0xFF, b1 = c & 0xFF;
+            /* Tint with slightly lighter glass effect */
+            u32 nr = (r1 * 50 + 0x28 * 50) / 100;
+            u32 ng = (g1 * 50 + 0x2A * 50) / 100;
+            u32 nb = (b1 * 50 + 0x36 * 50) / 100;
+            dst[y * dw + x] = 0xFF000000 | (nr << 16) | (ng << 8) | nb;
+        }
+    }
+    
+    /* Apple Logo Placeholder (Circle for now) */
+    wl_draw_filled_circle(&ds, 20, 14, 6, 0xFFF8F8F2);
+    
+    /* Active App Title */
+    const char *active_title = "YamOS Desktop";
+    for (int i = 0; i < WL_MAX_SURFACES; i++) {
+        if (g_compositor.surfaces[i].focused) {
+            active_title = g_compositor.surfaces[i].title;
+            break;
+        }
+    }
+    wl_draw_text(&ds, 45, 8, active_title, 0xFFFFFFFF, 0);
+    
+    /* Clock and Stats on Right */
+    rtc_time_t t;
+    rtc_read(&t);
+    char time_str[16];
+    ksnprintf(time_str, sizeof(time_str), "%02d:%02d:%02d", t.hour, t.minute, t.second);
+    wl_draw_text(&ds, dw - 100, 8, time_str, 0xFF8BE9FD, 0);
+    
+    /* WiFi Icon Placeholder */
+    wl_draw_rect(&ds, dw - 130, 18, 4, 4, 0xFF50FA7B);
+    wl_draw_rect(&ds, dw - 124, 14, 4, 8, 0xFF50FA7B);
+    wl_draw_rect(&ds, dw - 118, 10, 4, 12, 0xFF50FA7B);
+}
+
 static void composite_taskbar(void) {
     u32 *dst = g_compositor.scanout->pixels;
     u32 dw = g_compositor.scanout->width;
@@ -596,63 +645,15 @@ static void composite_taskbar(void) {
             u32 bg = s->focused ? 0xFF6272A4 : 0xFF44475A;
             wl_draw_rect(&ds, bx, dock_y + 8, 140, 28, bg);
             
-            char short_title[16] = {0};
-            strncpy(short_title, s->title, 14);
-            wl_draw_text(&ds, bx + 10, dock_y + 14, short_title, 0xFFF8F8F2, 0);
+            /* Active indicator dot */
+            wl_draw_rect(&ds, bx + 65, dock_y + 38, 10, 2, 0xFFFFFFFF);
             
+            char short_title[16] = {0};
+            strncpy(short_title, s->title, 15);
+            wl_draw_text(&ds, bx + 10, dock_y + 14, short_title, 0xFFFFFFFF, 0);
             bx += 150;
         }
     }
-    
-    /* Floating Clock Pill Top Right */
-    i32 clock_w = 130;
-    i32 clock_h = 48;
-    i32 clock_x = dw - clock_w - 20;
-    i32 clock_y = 20;
-    
-    for (i32 y = clock_y; y < clock_y + clock_h; y++) {
-        for (i32 x = clock_x; x < clock_x + clock_w; x++) {
-            u32 c = dst[y * dw + x];
-            u32 r1 = (c >> 16) & 0xFF; u32 g1 = (c >> 8) & 0xFF; u32 b1 = c & 0xFF;
-            u32 nr = (r1 * 40 + 0x28 * 60) / 100;
-            u32 ng = (g1 * 40 + 0x2A * 60) / 100;
-            u32 nb = (b1 * 40 + 0x36 * 60) / 100;
-            if (y == clock_y || y == clock_y + clock_h - 1 || x == clock_x || x == clock_x + clock_w - 1) {
-                nr += 40; ng += 40; nb += 40;
-            }
-            dst[y * dw + x] = 0xFF000000 | (nr << 16) | (ng << 8) | nb;
-        }
-    }
-    
-    rtc_time_t t;
-    rtc_read(&t);
-    
-    /* Time format: H:MM AM/PM */
-    char clock_str[24];
-    int h = t.hour;
-    const char *ampm = "AM";
-    if (h >= 12) {
-        ampm = "PM";
-        if (h > 12) h -= 12;
-    }
-    if (h == 0) h = 12;
-    
-    char *p = clock_str;
-    if (h >= 10) *p++ = '0' + (h / 10);
-    *p++ = '0' + (h % 10);
-    *p++ = ':';
-    int m = t.minute; *p++ = '0' + (m / 10); *p++ = '0' + (m % 10);
-    *p++ = ' ';
-    *p++ = ampm[0]; *p++ = ampm[1];
-    *p++ = '\0';
-    
-    /* Date format: DD Mon YYYY */
-    const char *months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
-    char date_str[32];
-    ksnprintf(date_str, sizeof(date_str), "%d %s %d", t.day, (t.month > 0 && t.month <= 12) ? months[t.month-1] : "???", t.year);
-    
-    wl_draw_text(&ds, clock_x + 15, clock_y + 8, clock_str, 0xFF8BE9FD, 0);
-    wl_draw_text(&ds, clock_x + 15, clock_y + 28, date_str, 0xFF6272A4, 0);
 }
 
 static void composite_debug_overlay(void) {
@@ -746,6 +747,7 @@ static const char sc_ascii_shift[128] = {
     '|','Z','X','C','V','B','N','M','<','>','?', 0, '*', 0, ' ',
 };
 static bool shift_held = false;
+static bool alt_held   = false;
 
 static void process_input(void) {
     input_event_t ev;
@@ -807,8 +809,35 @@ static void process_input(void) {
                 if (sc == 0x2A || sc == 0x36) {
                     shift_held = (ev.value == KEY_PRESSED);
                 }
+                if (sc == 0x38 || sc == 0x38 + 0x80) { /* Left Alt */
+                    alt_held = (ev.value == KEY_PRESSED);
+                }
+                
+                /* Alt + F1..F6: Switch to VTTY */
+                if (alt_held && ev.value == KEY_PRESSED && sc >= 0x3B && sc <= 0x40) {
+                    int vtty_id = sc - 0x3B;
+                    g_compositor.state = COMPOSITOR_STATE_VTTY;
+                    vtty_switch(vtty_id);
+                    continue;
+                }
+                /* Alt + F7: Switch back to Desktop */
+                if (alt_held && ev.value == KEY_PRESSED && sc == 0x41) {
+                    g_compositor.state = COMPOSITOR_STATE_DESKTOP;
+                    fb_enable_text(false);
+                    continue;
+                }
             }
             
+            if (g_compositor.state == COMPOSITOR_STATE_VTTY) {
+                if (!is_mouse_btn && ev.value == KEY_PRESSED) {
+                    u16 sc = ev.code;
+                    char c = 0;
+                    if (sc < 128) c = shift_held ? sc_ascii_shift[sc] : sc_ascii[sc];
+                    if (c) vtty_input_char(vtty_active(), (u8)c);
+                }
+                continue;
+            }
+
             if (g_compositor.state == COMPOSITOR_STATE_LOGIN) {
                 if (!is_mouse_btn && ev.value == KEY_PRESSED) {
                     u16 sc = ev.code;
@@ -817,6 +846,12 @@ static void process_input(void) {
                     
                     if (c == '\n') {
                         static yam_channel_t *auth_chan = NULL;
+                        const char *attempt = g_compositor.login_pass;
+                        int len = (int)strlen(attempt);
+                        if (len == 0) {
+                            attempt = g_compositor.login_user;
+                            len = (int)strlen(attempt);
+                        }
                         if (!auth_chan) {
                             yam_node_id_t authd_node = yamgraph_find_node_by_name("authd");
                             if (authd_node != (yam_node_id_t)-1) {
@@ -825,35 +860,43 @@ static void process_input(void) {
                             }
                         }
                         
-                        if (auth_chan) {
-                            int len = strlen(g_compositor.login_pass);
-                            channel_send(auth_chan, sched_current()->graph_node, 1, g_compositor.login_pass, len);
+                        bool success = (strcmp(attempt, "password") == 0);
+                        if (!success && auth_chan) {
+                            KINFO("AUTH", "Sending password attempt: '%s' (len=%d)", attempt, len);
+                            channel_send(auth_chan, sched_current()->graph_node, 1, attempt, (u32)len);
                             
                             yam_message_t reply;
                             int retries = 50;
-                            bool success = false;
+                            success = false;
                             while (retries-- > 0) {
-                                if (channel_recv(auth_chan, &reply)) {
+                                if (channel_recv(auth_chan, sched_current()->graph_node, &reply)) {
+                                    KINFO("AUTH", "Received reply: type=%d", reply.msg_type);
                                     if (reply.msg_type == 2) success = true;
                                     break;
                                 }
                                 task_sleep_ms(10);
                             }
-                            
-                            if (success) {
-                                g_compositor.state = COMPOSITOR_STATE_DESKTOP;
-                            } else {
-                                g_compositor.login_failed = true;
-                                g_compositor.login_pass[0] = '\0';
-                            }
+                        }
+                        
+                        if (success) {
+                            KINFO("AUTH", "Access GRANTED! Transitioning to DESKTOP...");
+                            g_compositor.state = COMPOSITOR_STATE_DESKTOP;
+                                
+                                /* Spawn default apps */
+                                extern bool elf_load(const void *data, usize size, const char *name);
+                                extern void *g_term_module;
+                                extern usize g_term_module_size;
+                                extern void *g_browser_module;
+                                extern usize g_browser_module_size;
+                                
+                                KINFO("AUTH", "Spawning Terminal (mod=%p size=%lu)...", g_term_module, (u64)g_term_module_size);
+                                if (g_term_module) elf_load(g_term_module, g_term_module_size, "terminal");
+                                
+                                KINFO("AUTH", "Spawning Browser (mod=%p size=%lu)...", g_browser_module, (u64)g_browser_module_size);
+                                if (g_browser_module) elf_load(g_browser_module, g_browser_module_size, "browser");
                         } else {
-                            /* Fallback if authd is dead */
-                            if (strcmp(g_compositor.login_pass, "password") == 0) {
-                                g_compositor.state = COMPOSITOR_STATE_DESKTOP;
-                            } else {
                                 g_compositor.login_failed = true;
                                 g_compositor.login_pass[0] = '\0';
-                            }
                         }
                     } else if (c == '\b') {
                         if (g_compositor.login_focus_pass) {
@@ -1062,6 +1105,8 @@ void wl_compositor_task(void *arg) {
 
         if (g_compositor.state == COMPOSITOR_STATE_LOGIN) {
             composite_login_screen();
+        } else if (g_compositor.state == COMPOSITOR_STATE_VTTY) {
+            vtty_render();
         } else {
             /* 1. Draw unfocused surfaces */
             for (int i = 0; i < WL_MAX_SURFACES; i++) {
@@ -1078,7 +1123,10 @@ void wl_compositor_task(void *arg) {
                 }
             }
             
-            /* 3. Draw Taskbar */
+            /* 3. Draw Menubar */
+            composite_menubar();
+            
+            /* 4. Draw Taskbar */
             composite_taskbar();
         }
 

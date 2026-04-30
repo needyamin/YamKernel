@@ -66,11 +66,15 @@ AUDIO_ELF   := $(BUILD_DIR)/audio.elf
 IMG_ELF     := $(BUILD_DIR)/image.elf
 WIFI_ELF    := $(BUILD_DIR)/wifi.elf
 AUTHD_ELF   := $(BUILD_DIR)/authd.elf
+# User-space libc
+LIBC_DIR := src/os/lib/libc
+LIBC_SRCS := $(LIBC_DIR)/stdio.c $(LIBC_DIR)/stdlib.c $(LIBC_DIR)/string.c $(LIBC_DIR)/ctype.c
+LIBC_OBJS := $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(LIBC_SRCS))
 
 USER_CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-stack-check \
                -fno-pie -fno-pic -no-pie -static -m64 -march=x86-64 -mno-80387 -mno-mmx \
                -mno-sse -mno-sse2 -mno-red-zone -O2 -g \
-               -Isrc -Isrc/include -Isrc/os/apps
+               -Isrc -Isrc/include -Isrc/os/lib -Isrc/os/lib/libc
 
 # ============================================================================
 #  Targets
@@ -88,7 +92,7 @@ $(KERNEL_ELF): $(OBJS)
 	$(LD) $(LDFLAGS) -o $@ $^
 	@echo "[LINK] $@"
 
-# Compile C sources
+# Compile C sources (Kernel)
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(KERNEL_CFLAGS) -c $< -o $@
@@ -116,54 +120,55 @@ $(WALLPAPER_BIN): assets/owl_wallpaper.jpg $(IMG2RAW)
 	@mkdir -p $(dir $@)
 	$(IMG2RAW) $< $@ 1920
 
-$(USER_ELF): src/os/apps/test_app.c src/os/apps/user.ld
+# User Apps (Linked with libc)
+$(USER_ELF): src/os/apps/test_app.c src/os/apps/user.ld $(LIBC_OBJS)
 	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/test_app.c
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/test_app.c $(LIBC_OBJS)
 	@echo "[USER] $@"
 
-$(CALC_ELF): src/os/apps/calculator.c src/os/apps/font_data.c src/os/apps/user.ld
+$(CALC_ELF): src/os/apps/calculator.c src/os/apps/font_data.c src/os/apps/user.ld $(LIBC_OBJS)
 	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/calculator.c src/os/apps/font_data.c
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/calculator.c src/os/apps/font_data.c $(LIBC_OBJS)
 	@echo "[CALC] $@"
 
-$(TERM_ELF): src/os/apps/terminal.c src/os/apps/font_data.c src/os/apps/user.ld
+$(TERM_ELF): src/os/apps/terminal.c src/os/apps/font_data.c src/os/apps/user.ld $(LIBC_OBJS)
 	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/terminal.c src/os/apps/font_data.c
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/terminal.c src/os/apps/font_data.c $(LIBC_OBJS)
 	@echo "[TERM] $@"
 
-$(BROWSER_ELF): src/os/apps/browser.c src/os/apps/font_data.c src/os/apps/user.ld
+$(BROWSER_ELF): src/os/apps/browser.c src/os/apps/font_data.c src/os/apps/user.ld $(LIBC_OBJS)
 	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/browser.c src/os/apps/font_data.c
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/browser.c src/os/apps/font_data.c $(LIBC_OBJS)
 	@echo "[BROWSER] $@"
 
-$(NET_ELF): src/os/drivers/net_service.c src/os/apps/user.ld
+$(NET_ELF): src/os/drivers/net_service.c src/os/apps/user.ld $(LIBC_OBJS)
 	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/net_service.c
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/net_service.c $(LIBC_OBJS)
 	@echo "[DRV_NET] $@"
 
-$(VIDEO_ELF): src/os/drivers/video.c src/os/apps/user.ld
+$(VIDEO_ELF): src/os/drivers/video.c src/os/apps/user.ld $(LIBC_OBJS)
 	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/video.c
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/video.c $(LIBC_OBJS)
 	@echo "[DRV_VID] $@"
 
-$(AUDIO_ELF): src/os/drivers/audio.c src/os/apps/user.ld
+$(AUDIO_ELF): src/os/drivers/audio.c src/os/apps/user.ld $(LIBC_OBJS)
 	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/audio.c
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/audio.c $(LIBC_OBJS)
 	@echo "[DRV_AUD] $@"
 
-$(IMG_ELF): src/os/drivers/image.c src/os/apps/user.ld
+$(IMG_ELF): src/os/drivers/image.c src/os/apps/user.ld $(LIBC_OBJS)
 	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/image.c
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/image.c $(LIBC_OBJS)
 	@echo "[DRV_IMG] $@"
 
-$(WIFI_ELF): src/os/drivers/wifi.c src/os/apps/user.ld
+$(WIFI_ELF): src/os/drivers/wifi.c src/os/apps/user.ld $(LIBC_OBJS)
 	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/wifi.c
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/wifi.c $(LIBC_OBJS)
 	@echo "[DRV_WIFI] $@"
 
-$(AUTHD_ELF): src/os/apps/authd.c src/os/apps/user.ld
+$(AUTHD_ELF): src/os/apps/authd.c src/os/apps/user.ld $(LIBC_OBJS)
 	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/authd.c
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/authd.c $(LIBC_OBJS)
 	@echo "[SVC_AUTH] $@"
 
 # ============================================================================

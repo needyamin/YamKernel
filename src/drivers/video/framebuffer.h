@@ -25,6 +25,8 @@ void fb_init(struct limine_framebuffer *fb);
 void fb_clear(u32 color);
 void fb_putchar(char c, u32 fg, u32 bg);
 void fb_write(const char *str, u32 fg);
+void fb_puts_user(const char *s, usize len);
+void fb_draw_char_at(u32 *pixels, u32 pitch_pixels, int x, int y, char c, u32 fg, u32 bg);
 void fb_set_cursor(u32 col, u32 row);
 void fb_scroll(void);
 void fb_put_pixel(u32 x, u32 y, u32 color);

@@ -66,7 +66,8 @@ typedef struct wl_surface {
 /* Compositor system state */
 typedef enum {
     COMPOSITOR_STATE_LOGIN = 0,
-    COMPOSITOR_STATE_DESKTOP
+    COMPOSITOR_STATE_DESKTOP,
+    COMPOSITOR_STATE_VTTY
 } compositor_state_t;
 
 /* Compositor state */

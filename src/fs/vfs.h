@@ -41,9 +41,12 @@ typedef struct dentry {
 typedef struct file {
     dentry_t          *dentry;
     file_operations_t *fops;
-    usize             pos;          /* current seek position */
+    usize             offset;       /* current seek position */
+    usize             pos;          /* alias kept for compatibility */
     u32               flags;        /* O_RDONLY, O_WRONLY, O_NONBLOCK */
     u32               ref_count;
+    int               mount_idx;   /* which VFS mount this file belongs to */
+    char              path[256];    /* full absolute path */
     void              *private_data; /* pipe/socket specific data */
 } file_t;
 
@@ -57,10 +60,14 @@ int fd_alloc(file_t *file);
 file_t *fd_get(int fd);
 void fd_free(int fd);
 
-int sys_open(const char *pathname, u32 flags);
-int sys_close(int fd);
-isize sys_read(int fd, void *buf, usize count);
-isize sys_write(int fd, const void *buf, usize count);
+int    sys_open(const char *pathname, u32 flags);
+int    sys_close(int fd);
+isize  sys_read(int fd, void *buf, usize count);
+isize  sys_write(int fd, const void *buf, usize count);
+isize  sys_lseek(int fd, isize offset, int whence);
+
+/* fb console output for stdout/stderr */
+void fb_puts_user(const char *s, usize len);
 
 /* Filesystem skeletons */
 void fat32_init(void);

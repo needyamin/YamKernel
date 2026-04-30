@@ -30,6 +30,8 @@ static void elf_user_entry(void *arg) {
     u64 entry = ba->entry;
     u64 *pml4 = ba->pml4;
 
+    kprintf("[ELF] Transitioning to user mode: entry=0x%lx, pml4=0x%lx\n", entry, (u64)pml4);
+
     /* Assign the user pml4 to this task so the scheduler will reload CR3 */
     task_t *self = sched_current();
     self->pml4 = pml4;
