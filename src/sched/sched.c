@@ -14,6 +14,7 @@
 #include "../lib/kprintf.h"
 #include "../lib/string.h"
 #include "../cpu/cpuid.h"
+#include "../cpu/smp.h"
 #include "../nexus/graph.h"
 
 static kmem_cache_t *task_cache;
@@ -33,6 +34,9 @@ static const u32 nice_to_weight[40] = {
 
 #define NICE_TO_IDX(n) ((n) + 20)
 #define SCHED_INTERACTIVE_QUANTUM_TICKS 2
+#define SCHED_LATENCY_TICKS 8
+#define SCHED_MIN_GRANULARITY_TICKS 1
+#define SCHED_MAX_GRANULARITY_TICKS 6
 
 /* Per-CPU run queues */
 static runqueue_t per_cpu_rq[MAX_CPUS];
@@ -60,6 +64,7 @@ static void rq_insert(runqueue_t *rq, task_t *t) {
     for (u32 i = rq->count; i > lo; i--) rq->tasks[i] = rq->tasks[i-1];
     rq->tasks[lo] = t;
     rq->count++;
+    rq->load_weight += t->weight ? t->weight : 1;
 
     if (rq->count == 1 || t->vruntime < rq->min_vruntime)
         rq->min_vruntime = t->vruntime;
@@ -72,7 +77,11 @@ static task_t *rq_pick_next(runqueue_t *rq) {
     /* Shift left */
     for (u32 i = 0; i < rq->count - 1; i++) rq->tasks[i] = rq->tasks[i+1];
     rq->count--;
+    if (rq->load_weight >= (t->weight ? t->weight : 1)) rq->load_weight -= (t->weight ? t->weight : 1);
+    else rq->load_weight = 0;
     rq->min_vruntime = (rq->count > 0) ? rq->tasks[0]->vruntime : 0;
+    rq->nr_switches++;
+    rq->last_pick_id = t->id;
     return t;
 }
 
@@ -86,6 +95,40 @@ static u32 weight_for_nice(i8 nice) {
     if (idx < 0) idx = 0;
     if (idx >= 40) idx = 39;
     return nice_to_weight[idx];
+}
+
+static u32 sched_effective_slice_ticks(runqueue_t *rq, task_t *t) {
+    u32 runnable = rq->count + 1;
+    if (runnable == 0) runnable = 1;
+
+    u32 base = SCHED_LATENCY_TICKS / runnable;
+    if (base < SCHED_MIN_GRANULARITY_TICKS) base = SCHED_MIN_GRANULARITY_TICKS;
+    if (base > SCHED_MAX_GRANULARITY_TICKS) base = SCHED_MAX_GRANULARITY_TICKS;
+
+    if (t && t->nice < 0 && base < SCHED_MAX_GRANULARITY_TICKS) base++;
+    if (t && t->nice > 5 && base > SCHED_MIN_GRANULARITY_TICKS) base--;
+    if (t && t->ai_hint == AI_HINT_REALTIME && base < SCHED_MAX_GRANULARITY_TICKS) base++;
+    if (t && t->ai_hint == AI_HINT_BATCH && base > SCHED_MIN_GRANULARITY_TICKS) base--;
+    return base;
+}
+
+static u32 sched_pick_cpu_for_task(task_t *t) {
+    u32 sched_cpus = smp_sched_cpu_count();
+    if (sched_cpus == 0) sched_cpus = 1;
+    if (sched_cpus > MAX_CPUS) sched_cpus = MAX_CPUS;
+
+    u32 best_cpu = 0;
+    u32 best_count = 0xFFFFFFFFu;
+    for (u32 cpu = 0; cpu < sched_cpus; cpu++) {
+        if (t && !(t->cpu_affinity & (1ULL << cpu))) continue;
+        runqueue_t *rq = &per_cpu_rq[cpu];
+        u32 count = __atomic_load_n(&rq->count, __ATOMIC_RELAXED);
+        if (count < best_count) {
+            best_count = count;
+            best_cpu = cpu;
+        }
+    }
+    return best_cpu;
 }
 
 task_t *sched_spawn(const char *name, void (*entry)(void *), void *arg, u8 prio) {
@@ -144,8 +187,9 @@ task_t *sched_spawn(const char *name, void (*entry)(void *), void *arg, u8 prio)
         t->parent->children[t->parent->child_count++] = t;
     }
 
-    /* Add to CPU 0's run queue (load balancer will migrate later) */
-    runqueue_t *rq = &per_cpu_rq[0];
+    u32 target_cpu = sched_pick_cpu_for_task(t);
+    t->cpu = target_cpu;
+    runqueue_t *rq = &per_cpu_rq[target_cpu];
     u64 f = spin_lock_irqsave(&rq->lock);
     u64 minv = rq->min_vruntime;
     t->vruntime = minv;
@@ -153,8 +197,8 @@ task_t *sched_spawn(const char *name, void (*entry)(void *), void *arg, u8 prio)
     spin_unlock_irqrestore(&rq->lock, f);
 
     total_tasks++;
-    kprintf("[SCHED] spawn '%s' id=%lu nice=%d w=%u\n",
-            t->name, t->id, t->nice, t->weight);
+    kprintf("[SCHED] spawn '%s' id=%lu cpu=%u nice=%d w=%u rq_ready=%u rq_load=%lu\n",
+            t->name, t->id, target_cpu, t->nice, t->weight, rq->count, rq->load_weight);
     return t;
 }
 
@@ -197,6 +241,9 @@ void sched_init(void) {
     for (int i = 0; i < MAX_CPUS; i++) {
         per_cpu_rq[i].count = 0;
         per_cpu_rq[i].min_vruntime = 0;
+        per_cpu_rq[i].load_weight = 0;
+        per_cpu_rq[i].nr_switches = 0;
+        per_cpu_rq[i].last_pick_id = 0;
         spin_init(&per_cpu_rq[i].lock);
     }
 
@@ -262,6 +309,7 @@ static void switch_to(task_t *next) {
     next->state = TASK_RUNNING;
     next->slice_ticks = 0;
     next->need_resched = 0;
+    next->cpu = pc->cpu_id;
     pc->current = next;
     active_tasks[pc->cpu_id] = next;
     fpu_restore(next->fpu_state);
@@ -312,7 +360,9 @@ void sched_maybe_preempt(void) {
 }
 
 void sched_unblock(task_t *t) {
-    runqueue_t *rq = &per_cpu_rq[0];
+    u32 target_cpu = sched_pick_cpu_for_task(t);
+    t->cpu = target_cpu;
+    runqueue_t *rq = &per_cpu_rq[target_cpu];
     u64 f = spin_lock_irqsave(&rq->lock);
     if (t->state == TASK_BLOCKED || t->state == TASK_STOPPED) rq_insert(rq, t);
     spin_unlock_irqrestore(&rq->lock, f);
@@ -333,7 +383,7 @@ void sched_tick(void) {
             cur->vruntime -= 128; /* Slight advantage for batch jobs */
         if (cur == pc->idle) {
             pc->idle_ticks++;
-        } else if (cur->slice_ticks >= SCHED_INTERACTIVE_QUANTUM_TICKS) {
+        } else if (cur->slice_ticks >= sched_effective_slice_ticks(&per_cpu_rq[pc->cpu_id], cur)) {
             cur->need_resched = 1;
         }
     }
@@ -516,5 +566,27 @@ void sched_print_stats(void) {
             kprintf("  CPU%d: %u ready, min_vrt=%lu\n",
                     c, per_cpu_rq[c].count, per_cpu_rq[c].min_vruntime);
         }
+    }
+}
+
+void sched_get_info(sched_info_t *out) {
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    out->detected_cpus = smp_cpu_count();
+    out->schedulable_cpus = smp_sched_cpu_count();
+    out->total_tasks = (u32)total_tasks;
+    out->ticks = this_cpu()->ticks;
+
+    for (int c = 0; c < MAX_CPUS; c++) {
+        runqueue_t *rq = &per_cpu_rq[c];
+        u64 f = spin_lock_irqsave(&rq->lock);
+        out->rq_ready[c] = rq->count;
+        out->rq_load[c] = rq->load_weight;
+        out->ready_tasks += rq->count;
+        out->total_switches += rq->nr_switches;
+        spin_unlock_irqrestore(&rq->lock, f);
+
+        task_t *active = active_tasks[c];
+        if (active && active->state == TASK_RUNNING) out->running_tasks++;
     }
 }

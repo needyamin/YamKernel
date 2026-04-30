@@ -14,6 +14,7 @@
 #include <limine.h>
 
 static u32 g_smp_cpu_count = 1;
+static u32 g_smp_sched_cpu_count = 1;
 static volatile u32 g_aps_booted = 0;
 
 /* Entry point for Application Processors (APs) provided by Limine.
@@ -91,9 +92,19 @@ void smp_init(struct limine_smp_response *smp_resp) {
         __asm__ volatile ("pause");
     }
 
-    kprintf_color(0xFF00FF88, "[SMP] All %u Application Processors booted and ready.\n", g_aps_booted);
+    kprintf_color(0xFF00FF88, "[SMP] All %u Application Processors booted and parked.\n", g_aps_booted);
+    kprintf_color(0xFFFFDD00, "[SMP] Scheduler domain: %u/%u CPU(s) enabled. AP task scheduling stays disabled until per-CPU address-space switching is audited.\n",
+                  g_smp_sched_cpu_count, g_smp_cpu_count);
 }
 
 u32 smp_cpu_count(void) { 
     return g_smp_cpu_count; 
+}
+
+u32 smp_sched_cpu_count(void) {
+    return g_smp_sched_cpu_count;
+}
+
+bool smp_scheduler_active(void) {
+    return g_smp_sched_cpu_count > 1;
 }

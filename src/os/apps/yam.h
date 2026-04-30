@@ -46,6 +46,13 @@ static inline long syscall3(long nr, long a1, long a2, long a3) {
     return ret;
 }
 
+static inline long syscall4(long nr, long a1, long a2, long a3, long a4) {
+    long ret;
+    register long r10 __asm__("r10") = a4;
+    __asm__ volatile ("syscall" : "=a"(ret) : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10) : "rcx", "r11", "memory" );
+    return ret;
+}
+
 static inline long syscall5(long nr, long a1, long a2, long a3, long a4, long a5) {
     long ret;
     register long r10 __asm__("r10") = a4;
@@ -58,6 +65,10 @@ static inline long syscall5(long nr, long a1, long a2, long a3, long a4, long a5
 static inline void exit(int code) { syscall1(SYS_EXIT, code); }
 static inline void yield(void) { syscall0(SYS_YIELD); }
 static inline void sleep_ms(u32 ms) { syscall1(SYS_SLEEPMS, ms); }
+static inline int getrusage(yam_rusage_t *out) { return (int)syscall1(SYS_GETRUSAGE, (long)out); }
+static inline int sched_setaffinity(u64 mask) { return (int)syscall1(SYS_SCHED_SETAFFINITY, (long)mask); }
+static inline u64 sched_getaffinity(void) { return (u64)syscall0(SYS_SCHED_GETAFFINITY); }
+static inline int sched_info(yam_sched_info_t *out) { return (int)syscall1(SYS_SCHED_INFO, (long)out); }
 
 static inline i32 wl_create_surface(const char *title, i32 x, i32 y, u32 w, u32 h) {
     return (i32)syscall5(SYS_WL_CREATE_SURFACE, (long)title, x, y, w, h);

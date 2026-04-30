@@ -17,6 +17,7 @@
 #include "drivers/ai/ai_accel.h"
 #include "nexus/channel.h"
 #include "nexus/graph.h"
+#include "cpu/smp.h"
 
 extern void syscall_entry(void);   /* in syscall.asm */
 
@@ -76,6 +77,83 @@ static i64 sys_exit(u64 code) {
 
 static i64 sys_clock_gettime(void) {
     return (i64)this_cpu()->ticks * 10; /* Convert ticks to ms (100Hz timer) */
+}
+
+static i64 sys_getrusage(u64 uout) {
+    if (!uout) return -1;
+    task_t *t = this_cpu()->current;
+    yam_rusage_t ru;
+    memset(&ru, 0, sizeof(ru));
+    ru.pid = t ? t->id : 0;
+    ru.ppid = (t && t->parent) ? t->parent->id : 0;
+    ru.ticks = t ? t->ticks : 0;
+    ru.utime = t ? t->utime : 0;
+    ru.stime = t ? t->stime : 0;
+    ru.voluntary_switches = t ? t->vol_switches : 0;
+    ru.involuntary_switches = t ? t->invol_switches : 0;
+    ru.start_tick = t ? t->start_tick : 0;
+    ru.rss_pages = t ? t->rss_pages : 0;
+    ru.nice = t ? t->nice : 0;
+    ru.cpu = t ? t->cpu : 0;
+    ru.affinity = t ? t->cpu_affinity : 1;
+
+    bool smap = (read_cr4() & CR4_SMAP) != 0;
+    if (smap) __asm__ volatile ("stac");
+    memcpy((void *)uout, &ru, sizeof(ru));
+    if (smap) __asm__ volatile ("clac");
+    return 0;
+}
+
+static i64 sys_sched_setaffinity(u64 mask) {
+    task_t *t = this_cpu()->current;
+    if (!t || mask == 0) return -1;
+
+    u64 allowed = 0;
+    u32 sched_cpus = smp_sched_cpu_count();
+    if (sched_cpus == 0) sched_cpus = 1;
+    if (sched_cpus > MAX_CPUS) sched_cpus = MAX_CPUS;
+    for (u32 cpu = 0; cpu < sched_cpus; cpu++) allowed |= (1ULL << cpu);
+
+    u64 effective = mask & allowed;
+    if (!effective) effective = 1;
+    if (effective != mask) {
+        kprintf("[SCHED] affinity clamp task='%s' requested=0x%lx effective=0x%lx sched_cpus=%u detected=%u\n",
+                t->name, mask, effective, sched_cpus, smp_cpu_count());
+    }
+    sched_set_affinity(t, effective);
+    return 0;
+}
+
+static i64 sys_sched_getaffinity(void) {
+    task_t *t = this_cpu()->current;
+    return t ? (i64)sched_get_affinity(t) : -1;
+}
+
+static i64 sys_sched_info(u64 uout) {
+    if (!uout) return -1;
+    sched_info_t info;
+    sched_get_info(&info);
+
+    yam_sched_info_t out;
+    memset(&out, 0, sizeof(out));
+    out.detected_cpus = info.detected_cpus;
+    out.schedulable_cpus = info.schedulable_cpus;
+    out.total_tasks = info.total_tasks;
+    out.ready_tasks = info.ready_tasks;
+    out.blocked_tasks = info.blocked_tasks;
+    out.running_tasks = info.running_tasks;
+    out.total_switches = info.total_switches;
+    out.ticks = info.ticks;
+    for (u32 i = 0; i < 8 && i < MAX_CPUS; i++) {
+        out.rq_load[i] = info.rq_load[i];
+        out.rq_ready[i] = info.rq_ready[i];
+    }
+
+    bool smap = (read_cr4() & CR4_SMAP) != 0;
+    if (smap) __asm__ volatile ("stac");
+    memcpy((void *)uout, &out, sizeof(out));
+    if (smap) __asm__ volatile ("clac");
+    return 0;
 }
 
 /* ---- Wayland / GUI Syscall Handlers ---- */
@@ -309,8 +387,12 @@ i64 syscall_dispatch(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5) {
     case SYS_BRK:           SYSCALL_RETURN(sys_brk(a1));
     case SYS_MPROTECT:      SYSCALL_RETURN(sys_mprotect((void *)a1, (usize)a2, (u32)a3));
     case SYS_CLOCK_GETTIME: SYSCALL_RETURN(sys_clock_gettime());
+    case SYS_GETRUSAGE:     SYSCALL_RETURN(sys_getrusage(a1));
     case SYS_GETPPID:       SYSCALL_RETURN(sys_getppid());
     case SYS_KILL:          SYSCALL_RETURN(sys_kill(a1, (u32)a2));
+    case SYS_SCHED_SETAFFINITY: SYSCALL_RETURN(sys_sched_setaffinity(a1));
+    case SYS_SCHED_GETAFFINITY: SYSCALL_RETURN(sys_sched_getaffinity());
+    case SYS_SCHED_INFO:        SYSCALL_RETURN(sys_sched_info(a1));
     case SYS_FUTEX:         SYSCALL_RETURN(sys_futex((u32 *)a1, (int)a2, (u32)a3, a4));
 
     /* Wayland */

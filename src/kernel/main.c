@@ -120,6 +120,8 @@ void *g_term_module = NULL;
 usize g_term_module_size = 0;
 void *g_browser_module = NULL;
 usize g_browser_module_size = 0;
+void *g_python_module = NULL;
+usize g_python_module_size = 0;
 void *g_net_module = NULL;
 usize g_net_module_size = 0;
 void *g_video_module = NULL;
@@ -234,6 +236,10 @@ void kernel_main(void) {
                     g_browser_module = mod->address;
                     g_browser_module_size = mod->size;
                     KINFO("MODULE", "    -> matched BROWSER APP");
+                } else if (strstr(mod->path, "python.elf")) {
+                    g_python_module = mod->address;
+                    g_python_module_size = mod->size;
+                    KINFO("MODULE", "    -> matched PYTHON APP");
                 } else if (strstr(mod->path, "net_service.elf")) {
                     g_net_module = mod->address;
                     g_net_module_size = mod->size;

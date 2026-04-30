@@ -32,6 +32,8 @@ extern void *g_term_module;
 extern usize g_term_module_size;
 extern void *g_browser_module;
 extern usize g_browser_module_size;
+extern void *g_python_module;
+extern usize g_python_module_size;
 extern void wl_term_task(void *);
 extern void wl_browser_task(void *);
 extern void wl_calc_task(void *);
@@ -609,13 +611,14 @@ static void composite_menubar(void) {
         i32 mw = 204;
         if (g_compositor.desktop_menu_open == 2) mx = 234;
         if (g_compositor.desktop_menu_open == 3) mx = 288;
-        wl_draw_rect(&ds, mx, 34, mw, 128, 0xF0141C2B);
+        wl_draw_rect(&ds, mx, 34, mw, 158, 0xF0141C2B);
         wl_draw_rect(&ds, mx, 34, mw, 1, 0xFF60A5FA);
-        wl_draw_rect(&ds, mx, 161, mw, 1, 0x553B4658);
+        wl_draw_rect(&ds, mx, 191, mw, 1, 0x553B4658);
         if (g_compositor.desktop_menu_open == 1) {
             wl_draw_text(&ds, mx + 14, 50, "New Terminal", 0xFFE8EEF7, 0);
             wl_draw_text(&ds, mx + 14, 80, "New Browser", 0xFFE8EEF7, 0);
             wl_draw_text(&ds, mx + 14, 110, "New Calculator", 0xFFE8EEF7, 0);
+            wl_draw_text(&ds, mx + 14, 140, "Python", 0xFFE8EEF7, 0);
         } else if (g_compositor.desktop_menu_open == 2) {
             wl_draw_text(&ds, mx + 14, 50, "Toggle Debug", 0xFFE8EEF7, 0);
             wl_draw_text(&ds, mx + 14, 80, "Refresh Screen", 0xFFE8EEF7, 0);
@@ -684,7 +687,7 @@ static void composite_taskbar(void) {
     /* Draw Power Menu if active */
     if (g_compositor.show_power_menu) {
         i32 mw = 300;
-        i32 mh = 260;
+        i32 mh = 304;
         i32 mx = dock_x;
         i32 my = dock_y - mh - 10;
         
@@ -722,10 +725,14 @@ static void composite_taskbar(void) {
         wl_draw_text(&ds, mx + 34, my + 177, "Calculator", 0xFF50FA7B, 0);
         wl_draw_text(&ds, mx + 176, my + 177, "Tools", 0xFF9AA8BA, 0);
 
-        wl_draw_rect(&ds, mx + 18, my + 220, 120, 28, 0xFF374151);
-        wl_draw_text(&ds, mx + 42, my + 226, "Restart", 0xFFE8EEF7, 0);
-        wl_draw_rect(&ds, mx + 156, my + 220, 120, 28, 0xFF7F1D1D);
-        wl_draw_text(&ds, mx + 176, my + 226, "Shutdown", 0xFFFFCACA, 0);
+        wl_draw_rect(&ds, mx + 18, my + 212, mw - 36, 42, 0xFF1F2937);
+        wl_draw_text(&ds, mx + 34, my + 225, "Python", 0xFFFFD166, 0);
+        wl_draw_text(&ds, mx + 176, my + 225, "Runtime", 0xFF9AA8BA, 0);
+
+        wl_draw_rect(&ds, mx + 18, my + 264, 120, 28, 0xFF374151);
+        wl_draw_text(&ds, mx + 42, my + 270, "Restart", 0xFFE8EEF7, 0);
+        wl_draw_rect(&ds, mx + 156, my + 264, 120, 28, 0xFF7F1D1D);
+        wl_draw_text(&ds, mx + 176, my + 270, "Shutdown", 0xFFFFCACA, 0);
     }
     
     /* Draw running apps */
@@ -975,19 +982,7 @@ static void process_input(void) {
                         if (success) {
                             KINFO("AUTH", "Access GRANTED! Transitioning to DESKTOP...");
                             g_compositor.state = COMPOSITOR_STATE_DESKTOP;
-                                
-                                /* Spawn default apps */
-                                extern bool elf_load(const void *data, usize size, const char *name);
-                                extern void *g_term_module;
-                                extern usize g_term_module_size;
-                                extern void *g_browser_module;
-                                extern usize g_browser_module_size;
-                                
-                                KINFO("AUTH", "Spawning Terminal (mod=%p size=%lu)...", g_term_module, (u64)g_term_module_size);
-                                if (g_term_module) elf_load(g_term_module, g_term_module_size, "terminal");
-                                
-                                KINFO("AUTH", "Spawning Browser (mod=%p size=%lu)...", g_browser_module, (u64)g_browser_module_size);
-                                if (g_browser_module) elf_load(g_browser_module, g_browser_module_size, "browser");
+                            KINFO("AUTH", "Desktop ready. Apps are launched from the dock or File menu.");
                         } else {
                                 g_compositor.login_failed = true;
                                 g_compositor.login_pass[0] = '\0';
@@ -1065,7 +1060,7 @@ static void process_input(void) {
                         if (g_compositor.desktop_menu_open == 2) mx = 234;
                         if (g_compositor.desktop_menu_open == 3) mx = 288;
                         if (g_compositor.cursor_x >= mx && g_compositor.cursor_x < mx + 204 &&
-                            g_compositor.cursor_y >= 34 && g_compositor.cursor_y < 162) {
+                            g_compositor.cursor_y >= 34 && g_compositor.cursor_y < 192) {
                             i32 row = (g_compositor.cursor_y - 42) / 30;
                             if (row < 0) row = 0;
                             if (g_compositor.desktop_menu_open == 1) {
@@ -1075,9 +1070,12 @@ static void process_input(void) {
                                 } else if (row == 1) {
                                     kprintf("[WAYLAND] Menu launching Browser...\n");
                                     if (g_browser_module && g_browser_module_size > 0) spawn_app_async(g_browser_module, g_browser_module_size, "wl-browser");
-                                } else {
+                                } else if (row == 2) {
                                     kprintf("[WAYLAND] Menu launching Calculator...\n");
                                     if (g_calc_module && g_calc_module_size > 0) spawn_app_async(g_calc_module, g_calc_module_size, "wl-calc");
+                                } else {
+                                    kprintf("[WAYLAND] Menu launching Python...\n");
+                                    if (g_python_module && g_python_module_size > 0) spawn_app_async(g_python_module, g_python_module_size, "python");
                                 }
                             } else if (g_compositor.desktop_menu_open == 2) {
                                 if (row == 0) {
@@ -1120,7 +1118,7 @@ static void process_input(void) {
 
                     /* Check Power/App Menu Clicks */
                     if (g_compositor.show_power_menu && ev.value == KEY_PRESSED) {
-                        i32 mw = 300, mh = 260;
+                        i32 mw = 300, mh = 304;
                         i32 mx = dock_x;
                         if (g_compositor.cursor_x >= mx && g_compositor.cursor_x <= mx + mw) {
                             if (g_compositor.cursor_y >= dock_y - mh - 10 && g_compositor.cursor_y < dock_y - 10) {
@@ -1149,11 +1147,18 @@ static void process_input(void) {
                                         kprintf("[WAYLAND] Fallback to Kernel Calculator\n");
                                         sched_spawn("wl-calc-k", wl_calc_task, NULL, 2);
                                     }
-                                } else if (rel_y >= 220 && rel_y < 248 && g_compositor.cursor_x < mx + 146) {
+                                } else if (rel_y >= 212 && rel_y < 254) {
+                                    kprintf("[WAYLAND] Launching Python (async)...\n");
+                                    if (g_python_module && g_python_module_size > 0) {
+                                        spawn_app_async(g_python_module, g_python_module_size, "python");
+                                    } else {
+                                        kprintf("[WAYLAND] Python module not installed\n");
+                                    }
+                                } else if (rel_y >= 264 && rel_y < 292 && g_compositor.cursor_x < mx + 146) {
                                     /* RESTART */
                                     kprintf("[POWER] Restarting system...\n");
                                     outb(0x64, 0xFE);
-                                } else if (rel_y >= 220 && rel_y < 248 && g_compositor.cursor_x >= mx + 146) {
+                                } else if (rel_y >= 264 && rel_y < 292 && g_compositor.cursor_x >= mx + 146) {
                                     /* SHUTDOWN */
                                     kprintf("[POWER] Shutting down...\n");
                                     outw(0x604, 0x2000);

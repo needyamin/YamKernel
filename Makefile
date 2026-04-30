@@ -60,6 +60,7 @@ USER_ELF := $(BUILD_DIR)/test_app.elf
 CALC_ELF := $(BUILD_DIR)/calculator.elf
 TERM_ELF := $(BUILD_DIR)/terminal.elf
 BROWSER_ELF := $(BUILD_DIR)/browser.elf
+PYTHON_ELF := $(BUILD_DIR)/python.elf
 NET_ELF     := $(BUILD_DIR)/net_service.elf
 VIDEO_ELF   := $(BUILD_DIR)/video.elf
 AUDIO_ELF   := $(BUILD_DIR)/audio.elf
@@ -141,6 +142,11 @@ $(BROWSER_ELF): src/os/apps/browser.c src/os/apps/font_data.c src/os/apps/user.l
 	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/browser.c src/os/apps/font_data.c $(LIBC_OBJS)
 	@echo "[BROWSER] $@"
 
+$(PYTHON_ELF): src/os/apps/python.c src/os/apps/font_data.c src/os/apps/user.ld $(LIBC_OBJS)
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/python.c src/os/apps/font_data.c $(LIBC_OBJS)
+	@echo "[PYTHON] $@"
+
 $(NET_ELF): src/os/drivers/net_service.c src/os/apps/user.ld $(LIBC_OBJS)
 	@mkdir -p $(dir $@)
 	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/net_service.c $(LIBC_OBJS)
@@ -175,7 +181,7 @@ $(AUTHD_ELF): src/os/apps/authd.c src/os/apps/user.ld $(LIBC_OBJS)
 #  ISO Creation (Limine-based bootable ISO)
 # ============================================================================
 
-$(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN) $(USER_ELF) $(CALC_ELF) $(TERM_ELF) $(BROWSER_ELF) $(NET_ELF) $(VIDEO_ELF) $(AUDIO_ELF) $(IMG_ELF) $(WIFI_ELF) $(AUTHD_ELF)
+$(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN) $(USER_ELF) $(CALC_ELF) $(TERM_ELF) $(BROWSER_ELF) $(PYTHON_ELF) $(NET_ELF) $(VIDEO_ELF) $(AUDIO_ELF) $(IMG_ELF) $(WIFI_ELF) $(AUTHD_ELF)
 	@echo "[ISO]  Building bootable ISO..."
 	@rm -rf $(ISO_DIR)
 	@mkdir -p $(ISO_DIR)/boot/limine
@@ -190,6 +196,7 @@ $(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN) $(USER_ELF) $(CALC_ELF
 	cp $(CALC_ELF) $(ISO_DIR)/boot/calculator.elf
 	cp $(TERM_ELF) $(ISO_DIR)/boot/terminal.elf
 	cp $(BROWSER_ELF) $(ISO_DIR)/boot/browser.elf
+	cp $(PYTHON_ELF) $(ISO_DIR)/boot/python.elf
 	cp $(NET_ELF) $(ISO_DIR)/boot/net_service.elf
 	cp $(VIDEO_ELF) $(ISO_DIR)/boot/video.elf
 	cp $(AUDIO_ELF) $(ISO_DIR)/boot/audio.elf

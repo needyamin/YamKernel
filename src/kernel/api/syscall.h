@@ -48,6 +48,7 @@
 #define SYS_GETPPID           44
 #define SYS_DUP               45
 #define SYS_DUP2              46
+#define SYS_SCHED_INFO        47
 
 /* AI/ML Acceleration (new in v0.3.0) */
 #define SYS_AI_DEVICE_QUERY   50
@@ -68,6 +69,34 @@
 #define SYS_GESTURE_CONFIG    58
 
 #define SYS_MAX     64
+
+typedef struct {
+    u64 pid;
+    u64 ppid;
+    u64 ticks;
+    u64 utime;
+    u64 stime;
+    u64 voluntary_switches;
+    u64 involuntary_switches;
+    u64 start_tick;
+    u64 rss_pages;
+    i32 nice;
+    u32 cpu;
+    u64 affinity;
+} yam_rusage_t;
+
+typedef struct {
+    u32 detected_cpus;
+    u32 schedulable_cpus;
+    u32 total_tasks;
+    u32 ready_tasks;
+    u32 blocked_tasks;
+    u32 running_tasks;
+    u64 total_switches;
+    u64 ticks;
+    u64 rq_load[8];
+    u32 rq_ready[8];
+} yam_sched_info_t;
 
 void syscall_init(void);
 i64 syscall_dispatch(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5);

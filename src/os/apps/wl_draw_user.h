@@ -3,8 +3,8 @@
 
 #include "yam.h"
 
-/* Simple font data (8x16) - typically you'd link this or include it */
-extern const uint8_t font_basic_8x16[128][16];
+/* Shared 8x16 ASCII font, compiled into each userspace app. */
+extern const uint8_t yam_font_data[95][16];
 
 typedef struct {
     u32 *pixels;
@@ -24,12 +24,31 @@ static inline void wl_user_draw_rect(wl_user_buffer_t *buf, i32 x, i32 y, u32 w,
     }
 }
 
+static inline uint8_t wl_user_fallback_glyph(char c, int row) {
+    if (c == ' ') return 0;
+    if (row == 1 || row == 14) return 0x7E;
+    if (row < 1 || row > 14) return 0;
+    uint8_t code = (uint8_t)c;
+    uint8_t bits = 0x42;
+    if (code & (1 << (row & 7))) bits |= 0x18;
+    if (code & (1 << ((row + 3) & 7))) bits |= 0x24;
+    return bits;
+}
+
 static inline void wl_user_draw_char(wl_user_buffer_t *buf, i32 x, i32 y, char c, u32 color) {
-    if ((uint8_t)c > 127) return;
-    const uint8_t *glyph = font_basic_8x16[(int)c];
+    if ((uint8_t)c < 32 || (uint8_t)c > 126) c = '?';
+    const uint8_t *glyph = yam_font_data[(int)c - 32];
+    bool blank = (c != ' ');
     for (int i = 0; i < 16; i++) {
+        if (glyph[i] != 0) {
+            blank = false;
+            break;
+        }
+    }
+    for (int i = 0; i < 16; i++) {
+        uint8_t row_bits = blank ? wl_user_fallback_glyph(c, i) : glyph[i];
         for (int j = 0; j < 8; j++) {
-            if (glyph[i] & (1 << (7 - j))) {
+            if (row_bits & (1 << (7 - j))) {
                 i32 px = x + j;
                 i32 py = y + i;
                 if (px >= 0 && (u32)px < buf->width && py >= 0 && (u32)py < buf->height) {
@@ -42,7 +61,14 @@ static inline void wl_user_draw_char(wl_user_buffer_t *buf, i32 x, i32 y, char c
 
 static inline void wl_user_draw_text(wl_user_buffer_t *buf, i32 x, i32 y, const char *s, u32 color) {
     int cur_x = x;
+    int start_x = x;
     while (*s) {
+        if (*s == '\n') {
+            y += 16;
+            cur_x = start_x;
+            s++;
+            continue;
+        }
         wl_user_draw_char(buf, cur_x, y, *s++, color);
         cur_x += 8;
     }

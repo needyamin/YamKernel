@@ -101,8 +101,24 @@ typedef struct {
     task_t  *tasks[256];   /* Sorted by vruntime (min-heap style) */
     u32      count;
     u64      min_vruntime;
+    u64      load_weight;
+    u64      nr_switches;
+    u64      last_pick_id;
     spinlock_t lock;
 } runqueue_t;
+
+typedef struct {
+    u32 detected_cpus;
+    u32 schedulable_cpus;
+    u32 total_tasks;
+    u32 ready_tasks;
+    u32 blocked_tasks;
+    u32 running_tasks;
+    u64 total_switches;
+    u64 ticks;
+    u64 rq_load[MAX_CPUS];
+    u32 rq_ready[MAX_CPUS];
+} sched_info_t;
 
 /* Public API */
 task_t *sched_current(void);
@@ -136,6 +152,7 @@ void    sched_set_ai_hint(task_t *t, u8 hint);
 /* Statistics */
 u64     sched_task_count(void);
 void    sched_print_stats(void);
+void    sched_get_info(sched_info_t *out);
 
 /* ASM */
 void    context_switch(u64 *old_rsp, u64 new_rsp);
