@@ -54,13 +54,15 @@ drm_buffer_t *drm_create_dumb_buffer(u32 width, u32 height) {
     buf->bpp    = 32;
     buf->size   = (usize)buf->pitch * height;
 
-    /* Allocate pixel memory from the kernel heap */
-    buf->pixels = (u32 *)kmalloc(buf->size);
-    if (!buf->pixels) {
+    /* Allocate page-aligned pixel memory */
+    u64 pages = (buf->size + PAGE_SIZE - 1) / PAGE_SIZE;
+    u64 phys = pmm_alloc_pages(pages);
+    if (!phys) {
         kfree(buf);
         return NULL;
     }
-    memset(buf->pixels, 0, buf->size);
+    buf->pixels = (u32 *)vmm_phys_to_virt(phys);
+    memset(buf->pixels, 0, pages * PAGE_SIZE);
 
     return buf;
 }
@@ -68,7 +70,9 @@ drm_buffer_t *drm_create_dumb_buffer(u32 width, u32 height) {
 void drm_destroy_dumb_buffer(drm_buffer_t *buf) {
     if (!buf) return;
     if (buf->pixels && buf->id != 0) {
-        kfree(buf->pixels);
+        u64 pages = (buf->size + PAGE_SIZE - 1) / PAGE_SIZE;
+        u64 phys = vmm_virt_hhdm_to_phys(buf->pixels);
+        pmm_free_pages(phys, pages);
     }
     kfree(buf);
 }

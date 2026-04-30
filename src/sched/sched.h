@@ -61,6 +61,8 @@ typedef struct task {
     u64           stime;        /* System-mode ticks */
     u64           vol_switches; /* Voluntary context switches */
     u64           invol_switches; /* Involuntary context switches */
+    u32           slice_ticks;  /* Ticks consumed in current time slice */
+    u8            need_resched; /* Timer asked this task to yield soon */
     u64           start_tick;   /* When task was created */
     u64           rss_pages;    /* Resident set size (pages) */
 
@@ -110,6 +112,7 @@ void    sched_sleep_until(u64 deadline_tick);
 void    sched_init(void);
 task_t *sched_spawn(const char *name, void (*entry)(void *), void *arg, u8 prio);
 void    sched_yield(void);
+void    sched_maybe_preempt(void);
 void    sched_tick(void);
 void    sched_install_timer(void);
 void    sched_enable(void);

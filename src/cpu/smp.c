@@ -49,10 +49,11 @@ static void ap_trampoline(struct limine_smp_info *info) {
     /* Signal BSP that we are up */
     __sync_fetch_and_add(&g_aps_booted, 1);
 
-    /* 7. Start the scheduler on this core */
-    sched_init();
-    apic_timer_start(100);
-    sched_start();
+    /* The scheduler still uses CPU0's run queue in several paths. Keep APs
+       online for CPU feature setup, but do not run tasks there yet. */
+    for (;;) {
+        __asm__ volatile ("sti; hlt");
+    }
 }
 
 void smp_init(struct limine_smp_response *smp_resp) {

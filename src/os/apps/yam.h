@@ -67,8 +67,8 @@ static inline int wl_map_buffer(u32 surface_id, void *vaddr) {
     return (int)syscall2(SYS_WL_MAP_BUFFER, surface_id, (long)vaddr);
 }
 
-static inline void wl_commit(u32 surface_id) {
-    syscall1(SYS_WL_COMMIT, surface_id);
+static inline int wl_commit(u32 surface_id) {
+    return (int)syscall1(SYS_WL_COMMIT, surface_id);
 }
 
 static inline bool wl_poll_event(u32 surface_id, input_event_t *ev) {

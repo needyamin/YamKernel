@@ -53,6 +53,14 @@ typedef struct wl_surface {
     u8                  anim_scale; /* 0 to 100 */
     u8                  anim_alpha; /* 0 to 255 */
     bool                anim_closing;
+
+    /* Debug counters for client/compositor handoff */
+    u32                 commit_count;
+    u32                 composite_count;
+    u32                 event_push_count;
+    u32                 event_pop_count;
+    u32                 last_checksum;
+    bool                content_seen;
     
     spinlock_t          lock;
     /* Event queue for routing input to client */
@@ -100,6 +108,7 @@ typedef struct wl_compositor {
     /* Power Menu */
     bool            show_power_menu;
     bool            show_debug_overlay;
+    u8              desktop_menu_open;  /* 0 none, 1 File, 2 View, 3 Window */
 } wl_compositor_t;
 
 /* Initialize the Wayland compositor */

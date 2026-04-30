@@ -22,6 +22,17 @@ extern void syscall_entry(void);   /* in syscall.asm */
 
 static u8 syscall_stack[16384] ALIGNED(16);
 
+static u64 *syscall_current_pml4(void) {
+    task_t *t = this_cpu()->current;
+    if (t && t->pml4) return t->pml4;
+
+    u64 cr3 = 0;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    u64 *pml4 = (u64 *)vmm_phys_to_virt(cr3 & 0x000FFFFFFFFFF000ULL);
+    if (t && t->id != 0) t->pml4 = pml4;
+    return pml4;
+}
+
 void syscall_init(void) {
     percpu_set_kernel_rsp((u64)&syscall_stack[sizeof(syscall_stack)]);
     wrmsr(MSR_EFER, rdmsr(MSR_EFER) | EFER_SCE);
@@ -89,7 +100,8 @@ static i64 sys_wl_create_surface(u64 utitle, i32 x, i32 y, u32 w, u32 h) {
 
 static i64 sys_wl_map_buffer(u32 surface_id, u64 uvaddr) {
     task_t *t = this_cpu()->current;
-    if (!t->pml4) return -2;
+    u64 *task_pml4 = syscall_current_pml4();
+    if (!task_pml4) return -2;
     wl_compositor_t *comp = wl_get_compositor();
     wl_surface_t *s = NULL;
     for (int i = 0; i < WL_MAX_SURFACES; i++) {
@@ -97,27 +109,60 @@ static i64 sys_wl_map_buffer(u32 surface_id, u64 uvaddr) {
             s = &comp->surfaces[i]; break;
         }
     }
-    if (!s) return -3;
-    if (s->owner_task_id != t->id) return -4;
-    if (!s->buffer || !s->buffer->pixels) return -5;
+    if (!s) {
+        kprintf("[WL_MAP] task '%s' id=%lu surface %u not found\n", t->name, t->id, surface_id);
+        return -3;
+    }
+    if (s->owner_task_id != t->id) {
+        kprintf("[WL_MAP] task '%s' id=%lu surface %u owner=%lu mismatch\n",
+                t->name, t->id, surface_id, s->owner_task_id);
+        return -4;
+    }
+    if (!s->buffer || !s->buffer->pixels) {
+        kprintf("[WL_MAP] task '%s' id=%lu surface %u missing buffer\n", t->name, t->id, surface_id);
+        return -5;
+    }
 
     u64 phys_base = vmm_virt_hhdm_to_phys(s->buffer->pixels);
     u64 size = s->buffer->size;
     u64 pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
     for (u64 i = 0; i < pages; i++) {
-        vmm_map_page(t->pml4, uvaddr + i * PAGE_SIZE, phys_base + i * PAGE_SIZE,
-                     VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_WRITE | VMM_FLAG_NX | VMM_FLAG_DONT_FREE);
+        if (!vmm_map_page(task_pml4, uvaddr + i * PAGE_SIZE, phys_base + i * PAGE_SIZE,
+                          VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_WRITE | VMM_FLAG_NX | VMM_FLAG_DONT_FREE)) {
+            kprintf("[WL_MAP] task '%s' id=%lu map failed page=%lu/%lu va=0x%lx phys=0x%lx\n",
+                    t->name, t->id, i, pages, uvaddr + i * PAGE_SIZE, phys_base + i * PAGE_SIZE);
+            return -6;
+        }
     }
+    kprintf("[WL_DBG] map-ok task='%s' tid=%lu surface=%u va=0x%lx phys=0x%lx pages=%lu bytes=%lu\n",
+            t->name, t->id, surface_id, uvaddr, phys_base, pages, size);
     return 0;
 }
 
 static i64 sys_wl_commit(u32 surface_id) {
+    task_t *t = this_cpu()->current;
+    static u32 last_missing_surface = 0;
+    static u32 missing_repeat = 0;
     wl_compositor_t *comp = wl_get_compositor();
     for (int i = 0; i < WL_MAX_SURFACES; i++) {
         if (comp->surfaces[i].state != WL_SURFACE_FREE && comp->surfaces[i].id == surface_id) {
+            if (comp->surfaces[i].owner_task_id != t->id) {
+                kprintf("[WL_DBG] commit-deny task='%s' tid=%lu surface=%u owner=%lu\n",
+                        t->name, t->id, surface_id, comp->surfaces[i].owner_task_id);
+                return -2;
+            }
             wl_surface_commit(&comp->surfaces[i]);
             return 0;
         }
+    }
+    if (last_missing_surface != surface_id) {
+        last_missing_surface = surface_id;
+        missing_repeat = 0;
+    }
+    missing_repeat++;
+    if (missing_repeat <= 3 || (missing_repeat % 128) == 0) {
+        kprintf("[WL_DBG] commit-missing task='%s' tid=%lu surface=%u repeat=%u\n",
+                t->name, t->id, surface_id, missing_repeat);
     }
     return -1;
 }
@@ -229,57 +274,70 @@ static i64 sys_channel_lookup(u64 uname) {
     return (i64)id;
 }
 
+static void syscall_restore_current_address_space(void) {
+    u64 *pml4 = syscall_current_pml4();
+    u64 phys = vmm_virt_hhdm_to_phys(pml4);
+    __asm__ volatile("mov %0, %%cr3" :: "r"(phys) : "memory");
+}
+
 /* ---- Dispatch ---- */
 i64 syscall_dispatch(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5) {
+#define SYSCALL_RETURN(expr) do { \
+        i64 __ret = (i64)(expr); \
+        syscall_restore_current_address_space(); \
+        return __ret; \
+    } while (0)
+
     switch (nr) {
-    case SYS_WRITE:    return sys_write_serial(a1, a2, a3);
-    case SYS_EXIT:     return sys_exit(a1);
-    case SYS_GETPID:   return sys_getpid();
-    case SYS_YIELD:    return sys_yield();
-    case SYS_SLEEPMS:  return sys_sleepms(a1);
-    case SYS_OPEN:     return (i64)sys_open((const char *)a1, (u32)a2);
-    case SYS_CLOSE:    return (i64)sys_close((int)a1);
-    case SYS_READ:     return (i64)sys_read((int)a1, (void *)a2, (usize)a3);
-    case SYS_WRITE_FD: return (i64)sys_write((int)a1, (const void *)a2, (usize)a3);
-    case SYS_MMAP:     return (i64)(u64)sys_mmap((void *)a1, (usize)a2, (u32)a3, (u32)a4, (int)a5, 0);
-    case SYS_MUNMAP:   return (i64)sys_munmap((void *)a1, (usize)a2);
-    case SYS_PIPE:     return (i64)sys_pipe((int *)a1);
-    case SYS_POLL:     return (i64)sys_poll((pollfd_t *)a1, (u32)a2, (i64)a3);
+    case SYS_WRITE:    SYSCALL_RETURN(sys_write_serial(a1, a2, a3));
+    case SYS_EXIT:     SYSCALL_RETURN(sys_exit(a1));
+    case SYS_GETPID:   SYSCALL_RETURN(sys_getpid());
+    case SYS_YIELD:    SYSCALL_RETURN(sys_yield());
+    case SYS_SLEEPMS:  SYSCALL_RETURN(sys_sleepms(a1));
+    case SYS_OPEN:     SYSCALL_RETURN(sys_open((const char *)a1, (u32)a2));
+    case SYS_CLOSE:    SYSCALL_RETURN(sys_close((int)a1));
+    case SYS_READ:     SYSCALL_RETURN(sys_read((int)a1, (void *)a2, (usize)a3));
+    case SYS_WRITE_FD: SYSCALL_RETURN(sys_write((int)a1, (const void *)a2, (usize)a3));
+    case SYS_MMAP:     SYSCALL_RETURN((u64)sys_mmap((void *)a1, (usize)a2, (u32)a3, (u32)a4, (int)a5, 0));
+    case SYS_MUNMAP:   SYSCALL_RETURN(sys_munmap((void *)a1, (usize)a2));
+    case SYS_PIPE:     SYSCALL_RETURN(sys_pipe((int *)a1));
+    case SYS_POLL:     SYSCALL_RETURN(sys_poll((pollfd_t *)a1, (u32)a2, (i64)a3));
 
     /* v0.3.0 process management */
-    case SYS_FORK:          return sys_fork();
-    case SYS_WAITPID:       return sys_waitpid((i64)a1, (i32 *)a2, (u32)a3);
-    case SYS_BRK:           return (i64)sys_brk(a1);
-    case SYS_MPROTECT:      return (i64)sys_mprotect((void *)a1, (usize)a2, (u32)a3);
-    case SYS_CLOCK_GETTIME: return sys_clock_gettime();
-    case SYS_GETPPID:       return sys_getppid();
-    case SYS_KILL:          return sys_kill(a1, (u32)a2);
-    case SYS_FUTEX:         return sys_futex((u32 *)a1, (int)a2, (u32)a3, a4);
+    case SYS_FORK:          SYSCALL_RETURN(sys_fork());
+    case SYS_WAITPID:       SYSCALL_RETURN(sys_waitpid((i64)a1, (i32 *)a2, (u32)a3));
+    case SYS_BRK:           SYSCALL_RETURN(sys_brk(a1));
+    case SYS_MPROTECT:      SYSCALL_RETURN(sys_mprotect((void *)a1, (usize)a2, (u32)a3));
+    case SYS_CLOCK_GETTIME: SYSCALL_RETURN(sys_clock_gettime());
+    case SYS_GETPPID:       SYSCALL_RETURN(sys_getppid());
+    case SYS_KILL:          SYSCALL_RETURN(sys_kill(a1, (u32)a2));
+    case SYS_FUTEX:         SYSCALL_RETURN(sys_futex((u32 *)a1, (int)a2, (u32)a3, a4));
 
     /* Wayland */
-    case SYS_WL_CREATE_SURFACE: return sys_wl_create_surface(a1, (i32)a2, (i32)a3, (u32)a4, (u32)a5);
-    case SYS_WL_MAP_BUFFER:     return sys_wl_map_buffer((u32)a1, a2);
-    case SYS_WL_COMMIT:         return sys_wl_commit((u32)a1);
-    case SYS_WL_POLL_EVENT:     return sys_wl_poll_event((u32)a1, a2);
+    case SYS_WL_CREATE_SURFACE: SYSCALL_RETURN(sys_wl_create_surface(a1, (i32)a2, (i32)a3, (u32)a4, (u32)a5));
+    case SYS_WL_MAP_BUFFER:     SYSCALL_RETURN(sys_wl_map_buffer((u32)a1, a2));
+    case SYS_WL_COMMIT:         SYSCALL_RETURN(sys_wl_commit((u32)a1));
+    case SYS_WL_POLL_EVENT:     SYSCALL_RETURN(sys_wl_poll_event((u32)a1, a2));
 
     /* Drivers */
-    case SYS_IOPORT_READ:     return sys_ioport_read((u16)a1, (u8)a2);
-    case SYS_IOPORT_WRITE:    return sys_ioport_write((u16)a1, (u8)a2, a3);
-    case SYS_PCI_CONFIG_READ: return sys_pci_config_read((u8)a1, (u8)a2, (u8)a3, (u8)a4, (u8)a5);
-    case SYS_MAP_MMIO:        return sys_map_mmio(a1, a2, a3);
+    case SYS_IOPORT_READ:     SYSCALL_RETURN(sys_ioport_read((u16)a1, (u8)a2));
+    case SYS_IOPORT_WRITE:    SYSCALL_RETURN(sys_ioport_write((u16)a1, (u8)a2, a3));
+    case SYS_PCI_CONFIG_READ: SYSCALL_RETURN(sys_pci_config_read((u8)a1, (u8)a2, (u8)a3, (u8)a4, (u8)a5));
+    case SYS_MAP_MMIO:        SYSCALL_RETURN(sys_map_mmio(a1, a2, a3));
 
     /* AI */
-    case SYS_AI_DEVICE_QUERY: return sys_ai_device_query();
-    case SYS_AI_TENSOR_ALLOC: return sys_ai_tensor_alloc_handler((u32)a1, a2, (u32)a3);
-    case SYS_AI_TENSOR_FREE:  ai_tensor_free((u32)a1); return 0;
-    case SYS_AI_SUBMIT_JOB:   return (i64)ai_job_submit((ai_op_type_t)a1, (const u32 *)a2, (u32)a3, (u32)a4, (u8)a5);
-    case SYS_AI_WAIT_JOB:     ai_job_wait((u32)a1); return 0;
+    case SYS_AI_DEVICE_QUERY: SYSCALL_RETURN(sys_ai_device_query());
+    case SYS_AI_TENSOR_ALLOC: SYSCALL_RETURN(sys_ai_tensor_alloc_handler((u32)a1, a2, (u32)a3));
+    case SYS_AI_TENSOR_FREE:  ai_tensor_free((u32)a1); SYSCALL_RETURN(0);
+    case SYS_AI_SUBMIT_JOB:   SYSCALL_RETURN(ai_job_submit((ai_op_type_t)a1, (const u32 *)a2, (u32)a3, (u32)a4, (u8)a5));
+    case SYS_AI_WAIT_JOB:     ai_job_wait((u32)a1); SYSCALL_RETURN(0);
 
     /* YamGraph IPC */
-    case SYS_CHANNEL_SEND:    return sys_channel_send((u32)a1, (u32)a2, a3, (u32)a4);
-    case SYS_CHANNEL_RECV:    return sys_channel_recv((u32)a1, a2);
-    case SYS_CHANNEL_LOOKUP:  return sys_channel_lookup(a1);
+    case SYS_CHANNEL_SEND:    SYSCALL_RETURN(sys_channel_send((u32)a1, (u32)a2, a3, (u32)a4));
+    case SYS_CHANNEL_RECV:    SYSCALL_RETURN(sys_channel_recv((u32)a1, a2));
+    case SYS_CHANNEL_LOOKUP:  SYSCALL_RETURN(sys_channel_lookup(a1));
 
-    default: return -1;
+    default: SYSCALL_RETURN(-1);
     }
+#undef SYSCALL_RETURN
 }

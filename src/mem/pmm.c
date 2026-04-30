@@ -321,7 +321,7 @@ static u64 pmm_alloc_pages_internal(u64 count, mem_zone_type_t preferred_zone, b
         u16 found = find_free_cell_zone(idx, req_size, preferred_zone, zone_strict);
         if (found == 0xFFFF) continue;
 
-        while (cells[found].size > req_size && cells[found].size >= PAGE_SIZE * 4) {
+        while (cells[found].size / 4 >= req_size && cells[found].size >= PAGE_SIZE * 4) {
             if (!cell_split(found)) break;
             found = cells[found].children[0];
         }

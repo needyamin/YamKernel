@@ -21,9 +21,10 @@ global syscall_entry
 
 syscall_entry:
     swapgs                          ; GS_BASE = kernel percpu
-    mov   [gs:32], rsp              ; percpu.user_rsp_save
+    mov   [gs:32], rsp              ; transient user RSP save while IRQs are masked
     mov   rsp, [gs:40]              ; percpu.kernel_rsp
 
+    push  qword [gs:32]             ; user RSP belongs to this syscall frame
     push  rcx                       ; user RIP
     push  r11                       ; user RFLAGS
     push  rbx
@@ -32,6 +33,13 @@ syscall_entry:
     push  r13
     push  r14
     push  r15
+    push  rdi
+    push  rsi
+    push  rdx
+    push  r8
+    push  r9
+    push  r10
+    sub   rsp, 8                    ; keep SysV 16-byte alignment before call
 
     ; Shift caller args into SysV positions (right-to-left to avoid clobber):
     mov   r9,  r8                   ; arg6 = a5
@@ -44,7 +52,14 @@ syscall_entry:
     sti
     call  syscall_dispatch
     cli                             ; rax = return value, preserved
+    add   rsp, 8
 
+    pop   r10
+    pop   r9
+    pop   r8
+    pop   rdx
+    pop   rsi
+    pop   rdi
     pop   r15
     pop   r14
     pop   r13
@@ -53,6 +68,7 @@ syscall_entry:
     pop   rbx
     pop   r11                       ; user RFLAGS
     pop   rcx                       ; user RIP
+    pop   qword [gs:32]             ; user RSP for this syscall frame
 
     mov   rsp, [gs:32]              ; restore user RSP
     swapgs                          ; GS_BASE = user

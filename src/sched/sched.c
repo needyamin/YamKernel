@@ -32,6 +32,7 @@ static const u32 nice_to_weight[40] = {
 };
 
 #define NICE_TO_IDX(n) ((n) + 20)
+#define SCHED_INTERACTIVE_QUANTUM_TICKS 2
 
 /* Per-CPU run queues */
 static runqueue_t per_cpu_rq[MAX_CPUS];
@@ -106,10 +107,14 @@ task_t *sched_spawn(const char *name, void (*entry)(void *), void *arg, u8 prio)
     t->ai_hint = AI_HINT_NONE;
     t->utime = t->stime = 0;
     t->vol_switches = t->invol_switches = 0;
+    t->slice_ticks = 0;
+    t->need_resched = 0;
     t->start_tick = this_cpu()->ticks;
     t->rss_pages = 0;
     t->cgroup = NULL;
-    t->graph_node = yamgraph_node_create(YAM_NODE_TASK, name, t);
+    memset(t->name, 0, sizeof(t->name));
+    for (u32 i = 0; i < sizeof(t->name) - 1 && name[i]; i++) t->name[i] = name[i];
+    t->graph_node = yamgraph_node_create(YAM_NODE_TASK, t->name, t);
 
     t->stack = (u8 *)kmalloc(SCHED_STACK_SIZE);
     if (!t->stack) { kmem_cache_free(task_cache, t); return NULL; }
@@ -119,8 +124,6 @@ task_t *sched_spawn(const char *name, void (*entry)(void *), void *arg, u8 prio)
     t->fpu_state = (u8 *)kmalloc(fpu_sz);
     if (!t->fpu_state) { kfree(t->stack); kmem_cache_free(task_cache, t); return NULL; }
     memset(t->fpu_state, 0, fpu_sz);
-
-    for (u32 i = 0; i < sizeof(t->name) - 1 && name[i]; i++) t->name[i] = name[i];
 
     /* Stack frame for context_switch + task_trampoline */
     u64 *sp = (u64 *)(t->stack + SCHED_STACK_SIZE);
@@ -257,6 +260,8 @@ static void switch_to(task_t *next) {
 
     fpu_save(cur->fpu_state);
     next->state = TASK_RUNNING;
+    next->slice_ticks = 0;
+    next->need_resched = 0;
     pc->current = next;
     active_tasks[pc->cpu_id] = next;
     fpu_restore(next->fpu_state);
@@ -289,11 +294,21 @@ void sched_yield(void) {
     if (!next) { spin_unlock(&rq->lock); sti(); return; }
     if (cur && cur->state == TASK_RUNNING) {
         cur->vol_switches++;
+        cur->slice_ticks = 0;
+        cur->need_resched = 0;
         rq_insert(rq, cur);
     }
     spin_unlock(&rq->lock);
     switch_to(next);
     sti();
+}
+
+void sched_maybe_preempt(void) {
+    task_t *cur = sched_current();
+    if (!sched_enabled || !cur || !cur->need_resched) return;
+    if (cur->state != TASK_RUNNING || cur == this_cpu()->idle) return;
+    cur->need_resched = 0;
+    sched_yield();
 }
 
 void sched_unblock(task_t *t) {
@@ -309,13 +324,18 @@ void sched_tick(void) {
     task_t *cur = pc->current;
     if (cur) {
         cur->ticks++;
+        cur->slice_ticks++;
         cur->stime++;
         /* Weight-based vruntime: lower weight = faster vruntime growth */
         cur->vruntime += (1024ULL * 1024) / (cur->weight ? cur->weight : 1);
         /* AI hint adjustments */
         if (cur->ai_hint == AI_HINT_BATCH)
             cur->vruntime -= 128; /* Slight advantage for batch jobs */
-        if (cur == pc->idle) pc->idle_ticks++;
+        if (cur == pc->idle) {
+            pc->idle_ticks++;
+        } else if (cur->slice_ticks >= SCHED_INTERACTIVE_QUANTUM_TICKS) {
+            cur->need_resched = 1;
+        }
     }
 
     /* Wake sleepers */
@@ -395,6 +415,8 @@ i64 sys_fork(void) {
     child->start_tick = this_cpu()->ticks;
     child->utime = child->stime = 0;
     child->vol_switches = child->invol_switches = 0;
+    child->slice_ticks = 0;
+    child->need_resched = 0;
 
     /* Allocate new kernel stack */
     child->stack = (u8 *)kmalloc(SCHED_STACK_SIZE);
