@@ -1,6 +1,6 @@
 # YamOS Debugging and Testing Guide
 
-This guide covers the current v0.4 development tree: Limine boot, YamBoot, SMP AP parking, VFS/initrd/devfs/procfs, networking, USB/input, VTTY, and the Wayland-style compositor.
+This guide covers the current v0.4 development tree: Limine boot, YamBoot, SMP AP parking, APIC IPIs, TLB shootdown hooks, HPET/TSC detection, guarded stacks, VFS/initrd/devfs/procfs, networking, USB/input, VTTY, and the Wayland-style compositor.
 
 ## Fast Build and Run
 
@@ -71,10 +71,13 @@ Useful early breakpoints:
 
 - `kernel_main`
 - `smp_init`
+- `apic_handle_tlb_shootdown`
+- `vmm_alloc_kernel_stack`
 - `syscall_dispatch`
 - `vfs_init`
 - `wl_compositor_task`
 - `kpanic`
+- `kpanic_with_frame`
 
 ## Kernel Logging
 
@@ -90,7 +93,7 @@ Use `src/lib/kdebug.h`:
 
 Common tags:
 
-`BOOT`, `INIT`, `SMP`, `APIC`, `VFS`, `FAT32`, `XHCI`, `USB`, `HID`, `NET`, `TCP`, `WAYLAND`, `WL_DBG`, `VTTY`, `SCHED`, `CGROUP`, `OOM`, `POWER`, `AI`, `TOUCH`, `GESTURE`, `YAMGRAPH`.
+`BOOT`, `INIT`, `SMP`, `APIC`, `HPET`, `TSC`, `VMM`, `VFS`, `FAT32`, `XHCI`, `USB`, `HID`, `NET`, `TCP`, `WAYLAND`, `WL_DBG`, `VTTY`, `SCHED`, `CGROUP`, `OOM`, `POWER`, `AI`, `TOUCH`, `GESTURE`, `YAMGRAPH`.
 
 Example:
 
@@ -118,9 +121,9 @@ The boot log should roughly progress through:
 1. Serial and Limine validation.
 2. Framebuffer and YamBoot.
 3. Splash/module scan.
-4. CPU setup: GDT, IDT, CPUID, security.
+4. CPU setup: GDT, IDT, CPUID, TSC reporting, security.
 5. Memory: VMM, PMM, heap.
-6. ACPI, LAPIC, IOAPIC, per-CPU, SMP, syscall.
+6. ACPI, LAPIC, IOAPIC, HPET discovery/init, per-CPU, SMP, syscall.
 7. YamGraph and self-tests.
 8. Drivers/subsystems: PCI, USB, VFS, IPC, NET, input.
 9. Scheduler, cgroups, OOM, power, AI.
@@ -135,6 +138,8 @@ The boot log should roughly progress through:
 | `#UD` | Jumped through corrupt function pointer or bad stack return. |
 | Double fault | TSS `rsp0`, kernel stack, recursive exception path. |
 | Hang after SMP | AP boot wait, AP count, `g_aps_booted`, parked AP loop. |
+| TLB/IPI issue | `APIC_VEC_TLB`, `apic_handle_tlb_shootdown`, local APIC ICR delivery status. |
+| Stack overflow | Guard-page fault near guarded kernel stack or user stack boundaries. |
 | Hang after VFS | initrd mount, task fd table, `/dev` or `/proc` read path. |
 | Blank desktop | DRM buffer allocation, wallpaper module, compositor state, page flip. |
 
@@ -143,8 +148,23 @@ The boot log should roughly progress through:
 SMP:
 
 - APs are booted by Limine and parked after per-core setup.
+- Local APIC IPI primitives are present, including a TLB shootdown vector at `0xF0`.
+- TLB shootdown currently broadcasts invalidations to other active APIC CPUs; AP task scheduling is still disabled.
 - `smp_sched_cpu_count()` currently reports the schedulable domain.
 - Scheduler bugs should be debugged as single-run-queue bugs first.
+
+Timers:
+
+- PIT remains initialized for legacy timing and calibration support.
+- HPET is parsed from ACPI and initialized when the `HPET` table exists.
+- TSC and TSC-deadline capability are logged during CPU setup. In the default QEMU profile, TSC-deadline may report unavailable.
+- The active scheduler tick is still the calibrated periodic Local APIC timer.
+
+Memory:
+
+- Kernel task stacks allocated through the scheduler use unmapped guard pages on both sides.
+- User ELF stacks reserve adjacent unmapped guard pages.
+- Fatal CPU exceptions call the panic-with-frame path, so serial output should include a register dump.
 
 VFS/FAT32:
 
@@ -199,6 +219,8 @@ timeout 25 qemu-system-x86_64 -cdrom build/yamkernel.iso -m 256M \
 ## Known Development Caveats
 
 - AP cores are initialized but parked; full multi-core scheduling is future work.
+- IPI and TLB shootdown primitives exist, but they are not yet proof of full SMP scheduling correctness.
+- HPET and TSC-deadline support are discovery/capability pieces; timer policy still uses the periodic APIC timer today.
 - FAT32 needs a mounted backing device/image to be useful outside unit-style memory tests.
 - TCP is an in-tree implementation, not yet a hardened production stack.
 - Some userland headers and syscall wrappers are ahead of the kernel dispatcher; keep ABI changes synchronized.

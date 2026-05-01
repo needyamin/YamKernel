@@ -111,5 +111,10 @@ void vmm_destroy_user_pml4(u64 *pml4);
 /* TLB management */
 void vmm_flush_tlb_page(u64 virt);
 void vmm_flush_tlb_all(void);
+void vmm_shootdown_page(u64 virt);
+void vmm_shootdown_all(void);
+
+/* Kernel stacks with unmapped guard pages on both ends */
+void *vmm_alloc_kernel_stack(usize usable_size);
 
 #endif /* _MEM_VMM_H */

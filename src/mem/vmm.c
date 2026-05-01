@@ -6,10 +6,12 @@
 
 #include "vmm.h"
 #include "pmm.h"
+#include "../cpu/apic.h"
 #include "../lib/kprintf.h"
 #include "../lib/string.h"
 
 static u64 g_hhdm_offset = 0;
+static u64 g_next_kernel_stack = 0xFFFFE10000000000ULL;
 
 /* ---- Helpers ---- */
 void *vmm_phys_to_virt(u64 phys) { return (void *)(phys + g_hhdm_offset); }
@@ -52,6 +54,39 @@ void vmm_flush_tlb_all(void) {
     __asm__ volatile ("mov %0, %%cr3" :: "r"(cr3) : "memory");
 }
 
+void vmm_shootdown_page(u64 virt) {
+    vmm_flush_tlb_page(virt);
+    apic_broadcast_tlb_shootdown(virt, false);
+}
+
+void vmm_shootdown_all(void) {
+    vmm_flush_tlb_all();
+    apic_broadcast_tlb_shootdown(0, true);
+}
+
+void *vmm_alloc_kernel_stack(usize usable_size) {
+    if (usable_size == 0) return NULL;
+    usable_size = (usable_size + PAGE_SIZE - 1) & ~(usize)(PAGE_SIZE - 1);
+
+    u64 total = usable_size + 2 * PAGE_SIZE;
+    u64 base = __atomic_fetch_add(&g_next_kernel_stack, total, __ATOMIC_RELAXED);
+    u64 usable = base + PAGE_SIZE;
+    u64 *pml4 = vmm_get_kernel_pml4();
+
+    for (u64 off = 0; off < usable_size; off += PAGE_SIZE) {
+        u64 phys = pmm_alloc_page();
+        if (!phys) return NULL;
+        if (!vmm_map_page(pml4, usable + off, phys,
+                          VMM_FLAG_WRITE | VMM_FLAG_NX)) {
+            return NULL;
+        }
+    }
+
+    kprintf("[VMM] guarded kernel stack usable=0x%lx size=%lu guard_lo=0x%lx guard_hi=0x%lx\n",
+            usable, usable_size, base, usable + usable_size);
+    return (void *)usable;
+}
+
 /* ---- Public API ---- */
 void vmm_init(u64 hhdm_offset) {
     g_hhdm_offset = hhdm_offset;
@@ -66,7 +101,7 @@ bool vmm_map_page(u64 *pml4, u64 virt, u64 phys, u64 flags) {
     u64 *pt = get_or_create_table(pd, pd_index(virt), flags & VMM_FLAG_USER);
     if (!pt) return false;
     pt[pt_index(virt)] = (phys & 0x000FFFFFFFFFF000ULL) | flags | VMM_FLAG_PRESENT;
-    vmm_flush_tlb_page(virt);
+    vmm_shootdown_page(virt);
     return true;
 }
 
@@ -78,7 +113,7 @@ bool vmm_map_huge_page(u64 *pml4, u64 virt, u64 phys, u64 flags) {
     u64 *pd = get_or_create_table(pdpt, pdpt_index(virt), flags & VMM_FLAG_USER);
     if (!pd) return false;
     pd[pd_index(virt)] = (phys & 0x000FFFFFFFE00000ULL) | flags | VMM_FLAG_PRESENT | VMM_FLAG_HUGE;
-    vmm_flush_tlb_page(virt);
+    vmm_shootdown_page(virt);
     return true;
 }
 
@@ -90,7 +125,7 @@ void vmm_unmap_page(u64 *pml4, u64 virt) {
     if (!(pd[pd_index(virt)] & VMM_FLAG_PRESENT)) return;
     u64 *pt = (u64 *)vmm_phys_to_virt(pd[pd_index(virt)] & 0x000FFFFFFFFFF000ULL);
     pt[pt_index(virt)] = 0;
-    vmm_flush_tlb_page(virt);
+    vmm_shootdown_page(virt);
 }
 
 u64 vmm_virt_to_phys(u64 *pml4, u64 virt) {
@@ -128,14 +163,14 @@ bool vmm_update_flags(u64 *pml4, u64 virt, u64 new_flags) {
     if (pd[pd_index(virt)] & VMM_FLAG_HUGE) {
         u64 phys = pd[pd_index(virt)] & 0x000FFFFFFFE00000ULL;
         pd[pd_index(virt)] = phys | new_flags | VMM_FLAG_PRESENT | VMM_FLAG_HUGE;
-        vmm_flush_tlb_page(virt);
+        vmm_shootdown_page(virt);
         return true;
     }
     u64 *pt = (u64 *)vmm_phys_to_virt(pd[pd_index(virt)] & 0x000FFFFFFFFFF000ULL);
     if (!(pt[pt_index(virt)] & VMM_FLAG_PRESENT)) return false;
     u64 phys = pt[pt_index(virt)] & 0x000FFFFFFFFFF000ULL;
     pt[pt_index(virt)] = phys | new_flags | VMM_FLAG_PRESENT;
-    vmm_flush_tlb_page(virt);
+    vmm_shootdown_page(virt);
     return true;
 }
 
@@ -207,7 +242,7 @@ u64 *vmm_fork_address_space(u64 *src_pml4) {
             }
         }
     }
-    vmm_flush_tlb_all();
+    vmm_shootdown_all();
     return new_pml4;
 }
 

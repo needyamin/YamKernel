@@ -21,6 +21,7 @@ typedef struct {
 
 typedef struct {
     u64 lapic_addr;
+    u64 hpet_addr;
     u32 cpu_count;
     u32 ioapic_count;
     acpi_cpu_t    cpus[ACPI_MAX_CPUS];

@@ -25,14 +25,14 @@ typedef struct PACKED {
 } idt_ptr_t;
 
 /* Interrupt frame pushed by CPU + our ISR stub */
-typedef struct PACKED {
+typedef struct interrupt_frame {
     /* Pushed by our stub */
     u64 r15, r14, r13, r12, r11, r10, r9, r8;
     u64 rbp, rdi, rsi, rdx, rcx, rbx, rax;
     u64 int_no, error_code;
     /* Pushed by CPU */
     u64 rip, cs, rflags, rsp, ss;
-} interrupt_frame_t;
+} PACKED interrupt_frame_t;
 
 /* Initialize the IDT */
 void idt_init(void);

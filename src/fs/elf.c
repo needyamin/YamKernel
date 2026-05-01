@@ -14,10 +14,12 @@
 extern void enter_user_mode(u64 rip, u64 rsp) NORETURN;
 
 /* User stack lives at the top of the lower-half canonical address space */
-#define USER_STACK_BASE  0x00007FFF00000000ULL
+#define USER_STACK_GUARD_LOW  0x00007FFEFFFFF000ULL
+#define USER_STACK_BASE       0x00007FFF00000000ULL
 #define USER_STACK_PAGES 4  /* 16 KB */
 #define USER_STACK_SIZE  (USER_STACK_PAGES * PAGE_SIZE)
 #define USER_STACK_TOP   (USER_STACK_BASE + USER_STACK_SIZE)
+#define USER_STACK_GUARD_HIGH USER_STACK_TOP
 
 /* Per-process bootstrap: switch to its page table and jump to user mode */
 typedef struct {
@@ -124,7 +126,7 @@ bool elf_load(const void *file_data, usize file_size, const char *name) {
         }
     }
 
-    /* ---- Allocate user stack ---- */
+    /* ---- Allocate user stack; adjacent pages stay unmapped as guards ---- */
     for (u32 i = 0; i < USER_STACK_PAGES; i++) {
         u64 va = USER_STACK_BASE + i * PAGE_SIZE;
         u64 phys = pmm_alloc_page();
@@ -136,6 +138,8 @@ bool elf_load(const void *file_data, usize file_size, const char *name) {
         memset(vmm_phys_to_virt(phys), 0, PAGE_SIZE);
         vmm_map_page(user_pml4, va, phys, VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_WRITE | VMM_FLAG_NX);
     }
+    kprintf("[ELF] user stack guards low=0x%lx high=0x%lx\n",
+            USER_STACK_GUARD_LOW, USER_STACK_GUARD_HIGH);
 
     /* ---- Spawn the user task ---- */
     elf_bootstrap_arg_t *ba = (elf_bootstrap_arg_t *)kmalloc(sizeof(elf_bootstrap_arg_t));

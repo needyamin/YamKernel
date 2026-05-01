@@ -63,6 +63,7 @@ void cpuid_init(void) {
         g_cpuid.has_sse41  = (ecx >> 19) & 1;
         g_cpuid.has_sse42  = (ecx >> 20) & 1;
         g_cpuid.has_x2apic = (ecx >> 21) & 1;
+        g_cpuid.has_tsc_deadline = (ecx >> 24) & 1;
         g_cpuid.has_aes    = (ecx >> 25) & 1;
         g_cpuid.has_xsave  = (ecx >> 26) & 1;
         g_cpuid.has_avx    = (ecx >> 28) & 1;
@@ -91,9 +92,16 @@ void cpuid_init(void) {
         strcpy(g_cpuid.brand, "(unknown)");
     }
 
+    if (max_ext >= 0x80000007) {
+        cpuid(0x80000007, &eax, &ebx, &ecx, &edx);
+        g_cpuid.has_invariant_tsc = (edx >> 8) & 1;
+    }
+
     kprintf_color(0xFF00FF88, "[CPU] %s — %s\n", g_cpuid.vendor, g_cpuid.brand);
     kprintf_color(0xFF00FF88, "[CPU] Family %u, Model %u, Stepping %u\n",
                   g_cpuid.family, g_cpuid.model, g_cpuid.stepping);
+    kprintf_color(0xFF00FF88, "[CPU] TSC=%u invariant=%u deadline=%u\n",
+                  g_cpuid.has_tsc, g_cpuid.has_invariant_tsc, g_cpuid.has_tsc_deadline);
 }
 
 const cpuid_info_t* cpuid_get_info(void) {

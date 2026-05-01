@@ -90,6 +90,7 @@ extern void isr_stub_44(void);
 extern void isr_stub_45(void);
 extern void isr_stub_46(void);
 extern void isr_stub_47(void);
+extern void isr_stub_240(void);
 
 static void idt_set_gate(u8 vector, void (*handler)(void), u8 ist, u8 type_attr) {
     u64 addr = (u64)handler;
@@ -178,7 +179,7 @@ static void default_exception_handler(interrupt_frame_t *frame) {
 
     /* Halt on unrecoverable exceptions */
     if (frame->int_no < 32) {
-        kpanic("Unrecoverable CPU exception #%lu", frame->int_no);
+        kpanic_with_frame(frame, "Unrecoverable CPU exception #%lu", frame->int_no);
     }
 }
 
@@ -237,6 +238,9 @@ void idt_init(void) {
         u8 ist = (i == 8 || i == 14) ? 1 : 0;  /* IST for double fault & page fault */
         idt_set_gate(i, isr_stubs[i], ist, 0x8E);
     }
+
+    idt_set_gate(APIC_VEC_TLB, isr_stub_240, 0, 0x8E);
+    idt_register_handler(APIC_VEC_TLB, (isr_handler_t)apic_handle_tlb_shootdown);
 
     /* Load IDT */
     idt_ptr.limit = sizeof(idt) - 1;

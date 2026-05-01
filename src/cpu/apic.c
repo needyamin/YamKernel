@@ -40,6 +40,8 @@ static volatile u8 *mmio_map(u64 phys, u64 hhdm) {
 #define LAPIC_ID         0x020
 #define LAPIC_EOI        0x0B0
 #define LAPIC_SVR        0x0F0
+#define LAPIC_ICR_LOW    0x300
+#define LAPIC_ICR_HIGH   0x310
 #define LAPIC_LVT_TIMER  0x320
 #define LAPIC_TIMER_INIT 0x380
 #define LAPIC_TIMER_CUR  0x390
@@ -48,12 +50,57 @@ static volatile u8 *mmio_map(u64 phys, u64 hhdm) {
 static volatile u8 *g_lapic = NULL;
 static volatile u8 *g_ioapic = NULL;
 static u32 g_ticks_per_ms = 0;
+static volatile u64 g_tlb_shootdown_addr = 0;
+static volatile u32 g_tlb_shootdown_all = 0;
 
 static u32 lapic_read(u32 r)            { return *(volatile u32 *)(g_lapic + r); }
 static void lapic_write(u32 r, u32 v)   { *(volatile u32 *)(g_lapic + r) = v; }
 
 void apic_eoi(void) { if (g_lapic) lapic_write(LAPIC_EOI, 0); }
 bool apic_active(void) { return g_lapic != NULL; }
+
+static void apic_wait_icr(void) {
+    if (!g_lapic) return;
+    while (lapic_read(LAPIC_ICR_LOW) & (1u << 12)) {
+        __asm__ volatile ("pause");
+    }
+}
+
+void apic_send_ipi(u8 apic_id, u8 vector) {
+    if (!g_lapic) return;
+    apic_wait_icr();
+    lapic_write(LAPIC_ICR_HIGH, (u32)apic_id << 24);
+    lapic_write(LAPIC_ICR_LOW, vector);
+    apic_wait_icr();
+}
+
+void apic_broadcast_ipi(u8 vector, bool include_self) {
+    if (!g_lapic) return;
+    apic_wait_icr();
+    u32 shorthand = include_self ? (2u << 18) : (3u << 18);
+    lapic_write(LAPIC_ICR_LOW, shorthand | vector);
+    apic_wait_icr();
+}
+
+void apic_broadcast_tlb_shootdown(u64 virt, bool flush_all) {
+    if (!g_lapic) return;
+    g_tlb_shootdown_addr = virt;
+    g_tlb_shootdown_all = flush_all ? 1 : 0;
+    __asm__ volatile ("" ::: "memory");
+    apic_broadcast_ipi(APIC_VEC_TLB, false);
+}
+
+void apic_handle_tlb_shootdown(void) {
+    if (g_tlb_shootdown_all) {
+        u64 cr3;
+        __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
+        __asm__ volatile ("mov %0, %%cr3" :: "r"(cr3) : "memory");
+    } else {
+        u64 virt = g_tlb_shootdown_addr;
+        __asm__ volatile ("invlpg (%0)" :: "r"(virt) : "memory");
+    }
+    apic_eoi();
+}
 
 /* Mask 8259 PIC fully (we use APIC now) */
 static void pic_disable(void) {

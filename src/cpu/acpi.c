@@ -23,6 +23,19 @@ typedef struct PACKED {
     u8  entries[];
 } madt_t;
 
+typedef struct PACKED {
+    sdt_hdr_t hdr;
+    u32 event_timer_block_id;
+    u8  address_space_id;
+    u8  register_bit_width;
+    u8  register_bit_offset;
+    u8  access_size;
+    u64 address;
+    u8  hpet_number;
+    u16 minimum_tick;
+    u8  page_protection;
+} hpet_t;
+
 static acpi_info_t g_info;
 static u64 g_hhdm = 0;
 
@@ -69,6 +82,10 @@ static void parse_madt(madt_t *m) {
     }
 }
 
+static void parse_hpet(hpet_t *h) {
+    g_info.hpet_addr = h->address;
+}
+
 void acpi_init(void *rsdp_addr, u64 hhdm_offset) {
     g_hhdm = hhdm_offset;
     if (!rsdp_addr) { kprintf_color(0xFFFF3333, "[ACPI] No RSDP\n"); return; }
@@ -91,13 +108,14 @@ void acpi_init(void *rsdp_addr, u64 hhdm_offset) {
         u64 phys = xsdt ? ((u64 *)base)[i] : (u64)((u32 *)base)[i];
         sdt_hdr_t *t = (sdt_hdr_t *)p2v(phys);
         map_range(phys, t->length);
-        if (memcmp(t->sig, "APIC", 4) == 0) { parse_madt((madt_t *)t); break; }
+        if (memcmp(t->sig, "APIC", 4) == 0) parse_madt((madt_t *)t);
+        if (memcmp(t->sig, "HPET", 4) == 0) parse_hpet((hpet_t *)t);
     }
 
     kprintf_color(0xFF00FF88,
-        "[ACPI] %s rev=%u  CPUs=%u  IOAPICs=%u  LAPIC=0x%lx\n",
+        "[ACPI] %s rev=%u  CPUs=%u  IOAPICs=%u  LAPIC=0x%lx HPET=0x%lx\n",
         xsdt ? "XSDT" : "RSDT", r->rev,
-        g_info.cpu_count, g_info.ioapic_count, g_info.lapic_addr);
+        g_info.cpu_count, g_info.ioapic_count, g_info.lapic_addr, g_info.hpet_addr);
 }
 
 const acpi_info_t *acpi_get(void) { return &g_info; }

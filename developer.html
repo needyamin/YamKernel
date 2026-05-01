@@ -71,6 +71,8 @@
             <span class="tag">Limine</span>
             <span class="tag">YamGraph</span>
             <span class="tag">SYSCALL/SYSRET</span>
+            <span class="tag">APIC IPI</span>
+            <span class="tag">HPET/TSC</span>
             <span class="tag">VFS</span>
             <span class="tag">XHCI</span>
             <span class="tag">TCP/IP</span>
@@ -87,6 +89,7 @@
             <li><a href="#syscalls">Syscall ABI</a></li>
             <li><a href="#memory">Memory</a></li>
             <li><a href="#scheduler">Scheduler and SMP</a></li>
+            <li><a href="#timers">Timers and Exceptions</a></li>
             <li><a href="#storage">Storage and VFS</a></li>
             <li><a href="#network">Networking</a></li>
             <li><a href="#desktop">Desktop and Userland</a></li>
@@ -101,9 +104,9 @@
         <thead><tr><th>Subsystem</th><th>State</th><th>Details</th></tr></thead>
         <tbody>
             <tr><td>Boot</td><td><span class="pill green">In-tree</span></td><td>Limine BIOS/UEFI ISO, YamBoot menu, framebuffer splash, module scan.</td></tr>
-            <tr><td>CPU</td><td><span class="pill green">In-tree</span></td><td>GDT, IDT, TSS, CPUID, NX/SMEP/SMAP/UMIP/WP, APIC/IOAPIC.</td></tr>
-            <tr><td>SMP</td><td><span class="pill amber">Partial</span></td><td>Limine boots APs; APs initialize and park. Scheduler domain remains CPU 0.</td></tr>
-            <tr><td>Memory</td><td><span class="pill green">In-tree</span></td><td>PMM, VMM, heap, slab, CoW, fork, mmap, brk, mprotect.</td></tr>
+            <tr><td>CPU</td><td><span class="pill green">In-tree</span></td><td>GDT, IDT, TSS, CPUID, MSR helpers, SYSCALL/SYSRET, NX/SMEP/SMAP/UMIP/WP, APIC/IOAPIC, HPET discovery/init, TSC capability reporting.</td></tr>
+            <tr><td>SMP</td><td><span class="pill amber">Partial</span></td><td>Limine boots APs; APs initialize and park. Local APIC IPI primitives and a TLB shootdown vector exist. Scheduler domain remains CPU 0.</td></tr>
+            <tr><td>Memory</td><td><span class="pill green">In-tree</span></td><td>PMM, VMM, heap, slab, CoW, fork, mmap, brk, mprotect, guarded kernel/user stacks, NX-aware mappings, TLB shootdown hooks.</td></tr>
             <tr><td>Scheduler</td><td><span class="pill green">In-tree</span></td><td>CFS-style run queue, wait queues, mutexes, futex, cgroups, OOM, power hooks.</td></tr>
             <tr><td>YamGraph</td><td><span class="pill green">In-tree</span></td><td>Nodes, edges, capabilities, channels, subsystem registration.</td></tr>
             <tr><td>VFS</td><td><span class="pill amber">Active development</span></td><td>initrd root, devfs, procfs, fd routing, FAT32 driver code.</td></tr>
@@ -115,7 +118,7 @@
     </table>
 
     <h2 id="architecture">Architecture</h2>
-    <pre><code>+---------------------------- Ring 3 --------------------------------+
+<pre><code>+---------------------------- Ring 3 --------------------------------+
 | ELF apps, services, userspace drivers, libc/libgui/libyam           |
 +----------------------- SYSCALL / SYSRET ---------------------------+
 | file/process/memory/scheduler/Wayland/driver/AI/touch/IPC syscalls  |
@@ -124,7 +127,7 @@
 +-------------------------- YamGraph --------------------------------+
 | tasks, memory, devices, files, namespaces, channels, capabilities   |
 +----------------------- Memory / CPU / Boot ------------------------+
-| PMM | VMM | heap | slab | ACPI | APIC | SMP | Limine | YamBoot      |
+| PMM | VMM | guards | ACPI | APIC/IPI | HPET/TSC | SMP | Limine      |
 +--------------------------------------------------------------------+</code></pre>
 
     <p>YamGraph is the organizing model: resources are nodes, authority travels as capability-carrying edges, and subsystems can reason about ownership, mappings, dependencies, and channels.</p>
@@ -133,7 +136,7 @@
     <ol>
         <li>Limine loads the kernel, framebuffer, boot modules, memory map, HHDM, RSDP, and SMP response.</li>
         <li>YamBoot presents Normal, Safe Mode, and Reboot choices.</li>
-        <li>The kernel initializes framebuffer, CPU tables, CPU security features, memory managers, ACPI/APIC, per-CPU data, SMP, and syscalls.</li>
+        <li>The kernel initializes framebuffer, CPU tables, CPU security features, memory managers, ACPI/APIC, HPET/TSC detection, per-CPU data, SMP, and syscalls.</li>
         <li>YamGraph is initialized and core kernel subsystems are registered as graph nodes.</li>
         <li>Self-tests run for PMM and YamGraph.</li>
         <li>Normal boot starts PCI, USB, VFS, IPC, NET, evdev, and mouse paths. Safe Mode skips this batch.</li>
@@ -166,6 +169,8 @@
                 <li>PMM initializes from Limine memmap.</li>
                 <li>VMM manages kernel page tables and MMIO mapping windows.</li>
                 <li>Heap and slab provide early and object-style allocation.</li>
+                <li>Scheduler-created kernel stacks use unmapped guard pages on both sides.</li>
+                <li>Page-table changes route through local invalidation plus APIC TLB shootdown hooks.</li>
             </ul>
         </div>
         <div class="card">
@@ -173,6 +178,7 @@
             <ul>
                 <li>ELF app modules are loaded into Ring 3 address spaces.</li>
                 <li>CoW/fork, brk, mmap, munmap, and mprotect hooks are present.</li>
+                <li>User ELF stacks reserve adjacent unmapped guard pages.</li>
                 <li>Wayland buffers map app-visible surfaces to compositor-owned objects.</li>
             </ul>
         </div>
@@ -180,7 +186,28 @@
 
     <h2 id="scheduler">Scheduler and SMP</h2>
     <p>The scheduler is CFS-style and includes task sleep, wait queues, mutexes, futexes, process lifecycle hooks, cgroups, OOM scoring, and CPU affinity ABI pieces.</p>
-    <p>SMP is intentionally conservative right now: Limine brings up APs, each AP initializes GDT/IDT/per-CPU/security/syscall/LAPIC state, then parks. Full task scheduling on APs is deferred until address-space switching and per-CPU run queue behavior are audited.</p>
+    <p>SMP is intentionally conservative right now: Limine brings up APs, each AP initializes GDT/IDT/per-CPU/security/syscall/LAPIC state, then parks. Local APIC IPI delivery and a TLB shootdown vector are available, but full task scheduling on APs is deferred until address-space switching and per-CPU run queue behavior are audited.</p>
+
+    <h2 id="timers">Timers and Exceptions</h2>
+    <div class="grid2">
+        <div class="card">
+            <h3>Timers</h3>
+            <ul>
+                <li>PIT remains available for legacy setup and APIC timer calibration.</li>
+                <li>HPET is parsed from ACPI and initialized when the platform advertises it.</li>
+                <li>TSC, invariant TSC, and TSC-deadline capability are reported during CPU setup.</li>
+                <li>The active scheduler tick still uses the periodic Local APIC timer.</li>
+            </ul>
+        </div>
+        <div class="card">
+            <h3>Exceptions</h3>
+            <ul>
+                <li>IDT exception handlers print CR2, RIP/RSP, flags, and general-purpose registers.</li>
+                <li>The panic layer exposes <code>kpanic_with_frame()</code> for fatal exception register dumps.</li>
+                <li>Page faults first try demand paging and CoW handling before panicking.</li>
+            </ul>
+        </div>
+    </div>
 
     <h2 id="storage">Storage and VFS</h2>
     <table>
@@ -220,7 +247,7 @@
 src/kernel/               main entry, shell, panic
 src/kernel/api/           syscall ABI
 src/cpu/                  GDT/IDT/APIC/ACPI/SMP/syscall/security
-src/mem/                  PMM/VMM/heap/slab/OOM
+src/mem/                  PMM/VMM/heap/slab/OOM/guarded stacks
 src/sched/                scheduler, waits, cgroups, user entry
 src/fs/                   VFS, FAT32, initrd, ELF, poll
 src/ipc/                  IPC scaffolding
@@ -248,6 +275,7 @@ make debug</code></pre>
             <h3>v0.4.x</h3>
             <ul>
                 <li>Stabilize boot, VFS, syscall ABI, app launch, serial smoke tests.</li>
+                <li>Add explicit IPI/TLB shootdown validation and timer fallback tests.</li>
                 <li>Prove FAT32 and network paths in repeatable QEMU profiles.</li>
                 <li>Make VTTY switching deterministic.</li>
             </ul>

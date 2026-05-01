@@ -159,13 +159,13 @@ task_t *sched_spawn(const char *name, void (*entry)(void *), void *arg, u8 prio)
     for (u32 i = 0; i < sizeof(t->name) - 1 && name[i]; i++) t->name[i] = name[i];
     t->graph_node = yamgraph_node_create(YAM_NODE_TASK, t->name, t);
 
-    t->stack = (u8 *)kmalloc(SCHED_STACK_SIZE);
+    t->stack = (u8 *)vmm_alloc_kernel_stack(SCHED_STACK_SIZE);
     if (!t->stack) { kmem_cache_free(task_cache, t); return NULL; }
 
     u32 fpu_sz = cpuid_get_info()->xsave_size;
     if (fpu_sz == 0) fpu_sz = 512; /* FXSAVE fallback */
     t->fpu_state = (u8 *)kmalloc(fpu_sz);
-    if (!t->fpu_state) { kfree(t->stack); kmem_cache_free(task_cache, t); return NULL; }
+    if (!t->fpu_state) { kmem_cache_free(task_cache, t); return NULL; }
     memset(t->fpu_state, 0, fpu_sz);
 
     /* Stack frame for context_switch + task_trampoline */
@@ -469,7 +469,7 @@ i64 sys_fork(void) {
     child->need_resched = 0;
 
     /* Allocate new kernel stack */
-    child->stack = (u8 *)kmalloc(SCHED_STACK_SIZE);
+    child->stack = (u8 *)vmm_alloc_kernel_stack(SCHED_STACK_SIZE);
     if (!child->stack) { kmem_cache_free(task_cache, child); return -1; }
     memcpy(child->stack, parent->stack, SCHED_STACK_SIZE);
 
@@ -477,7 +477,7 @@ i64 sys_fork(void) {
     u32 fork_fpu_sz = cpuid_get_info()->xsave_size;
     if (fork_fpu_sz == 0) fork_fpu_sz = 512;
     child->fpu_state = (u8 *)kmalloc(fork_fpu_sz);
-    if (!child->fpu_state) { kfree(child->stack); kmem_cache_free(task_cache, child); return -1; }
+    if (!child->fpu_state) { kmem_cache_free(task_cache, child); return -1; }
     memcpy(child->fpu_state, parent->fpu_state, fork_fpu_sz);
 
     /* CoW address space */

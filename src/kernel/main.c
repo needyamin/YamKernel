@@ -20,6 +20,7 @@
 #include "cpu/apic.h"
 #include "cpu/percpu.h"
 #include "cpu/smp.h"
+#include "cpu/tsc.h"
 #include "kernel/api/syscall.h"
 #include "sched/sched.h"
 #include "mem/pmm.h"
@@ -28,6 +29,7 @@
 #include "drivers/serial/serial.h"
 #include "drivers/video/framebuffer.h"
 #include "drivers/timer/pit.h"
+#include "drivers/timer/hpet.h"
 #include "drivers/timer/rtc.h"
 #include "drivers/bus/api.h"
 #include "net/net.h"
@@ -285,6 +287,8 @@ void kernel_main(void) {
     KTRACE("INIT", "IDT OK");
     cpuid_init();
     KTRACE("INIT", "CPUID OK");
+    tsc_init();
+    KTRACE("INIT", "TSC OK");
     security_init();
     KTRACE("INIT", "Security OK");
 
@@ -317,6 +321,8 @@ void kernel_main(void) {
     KTRACE("INIT", "APIC OK");
     ioapic_init(hhdm_offset);
     KTRACE("INIT", "IOAPIC OK");
+    hpet_init(hhdm_offset);
+    KTRACE("INIT", "HPET OK");
     
     /* Route legacy ISA IRQs to BSP (LAPIC 0) */
     ioapic_set_irq(1, 33, 0);  /* Keyboard -> Vector 33 */

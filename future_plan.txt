@@ -9,9 +9,14 @@ CURRENT BASELINE
 YamOS has moved past the original v0.3 foundation. The tree now includes:
 
 - Limine BIOS/UEFI boot, YamBoot, splash assets, and ELF module loading.
-- Core x86_64 kernel setup: GDT, IDT, TSS, CPUID, security flags, APIC/IOAPIC.
+- Core x86_64 kernel setup: GDT, IDT, TSS, CPUID, MSRs, SYSCALL/SYSRET,
+  security flags, APIC/IOAPIC, HPET discovery, and TSC capability reporting.
 - Limine SMP startup with AP initialization and parking.
-- PMM, VMM, heap, slab, CoW/fork support, brk/mmap/mprotect hooks.
+- Local APIC IPI primitives and a TLB shootdown vector are in-tree.
+- PMM, VMM, heap, slab, CoW/fork support, brk/mmap/mprotect hooks, guarded
+  kernel stacks, user stack guards, and NX-backed mappings.
+- CPU exceptions print register state and the panic path can halt with an
+  interrupt-frame register dump.
 - CFS-style scheduler, wait queues, mutex/futex, cgroups, OOM, power hooks.
 - YamGraph resources, channels, and capabilities.
 - VFS with initrd root, devfs, procfs, FAT32 driver code, ELF loader.
@@ -33,6 +38,9 @@ Goal: turn the v0.4 feature set into a dependable developer preview.
 1. Boot and scheduler correctness
    - Keep Limine SMP as the primary path.
    - Audit AP address-space switching before enabling task scheduling on APs.
+   - Add explicit IPI acknowledgements/timeouts for TLB shootdown tests.
+   - Keep TSC-deadline as detected-only until timer calibration and fallback
+     policy are proven across QEMU, VMware, and real hardware.
    - Add scheduler assertions around current task, run queue ownership, and fd tables.
    - Add a boot-mode flag for "single core debug" versus "AP initialized and parked".
 
@@ -69,6 +77,9 @@ Goal: turn the v0.4 feature set into a dependable developer preview.
 7. Documentation and scripts
    - Keep README, DEBUGGING, developer.html, and this roadmap aligned.
    - Add repeatable smoke commands for BIOS, UEFI, serial-only, network, and USB.
+   - Add a kernel-feature checklist covering paging, page faults, exceptions,
+     MSRs, SYSCALL/SYSRET, Ring 3, FPU state, APIC, HPET, TSC, IPIs, TLB
+     shootdown, guard pages, and panic dumps.
    - Add a short "known limitations" section to release notes.
 
 Exit criteria:
@@ -78,6 +89,7 @@ Exit criteria:
 - Serial log includes successful VFS, scheduler, and compositor initialization.
 - At least one user ELF app launches from the desktop.
 - A headless smoke run can be repeated without manual intervention.
+- Serial smoke logs include TSC/HPET capability output and guarded-stack lines.
 
 ===============================================================================
 PHASE 2: v0.5 DESKTOP AND USERLAND
@@ -169,7 +181,8 @@ Goal: make the YamGraph capability model visible and enforceable.
 
 3. Hardening
    - Stack canaries.
-   - W^X policy.
+   - Strengthen W^X policy from "NX-aware mappings" into a global audited rule.
+   - Extend guard-page coverage to more kernel/internal stacks and allocator red zones.
    - KASLR investigation.
    - Signed kernel/module verification plan.
 
@@ -268,6 +281,10 @@ Risks:
 - Hardware coverage is tiny compared with Linux/BSD.
 - Networking, USB, FAT32, and desktop code need much more testing.
 - Multi-core scheduling is not enabled yet despite AP initialization.
+- IPI and TLB shootdown primitives exist, but full SMP scheduling correctness is
+  not claimed yet.
+- HPET is discovered and initialized when present; TSC-deadline is detected, but
+  timer policy still defaults to the periodic Local APIC timer.
 - Userland ABI must be cleaned before external app development is pleasant.
 
 Near-term priority:

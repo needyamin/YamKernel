@@ -9,9 +9,9 @@ Current tree: **v0.4.0 development line**.
 | Area | Status | Notes |
 | --- | --- | --- |
 | Boot | Stable | Limine BIOS/UEFI ISO, YamBoot menu, framebuffer splash, module loading. |
-| CPU | In-tree | GDT/IDT/TSS, CPUID, NX/SMEP/SMAP/UMIP/WP, APIC/IOAPIC, PIT/RTC. |
-| SMP | Partial | Limine starts AP cores; APs initialize and park. Scheduler currently uses CPU 0 only. |
-| Memory | In-tree | Zone-aware PMM, VMM, heap, slab, CoW/fork support, `brk`, `mmap`, `mprotect`. |
+| CPU | In-tree | GDT/IDT/TSS, CPUID, MSRs, SYSCALL/SYSRET, NX/SMEP/SMAP/UMIP/WP, APIC/IOAPIC, PIT/RTC, HPET discovery, TSC capability reporting. |
+| SMP | Partial | Limine starts AP cores; APs initialize and park. Local APIC IPI primitives exist; scheduler currently uses CPU 0 only. |
+| Memory | In-tree | Zone-aware PMM, VMM, heap, slab, CoW/fork support, `brk`, `mmap`, `mprotect`, kernel/user stack guards, TLB shootdown hooks. |
 | Scheduler | In-tree | CFS-style scheduler, wait queues, mutexes, futexes, cgroups, OOM, idle/power hooks. |
 | Syscalls | In-tree | File, process, memory, scheduler, Wayland, driver, AI, touch, and YamGraph IPC calls. |
 | Filesystems | In-tree | VFS with initrd root, devfs, procfs, and FAT32 read/write driver code. |
@@ -93,7 +93,7 @@ src/os/services/          compositor service and demo clients
 
 1. Limine loads the kernel, framebuffer, and ELF/assets modules.
 2. YamBoot shows Normal, Safe Mode, and Reboot choices.
-3. The kernel initializes framebuffer, CPU tables, security flags, memory, ACPI/APIC/SMP, and syscalls.
+3. The kernel initializes framebuffer, CPU tables, security flags, memory, ACPI/APIC/SMP, HPET/TSC detection, and syscalls.
 4. YamGraph is initialized and core subsystems are registered.
 5. Drivers and subsystems start unless Safe Mode was selected.
 6. Scheduler, cgroups, OOM, power, AI, PID 1, and the compositor are spawned.
@@ -105,6 +105,9 @@ src/os/services/          compositor service and demo clients
 - `YAM_PREEMPTIVE` and `YAM_WAYLAND` are enabled in `src/kernel/main.c`.
 - `YAM_DEMO_TASKS` is disabled by default.
 - The desktop compositor starts at login, can spawn app modules, and includes a VTTY render mode.
+- AP cores are initialized and can receive kernel IPIs, but full multi-core task scheduling remains disabled until address-space switching and run-queue ownership are audited.
+- TSC-deadline is detected when the CPU exposes it. The current timer path still uses the calibrated periodic APIC timer unless a later platform-specific timer switch is added.
+- CPU exceptions print register state, and the panic path has a register-frame variant for fatal exception debugging.
 
 ## Documentation
 

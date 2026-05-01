@@ -32,7 +32,9 @@ typedef struct {
     bool has_sse42;
     bool has_aes;
     bool has_x2apic;
+    bool has_tsc_deadline;
     bool has_xsave;
+    bool has_invariant_tsc;
     /* Derived/Extended state */
     u32  xsave_size;
 } cpuid_info_t;
