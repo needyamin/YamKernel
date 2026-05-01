@@ -18,6 +18,7 @@ extern const uint8_t font_basic_8x16[128][16];
 #define COL_WARN       0xFFFBBF24
 #define COL_ERR        0xFFFF5C70
 #define COL_CURSOR     0xFFE8EEF7
+#define COL_SELECT     0xFF2F6FED
 
 static const char sc_ascii[128] = {
     0,  27, '1','2','3','4','5','6','7','8','9','0','-','=','\b',
@@ -42,6 +43,56 @@ static const char *status_text = "ready";
 static bool shift_held = false;
 static bool python_mode = false;
 static const char *py_expr;
+static int mouse_x = 0;
+static int mouse_y = 0;
+static bool selecting = false;
+static bool has_selection = false;
+static int sel_start_row = 0;
+static int sel_start_col = 0;
+static int sel_end_row = 0;
+static int sel_end_col = 0;
+
+static int clamp_int(int v, int lo, int hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+static void terminal_point_from_mouse(int x, int y, int *row, int *col) {
+    int c = (x - 14) / 8;
+    int r = (y - 12) / 16;
+    *row = clamp_int(r, 0, TERM_ROWS - 1);
+    *col = clamp_int(c, 0, TERM_COLS);
+}
+
+static void normalized_selection(int *sr, int *sc, int *er, int *ec) {
+    *sr = sel_start_row;
+    *sc = sel_start_col;
+    *er = sel_end_row;
+    *ec = sel_end_col;
+    if (*sr > *er || (*sr == *er && *sc > *ec)) {
+        int tr = *sr, tc = *sc;
+        *sr = *er; *sc = *ec;
+        *er = tr; *ec = tc;
+    }
+}
+
+static bool selected_span_for_row(int row, int *start_col, int *end_col) {
+    if (!has_selection && !selecting) return false;
+    int sr, sc, er, ec;
+    normalized_selection(&sr, &sc, &er, &ec);
+    if (sr == er && sc == ec) return false;
+    if (row < sr || row > er) return false;
+    int a = (row == sr) ? sc : 0;
+    int b = (row == er) ? ec : TERM_COLS;
+    if (b < a) {
+        int t = a; a = b; b = t;
+    }
+    if (b == a) return false;
+    *start_col = clamp_int(a, 0, TERM_COLS);
+    *end_col = clamp_int(b, 0, TERM_COLS);
+    return true;
+}
 
 static bool streq(const char *a, const char *b) {
     while (*a && *b && *a == *b) {
@@ -106,6 +157,74 @@ static void term_putchar(char c, u32 color) {
 
 static void term_puts(const char *s, u32 color) {
     while (*s) term_putchar(*s++, color);
+}
+
+static void process_command(void);
+static void show_prompt(void);
+
+static void term_insert_char(char c) {
+    if (c == '\n') {
+        term_putchar('\n', COL_FG);
+        process_command();
+        show_prompt();
+        return;
+    }
+    if (c == '\b') {
+        if (input_len > 0) {
+            input_len--;
+            term_putchar('\b', COL_FG);
+            status_text = "editing";
+        }
+        return;
+    }
+    if (c >= 32 && c < 127 && input_len < 126) {
+        input_buf[input_len++] = c;
+        term_putchar(c, COL_FG);
+        status_text = "typing";
+    }
+}
+
+static void copy_selection_to_clipboard(void) {
+    if (!has_selection) {
+        status_text = "nothing selected";
+        return;
+    }
+    int sr, sc, er, ec;
+    normalized_selection(&sr, &sc, &er, &ec);
+
+    char clip[512];
+    int out = 0;
+    for (int r = sr; r <= er && out < (int)sizeof(clip) - 1; r++) {
+        int a = (r == sr) ? sc : 0;
+        int b = (r == er) ? ec : TERM_COLS;
+        a = clamp_int(a, 0, TERM_COLS);
+        b = clamp_int(b, 0, TERM_COLS);
+        int last = b;
+        while (last > a && screen[r][last - 1] == ' ') last--;
+        for (int c = a; c < last && out < (int)sizeof(clip) - 1; c++) {
+            char ch = screen[r][c] ? screen[r][c] : ' ';
+            clip[out++] = ch;
+        }
+        if (r != er && out < (int)sizeof(clip) - 1) clip[out++] = '\n';
+    }
+    clip[out] = '\0';
+    clipboard_set(clip, (u32)out);
+    status_text = "copied";
+    print("[APP_DBG] terminal copied selection\n");
+}
+
+static void paste_clipboard(void) {
+    char clip[512];
+    int n = clipboard_get(clip, sizeof(clip));
+    if (n <= 0) {
+        status_text = "clipboard empty";
+        return;
+    }
+    for (int i = 0; i < n && clip[i]; i++) {
+        if (clip[i] == '\n') term_insert_char(' ');
+        else term_insert_char(clip[i]);
+    }
+    status_text = "pasted";
 }
 
 static void show_prompt(void) {
@@ -311,6 +430,10 @@ static void draw_terminal(wl_user_buffer_t *buf) {
     wl_user_draw_rect(buf, 8, 8, TERM_W - 16, TERM_ROWS * 16 + 8, COL_PANEL_2);
     for (int r = 0; r < TERM_ROWS; r++) {
         if (screen[r][0] != 0 || r == cur_row) {
+            int a, b;
+            if (selected_span_for_row(r, &a, &b)) {
+                wl_user_draw_rect(buf, 14 + a * 8, 12 + r * 16, (u32)((b - a) * 8), 16, COL_SELECT);
+            }
             wl_user_draw_text(buf, 14, 12 + (r * 16), screen[r], screen_color[r]);
         }
     }
@@ -349,7 +472,40 @@ void _start(void) {
                 print("[APP_DBG] terminal close requested\n");
                 exit(0);
             }
+            if (ev.type == EV_ABS) {
+                if (ev.code == 0) mouse_x = ev.value;
+                if (ev.code == 1) {
+                    mouse_y = ev.value;
+                    if (selecting) {
+                        terminal_point_from_mouse(mouse_x, mouse_y, &sel_end_row, &sel_end_col);
+                        has_selection = true;
+                        status_text = "selecting";
+                    }
+                }
+                continue;
+            }
+            if (ev.type == EV_CLIPBOARD) {
+                if (ev.code == CLIPBOARD_COPY) copy_selection_to_clipboard();
+                if (ev.code == CLIPBOARD_PASTE) paste_clipboard();
+                continue;
+            }
             if (ev.type == EV_KEY) {
+                if (ev.code == BTN_LEFT) {
+                    if (ev.value == KEY_PRESSED) {
+                        terminal_point_from_mouse(mouse_x, mouse_y, &sel_start_row, &sel_start_col);
+                        sel_end_row = sel_start_row;
+                        sel_end_col = sel_start_col;
+                        selecting = true;
+                        has_selection = false;
+                        status_text = "select start";
+                    } else {
+                        terminal_point_from_mouse(mouse_x, mouse_y, &sel_end_row, &sel_end_col);
+                        selecting = false;
+                        has_selection = !(sel_start_row == sel_end_row && sel_start_col == sel_end_col);
+                        status_text = has_selection ? "text selected" : "ready";
+                    }
+                    continue;
+                }
                 u16 sc = ev.code;
                 if (sc == 0x2A || sc == 0x36) {
                     shift_held = (ev.value == KEY_PRESSED);
@@ -357,21 +513,7 @@ void _start(void) {
                 }
                 if (ev.value != KEY_PRESSED) continue;
                 char c = (sc < 128) ? (shift_held ? sc_ascii_shift[sc] : sc_ascii[sc]) : 0;
-                if (c == '\n') {
-                    term_putchar('\n', COL_FG);
-                    process_command();
-                    show_prompt();
-                } else if (c == '\b') {
-                    if (input_len > 0) {
-                        input_len--;
-                        term_putchar('\b', COL_FG);
-                        status_text = "editing";
-                    }
-                } else if (c >= 32 && c < 127 && input_len < 126) {
-                    input_buf[input_len++] = c;
-                    term_putchar(c, COL_FG);
-                    status_text = "typing";
-                }
+                if (c) term_insert_char(c);
             }
         }
 

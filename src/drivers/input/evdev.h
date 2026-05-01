@@ -14,6 +14,7 @@
 #define EV_REL      0x02
 #define EV_ABS      0x03
 #define EV_CLOSE    0x100
+#define EV_CLIPBOARD 0x101
 
 /* Relative axes */
 #define REL_X       0x00
@@ -28,6 +29,9 @@
 /* Key states */
 #define KEY_RELEASED    0
 #define KEY_PRESSED     1
+
+#define CLIPBOARD_COPY  1
+#define CLIPBOARD_PASTE 2
 
 /* Maximum events in ring buffer */
 #define EVDEV_RING_SIZE 256

@@ -156,6 +156,37 @@ static i64 sys_sched_info(u64 uout) {
     return 0;
 }
 
+static char g_clipboard[1024];
+static u32 g_clipboard_len = 0;
+
+static i64 sys_clipboard_set(u64 utext, u32 len) {
+    if (!utext) return -1;
+    if (len >= sizeof(g_clipboard)) len = sizeof(g_clipboard) - 1;
+
+    bool smap = (read_cr4() & CR4_SMAP) != 0;
+    if (smap) __asm__ volatile ("stac");
+    memcpy(g_clipboard, (const void *)utext, len);
+    if (smap) __asm__ volatile ("clac");
+
+    g_clipboard[len] = '\0';
+    g_clipboard_len = len;
+    kprintf("[CLIPBOARD] set len=%u text='%s'\n", g_clipboard_len, g_clipboard);
+    return (i64)g_clipboard_len;
+}
+
+static i64 sys_clipboard_get(u64 uout, u32 cap) {
+    if (!uout || cap == 0) return -1;
+    u32 n = g_clipboard_len;
+    if (n >= cap) n = cap - 1;
+
+    bool smap = (read_cr4() & CR4_SMAP) != 0;
+    if (smap) __asm__ volatile ("stac");
+    memcpy((void *)uout, g_clipboard, n);
+    ((char *)uout)[n] = '\0';
+    if (smap) __asm__ volatile ("clac");
+    return (i64)n;
+}
+
 /* ---- Wayland / GUI Syscall Handlers ---- */
 
 static i64 sys_wl_create_surface(u64 utitle, i32 x, i32 y, u32 w, u32 h) {
@@ -394,6 +425,8 @@ i64 syscall_dispatch(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5) {
     case SYS_SCHED_GETAFFINITY: SYSCALL_RETURN(sys_sched_getaffinity());
     case SYS_SCHED_INFO:        SYSCALL_RETURN(sys_sched_info(a1));
     case SYS_FUTEX:         SYSCALL_RETURN(sys_futex((u32 *)a1, (int)a2, (u32)a3, a4));
+    case SYS_CLIPBOARD_SET: SYSCALL_RETURN(sys_clipboard_set(a1, (u32)a2));
+    case SYS_CLIPBOARD_GET: SYSCALL_RETURN(sys_clipboard_get(a1, (u32)a2));
 
     /* Wayland */
     case SYS_WL_CREATE_SURFACE: SYSCALL_RETURN(sys_wl_create_surface(a1, (i32)a2, (i32)a3, (u32)a4, (u32)a5));

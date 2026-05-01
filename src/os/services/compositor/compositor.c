@@ -44,6 +44,32 @@ static u32 g_next_surface_id = 1;
 static void composite_debug_overlay(void);
 static void composite_heartbeat(void);
 
+static wl_surface_t *focused_surface(void) {
+    for (int i = 0; i < WL_MAX_SURFACES; i++) {
+        if (g_compositor.surfaces[i].state == WL_SURFACE_ACTIVE &&
+            g_compositor.surfaces[i].id == g_compositor.focused_id) {
+            return &g_compositor.surfaces[i];
+        }
+    }
+    return NULL;
+}
+
+static void clipboard_copy_focused(void) {
+    wl_surface_t *s = focused_surface();
+    if (!s) return;
+    input_event_t ev = { .type = EV_CLIPBOARD, .code = CLIPBOARD_COPY, .value = 1 };
+    wl_surface_push_event(s, ev);
+    kprintf("[CLIPBOARD] copy requested for surface %u ('%s')\n", s->id, s->title);
+}
+
+static void clipboard_paste_focused(void) {
+    wl_surface_t *s = focused_surface();
+    if (!s) return;
+    input_event_t ev = { .type = EV_CLIPBOARD, .code = CLIPBOARD_PASTE, .value = 1 };
+    wl_surface_push_event(s, ev);
+    kprintf("[CLIPBOARD] paste requested for surface %u ('%s')\n", s->id, s->title);
+}
+
 static u32 wl_debug_checksum(const u32 *pixels, u32 total_pixels) {
     if (!pixels || total_pixels == 0) return 0;
     u32 step = total_pixels / 64;
@@ -765,6 +791,31 @@ static void composite_taskbar(void) {
     }
 }
 
+static void composite_context_menu(void) {
+    if (!g_compositor.context_menu_open) return;
+
+    u32 dw = g_compositor.scanout->width;
+    u32 dh = g_compositor.scanout->height;
+    wl_surface_t ds = { .buffer = g_compositor.scanout, .width = dw, .height = dh };
+
+    i32 mw = 168;
+    i32 mh = 104;
+    i32 mx = g_compositor.context_x;
+    i32 my = g_compositor.context_y;
+    if (mx + mw >= (i32)dw) mx = (i32)dw - mw - 4;
+    if (my + mh >= (i32)dh) my = (i32)dh - mh - 4;
+    if (mx < 4) mx = 4;
+    if (my < 34) my = 34;
+
+    wl_draw_rect(&ds, mx, my, mw, mh, 0xF0141C2B);
+    wl_draw_rect(&ds, mx, my, mw, 1, 0xFF60A5FA);
+    wl_draw_rect(&ds, mx, my + mh - 1, mw, 1, 0x553B4658);
+
+    wl_draw_text(&ds, mx + 14, my + 14, "Copy", 0xFFE8EEF7, 0);
+    wl_draw_text(&ds, mx + 14, my + 44, "Paste", 0xFFE8EEF7, 0);
+    wl_draw_text(&ds, mx + 14, my + 74, "Cancel", 0xFF9AA8BA, 0);
+}
+
 static void composite_debug_overlay(void) {
     if (!g_compositor.show_debug_overlay) return;
 
@@ -912,6 +963,8 @@ static void process_input(void) {
             }
             
             bool is_mouse_btn = (ev.code >= 0x110);
+            bool is_left_btn = (ev.code == BTN_LEFT);
+            bool is_right_btn = (ev.code == BTN_RIGHT);
             
             if (!is_mouse_btn) {
                 u16 sc = ev.code;
@@ -1044,7 +1097,41 @@ static void process_input(void) {
                     i32 dock_x = (g_compositor.display_w - dock_w) / 2;
                     i32 dock_y = g_compositor.display_h - 64 - 14;
 
-                    if (ev.value == KEY_PRESSED && g_compositor.cursor_y >= 0 && g_compositor.cursor_y < 30) {
+                    if (is_right_btn && ev.value == KEY_PRESSED) {
+                        g_compositor.context_menu_open = true;
+                        g_compositor.context_x = g_compositor.cursor_x;
+                        g_compositor.context_y = g_compositor.cursor_y;
+                        g_compositor.context_surface_id = g_compositor.focused_id;
+                        g_compositor.desktop_menu_open = 0;
+                        g_compositor.show_power_menu = false;
+                        kprintf("[CLIPBOARD] context menu open at %d,%d\n",
+                                g_compositor.context_x, g_compositor.context_y);
+                        continue;
+                    }
+
+                    if (is_left_btn && ev.value == KEY_PRESSED && g_compositor.context_menu_open) {
+                        i32 mx = g_compositor.context_x;
+                        i32 my = g_compositor.context_y;
+                        i32 mw = 168;
+                        i32 mh = 104;
+                        if (mx + mw >= (i32)g_compositor.display_w) mx = (i32)g_compositor.display_w - mw - 4;
+                        if (my + mh >= (i32)g_compositor.display_h) my = (i32)g_compositor.display_h - mh - 4;
+                        if (mx < 4) mx = 4;
+                        if (my < 34) my = 34;
+                        if (g_compositor.cursor_x >= mx && g_compositor.cursor_x < mx + mw &&
+                            g_compositor.cursor_y >= my && g_compositor.cursor_y < my + mh) {
+                            i32 row = (g_compositor.cursor_y - my) / 30;
+                            if (row == 0) clipboard_copy_focused();
+                            else if (row == 1) clipboard_paste_focused();
+                            else kprintf("[CLIPBOARD] context menu canceled\n");
+                        }
+                        g_compositor.context_menu_open = false;
+                        continue;
+                    } else if (is_left_btn && ev.value == KEY_PRESSED) {
+                        g_compositor.context_menu_open = false;
+                    }
+
+                    if (is_left_btn && ev.value == KEY_PRESSED && g_compositor.cursor_y >= 0 && g_compositor.cursor_y < 30) {
                         if (g_compositor.cursor_x >= 182 && g_compositor.cursor_x < 230) {
                             g_compositor.desktop_menu_open = (g_compositor.desktop_menu_open == 1) ? 0 : 1;
                             kprintf("[WL_DBG] desktop menu File %s\n", g_compositor.desktop_menu_open ? "open" : "closed");
@@ -1063,7 +1150,7 @@ static void process_input(void) {
                         g_compositor.desktop_menu_open = 0;
                     }
 
-                    if (ev.value == KEY_PRESSED && g_compositor.desktop_menu_open) {
+                    if (is_left_btn && ev.value == KEY_PRESSED && g_compositor.desktop_menu_open) {
                         i32 mx = 182;
                         if (g_compositor.desktop_menu_open == 2) mx = 234;
                         if (g_compositor.desktop_menu_open == 3) mx = 288;
@@ -1125,7 +1212,7 @@ static void process_input(void) {
                     }
 
                     /* Check Power/App Menu Clicks */
-                    if (g_compositor.show_power_menu && ev.value == KEY_PRESSED) {
+                    if (is_left_btn && g_compositor.show_power_menu && ev.value == KEY_PRESSED) {
                         i32 mw = 300, mh = 304;
                         i32 mx = dock_x;
                         if (g_compositor.cursor_x >= mx && g_compositor.cursor_x <= mx + mw) {
@@ -1178,7 +1265,7 @@ static void process_input(void) {
                     }
 
                     /* Check Taskbar/Dock clicks */
-                    if (ev.value == KEY_PRESSED && g_compositor.cursor_y >= dock_y && g_compositor.cursor_y <= dock_y + 64) {
+                    if (is_left_btn && ev.value == KEY_PRESSED && g_compositor.cursor_y >= dock_y && g_compositor.cursor_y <= dock_y + 64) {
                         /* Launcher tile */
                         if (g_compositor.cursor_x >= dock_x + 10 && g_compositor.cursor_x <= dock_x + 58) {
                             g_compositor.show_power_menu = !g_compositor.show_power_menu;
@@ -1198,7 +1285,7 @@ static void process_input(void) {
                             }
                         }
                         continue;
-                    } else if (ev.code == 0x110) {
+                    } else if (is_left_btn) {
                         /* Mouse button */
                         if (ev.value == KEY_RELEASED) {
                             g_compositor.dragging = false;
@@ -1327,6 +1414,9 @@ void wl_compositor_task(void *arg) {
             
             /* 4. Draw Taskbar */
             composite_taskbar();
+
+            /* 5. Draw right-click context menu */
+            composite_context_menu();
         }
 
         /* 4. Draw Debug Overlay (Always accessible) */

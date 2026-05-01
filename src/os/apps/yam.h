@@ -18,8 +18,14 @@ typedef struct {
 #define EV_REL 0x02
 #define EV_ABS 0x03
 #define EV_CLOSE 0x100
+#define EV_CLIPBOARD 0x101
 #define KEY_PRESSED  1
 #define KEY_RELEASED 0
+#define CLIPBOARD_COPY  1
+#define CLIPBOARD_PASTE 2
+#define BTN_LEFT   0x110
+#define BTN_RIGHT  0x111
+#define BTN_MIDDLE 0x112
 
 /* ---- Library Functions ---- */
 
@@ -70,6 +76,8 @@ static inline int getrusage(yam_rusage_t *out) { return (int)syscall1(SYS_GETRUS
 static inline int sched_setaffinity(u64 mask) { return (int)syscall1(SYS_SCHED_SETAFFINITY, (long)mask); }
 static inline u64 sched_getaffinity(void) { return (u64)syscall0(SYS_SCHED_GETAFFINITY); }
 static inline int sched_info(yam_sched_info_t *out) { return (int)syscall1(SYS_SCHED_INFO, (long)out); }
+static inline int clipboard_set(const char *text, u32 len) { return (int)syscall2(SYS_CLIPBOARD_SET, (long)text, len); }
+static inline int clipboard_get(char *out, u32 cap) { return (int)syscall2(SYS_CLIPBOARD_GET, (long)out, cap); }
 
 static inline i32 wl_create_surface(const char *title, i32 x, i32 y, u32 w, u32 h) {
     return (i32)syscall5(SYS_WL_CREATE_SURFACE, (long)title, x, y, w, h);

@@ -109,6 +109,9 @@ typedef struct wl_compositor {
     bool            show_power_menu;
     bool            show_debug_overlay;
     u8              desktop_menu_open;  /* 0 none, 1 File, 2 View, 3 Window */
+    bool            context_menu_open;
+    i32             context_x, context_y;
+    u32             context_surface_id;
 } wl_compositor_t;
 
 /* Initialize the Wayland compositor */

@@ -63,12 +63,15 @@
 #define SYS_CHANNEL_RECV      61
 #define SYS_CHANNEL_LOOKUP    62
 
+#define SYS_CLIPBOARD_SET     63
+#define SYS_CLIPBOARD_GET     64
+
 /* Touchscreen (new in v0.3.0) */
 #define SYS_TOUCH_CALIBRATE   56
 #define SYS_TOUCH_GET_SLOTS   57
 #define SYS_GESTURE_CONFIG    58
 
-#define SYS_MAX     64
+#define SYS_MAX     65
 
 typedef struct {
     u64 pid;

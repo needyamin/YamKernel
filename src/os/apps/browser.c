@@ -198,6 +198,29 @@ void _start(void) {
                 print("[APP_DBG] browser close requested\n");
                 exit(0);
             }
+            if (ev.type == EV_CLIPBOARD) {
+                if (ev.code == CLIPBOARD_COPY) {
+                    clipboard_set(url_buffer, (u32)strlen(url_buffer));
+                    browser_status = "Address copied";
+                    changed = true;
+                } else if (ev.code == CLIPBOARD_PASTE) {
+                    char clip[128];
+                    int n = clipboard_get(clip, sizeof(clip));
+                    if (n > 0) {
+                        for (int i = 0; i < n && clip[i]; i++) {
+                            if (clip[i] == '\n') continue;
+                            int len = strlen(url_buffer);
+                            if (len < 127) {
+                                url_buffer[len] = clip[i];
+                                url_buffer[len + 1] = 0;
+                            }
+                        }
+                        browser_status = "Pasted into address";
+                        changed = true;
+                    }
+                }
+                continue;
+            }
             if (ev.type == EV_KEY && ev.value == KEY_PRESSED) {
                 u16 sc = ev.code;
                 char c = (sc < 128) ? sc_ascii[sc] : 0;
