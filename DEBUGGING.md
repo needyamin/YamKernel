@@ -1,153 +1,65 @@
-# YamOS Debugging & Testing Guide
+# YamOS Debugging and Testing Guide
 
-This repository contains a structured debugging and testing system for rapid kernel development.
+This guide covers the current v0.4 development tree: Limine boot, YamBoot, SMP AP parking, VFS/initrd/devfs/procfs, networking, USB/input, VTTY, and the Wayland-style compositor.
 
----
+## Fast Build and Run
 
-## 📂 Directory Structure
+Windows PowerShell:
 
-```
-kernel/
-├── scripts/
-│   ├── test.sh          # WSL/Linux rapid test script
-│   └── test.ps1         # Windows PowerShell rapid test script
-├── assets/
-│   ├── logo.png         # Splash logo
-│   └── owl_wallpaper.jpg # Desktop background
-├── .vscode/
-│   ├── launch.json      # VS Code GDB debugger config
-│   └── tasks.json       # VS Code build/launch tasks
-├── src/
-│   ├── wayland/         # Compositor & GUI clients
-│   ├── drivers/drm/     # Display Rendering Manager
-│   └── lib/
-│       ├── kdebug.h     # Debug logging macros
-│       └── kdebug.c     # Serial logging implementation
-├── Makefile             # Build system with debug targets
-└── DEBUGGING.md         # This file
-```
-
----
-
-## 🚀 Rapid Testing (The "Edit → Build → Run" Loop)
-
-After making code changes, use the test scripts:
-
-### Windows (PowerShell)
 ```powershell
-.\scripts\test.ps1              # Build + run (graphical QEMU window)
-.\scripts\test.ps1 serial       # Build + run with serial log file
-.\scripts\test.ps1 headless     # Build + serial output on terminal
-.\scripts\test.ps1 debug        # Build + GDB attach mode
+.\scripts\test.ps1
+.\scripts\test.ps1 serial
+.\scripts\test.ps1 headless
+.\scripts\test.ps1 debug
 ```
 
-### WSL / Linux
+WSL/Linux:
+
 ```bash
-./scripts/test.sh               # Build + run (graphical QEMU window)
-./scripts/test.sh serial        # Build + run with serial log file
-./scripts/test.sh headless      # Build + serial output on terminal
-./scripts/test.sh debug         # Build + GDB attach mode
+./scripts/test.sh
+./scripts/test.sh serial
+./scripts/test.sh headless
+./scripts/test.sh debug
 ```
 
----
+Direct Makefile targets:
 
-## 🔍 Kernel Debug Logging (`kdebug`)
-
-A structured, serial-only logging system built into the kernel.  
-Logs **always** go to the COM1 serial port — they work even when the framebuffer is off, corrupted, or not yet initialized.
-
-### Log Levels
-
-| Macro | Level | Use For |
-|-------|-------|---------|
-| `KTRACE(tag, fmt, ...)` | 0 | Function entry/exit, ultra-verbose |
-| `KDBG(tag, fmt, ...)`   | 1 | Internal state dumps, graph topology |
-| `KINFO(tag, fmt, ...)`  | 2 | Boot progress, driver discovery |
-| `KWARN(tag, fmt, ...)`  | 3 | Recoverable issues, DHCP timeouts |
-| `KERR(tag, fmt, ...)`   | 4 | Fatal errors, Page Faults, Panics |
-
-### Common Tags
-- `BOOT`: General kernel startup phases.
-- `WAYLAND`: Compositor events, window creation, input routing.
-- `DRM`: Framebuffer and dumb buffer management.
-- `SPLASH`: Boot animation and module loading.
-- `SCHED`: Context switches, task spawning, fork, nice changes.
-- `YAMGRAPH`: Node/Edge operations and capability checks.
-- `PMM`: Zone allocation, refcount changes, watermark triggers.
-- `VMM`: CoW faults, huge page mapping, mprotect, brk.
-- `OOM`: Memory pressure detection, task scoring, kills.
-- `AI`: Tensor alloc/free, job submission, device queries.
-- `TOUCH`: Slot updates, calibration, palm rejection.
-- `GESTURE`: Tap/swipe/pinch recognition events.
-- `CGROUP`: Resource limit enforcement, memory charging.
-- `POWER`: C-state transitions, idle residency.
-
-### Example Usage
-
-```c
-#include "../lib/kdebug.h"
-
-void my_driver_init(void) {
-    KINFO("MYDRV", "Initializing driver v%d", 1);
-    KTRACE("MYDRV", "register base = %p", base_addr);
-    
-    if (!success) {
-        KERR("MYDRV", "Init failed! status=%x", status);
-    }
-}
+```bash
+make iso
+make run
+make run-uefi
+make run-serial
+make run-serial-only
+make debug
 ```
 
-### Hex Dump
+## Serial First
 
-```c
-kdebug_hexdump("MYDRV", buffer, 64);
-```
+Most useful diagnostics go to COM1. Prefer serial logs when the framebuffer, compositor, or input stack is suspect.
 
-### Compile-Time Filtering
-
-Set `KDEBUG_LEVEL` before including `kdebug.h` to filter messages:
-
-```c
-#define KDEBUG_LEVEL KDEBUG_WARN  // Only show WARN and ERROR
-#include "../lib/kdebug.h"
-```
-
----
-
-## 📡 Serial Output Methods
-
-### Method 1: Serial Log File
 ```bash
 make run-serial
-# Then in another terminal:
 tail -f build/serial.log
 ```
 
-### Method 2: Headless (Serial on Terminal)
+Headless serial:
+
 ```bash
 make run-serial-only
-# All serial output appears directly. Press Ctrl+A then X to quit.
 ```
 
-### Method 3: Proxmox
-Add a serial port to your VM (Hardware → Serial Port 0), then view via:
-```
-qm terminal <VMID>
-```
+In QEMU monitor style consoles, use `Ctrl+A` then `X` to exit.
 
----
+## GDB
 
-## 🛠 GDB Debugging
+Start QEMU frozen:
 
-For stepping through code and inspecting crashes:
-
-### 1. Launch Debug Server
 ```bash
 make debug
 ```
-*QEMU starts frozen, listening on `localhost:1234`.*
 
-### 2. Attach GDB (in another terminal)
+Attach:
+
 ```bash
 gdb build/yamkernel.elf
 (gdb) target remote localhost:1234
@@ -155,45 +67,139 @@ gdb build/yamkernel.elf
 (gdb) continue
 ```
 
-### 3. VS Code (Press F5)
-The `.vscode/launch.json` is pre-configured to build, launch QEMU in debug mode, and attach the visual debugger automatically.
+Useful early breakpoints:
 
----
+- `kernel_main`
+- `smp_init`
+- `syscall_dispatch`
+- `vfs_init`
+- `wl_compositor_task`
+- `kpanic`
 
-## 🧪 Makefile Targets
+## Kernel Logging
 
-| Target | Description |
-|--------|-------------|
-| `make iso` | Build the bootable ISO (including modules) |
-| `make run` | Build + launch in QEMU (graphical) |
-| `make run-serial` | Build + launch with serial log file |
-| `make run-serial-only` | Build + headless (serial on terminal) |
-| `make debug` | Build + launch frozen for GDB attach |
-| `make run-uefi` | Build + launch with UEFI firmware |
-| `make clean` | Remove all build artifacts |
-| `make setup` | Install build dependencies (Ubuntu/WSL) |
+Use `src/lib/kdebug.h`:
 
----
+| Macro | Level | Use |
+| --- | --- | --- |
+| `KTRACE(tag, fmt, ...)` | 0 | Very noisy flow traces. |
+| `KDBG(tag, fmt, ...)` | 1 | Internal state and topology. |
+| `KINFO(tag, fmt, ...)` | 2 | Boot progress and subsystem init. |
+| `KWARN(tag, fmt, ...)` | 3 | Recoverable problems. |
+| `KERR(tag, fmt, ...)` | 4 | Fatal errors and panic path. |
 
-## 📊 System Monitoring (`top`)
+Common tags:
 
-YamKernel includes a live `btop`-style dashboard available via the shell. It provides:
-- **CPU**: Real-time load percentage, thread count, nice distribution.
-- **MEM**: Zone-aware PMM usage (DMA/DMA32/Normal) with watermark indicators.
-- **NET**: Network traffic (RX/TX) and interface status.
-- **SYS**: Active YamGraph nodes and edges.
-- **AI**: Tensor pool usage, active compute jobs, device utilization.
-- **TOUCH**: Active touch slots, last gesture recognized.
+`BOOT`, `INIT`, `SMP`, `APIC`, `VFS`, `FAT32`, `XHCI`, `USB`, `HID`, `NET`, `TCP`, `WAYLAND`, `WL_DBG`, `VTTY`, `SCHED`, `CGROUP`, `OOM`, `POWER`, `AI`, `TOUCH`, `GESTURE`, `YAMGRAPH`.
 
-To access it, type `top` at the YamOS shell. Note that in **Normal Boot**, the shell is suspended once the Wayland Compositor starts; use **Safe Mode** to access the full shell debug environment.
+Example:
 
-## 🧠 v0.3.0 Debug Tips
+```c
+#include "lib/kdebug.h"
 
-| Subsystem | How to Debug |
-|-----------|-------------|
-| **CoW faults** | Set `KDEBUG_LEVEL=0` in vmm.c — logs every CoW page copy with old/new phys addrs |
-| **OOM kills** | Watch for `[OOM]` serial output — shows scored task list before killing |
-| **AI jobs** | `ai_print_stats()` from shell shows device utilization and completed jobs |
-| **Touch** | Boot QEMU with `-device usb-tablet` for absolute pointing device |
-| **Scheduler** | `sched_print_stats()` shows per-CPU queue depths and min vruntime |
-| **cgroups** | `cgroup_print_stats()` shows active groups with CPU/mem/PID usage |
+KINFO("VFS", "mounted %s at %s", fs_type, mount_point);
+KERR("TCP", "socket %d reset", fd);
+```
+
+## Boot Triage
+
+YamBoot gives three paths:
+
+- Normal: full boot with drivers, scheduler, PID 1, and compositor.
+- Safe Mode: skips several driver/subsystem init paths after the core kernel is online.
+- Reboot: asks the keyboard controller to reset the machine.
+
+For early boot failures, compare Normal and Safe Mode. If Safe Mode boots, focus on Phase 9 driver/subsystem initialization in `src/kernel/main.c`.
+
+## Current Boot Phases
+
+The boot log should roughly progress through:
+
+1. Serial and Limine validation.
+2. Framebuffer and YamBoot.
+3. Splash/module scan.
+4. CPU setup: GDT, IDT, CPUID, security.
+5. Memory: VMM, PMM, heap.
+6. ACPI, LAPIC, IOAPIC, per-CPU, SMP, syscall.
+7. YamGraph and self-tests.
+8. Drivers/subsystems: PCI, USB, VFS, IPC, NET, input.
+9. Scheduler, cgroups, OOM, power, AI.
+10. PID 1 and Wayland compositor.
+
+## Panic Checklist
+
+| Symptom | First checks |
+| --- | --- |
+| `#GP` | Segment selectors, SYSRET GDT layout, non-canonical pointers. |
+| `#PF` | CR2, page flags, HHDM/MMIO mapping, user/kernel bit. |
+| `#UD` | Jumped through corrupt function pointer or bad stack return. |
+| Double fault | TSS `rsp0`, kernel stack, recursive exception path. |
+| Hang after SMP | AP boot wait, AP count, `g_aps_booted`, parked AP loop. |
+| Hang after VFS | initrd mount, task fd table, `/dev` or `/proc` read path. |
+| Blank desktop | DRM buffer allocation, wallpaper module, compositor state, page flip. |
+
+## Subsystem Tips
+
+SMP:
+
+- APs are booted by Limine and parked after per-core setup.
+- `smp_sched_cpu_count()` currently reports the schedulable domain.
+- Scheduler bugs should be debugged as single-run-queue bugs first.
+
+VFS/FAT32:
+
+- `vfs_init()` mounts `/`, `/dev`, and `/proc`.
+- FAT32 code exists, but a real block device or disk image must be mounted before FAT paths can be exercised.
+- Stdout/stderr fallback through `sys_write` goes to framebuffer text output.
+
+Networking:
+
+- Use QEMU with e1000 networking when testing DHCP/TCP paths.
+- Watch for `[NET]`, `[DHCP]`, `[ARP]`, `[IP]`, `[TCP]`, and e1000 logs.
+
+USB/Input:
+
+- For USB tests, boot QEMU with XHCI/HID devices.
+- PS/2 keyboard and mouse paths are separate from USB HID.
+
+Compositor/VTTY:
+
+- The compositor starts in login state.
+- VTTY has six buffers and renders through framebuffer helpers.
+- Input routing is split between login, desktop, dock/menu, focused windows, and VTTY.
+
+AI/Touch:
+
+- Use AI syscalls to exercise tensor allocation and job submission.
+- Touch/gesture paths are easiest to debug with verbose `TOUCH` and `GESTURE` logs.
+
+## Useful QEMU Commands
+
+Network:
+
+```bash
+qemu-system-x86_64 -cdrom build/yamkernel.iso -m 256M -smp 2 \
+  -netdev user,id=n0 -device e1000,netdev=n0 -serial stdio
+```
+
+USB HID:
+
+```bash
+qemu-system-x86_64 -cdrom build/yamkernel.iso -m 256M \
+  -device nec-usb-xhci -device usb-kbd -device usb-mouse -serial stdio
+```
+
+Headless smoke test:
+
+```bash
+timeout 25 qemu-system-x86_64 -cdrom build/yamkernel.iso -m 256M \
+  -serial stdio -display none -no-reboot
+```
+
+## Known Development Caveats
+
+- AP cores are initialized but parked; full multi-core scheduling is future work.
+- FAT32 needs a mounted backing device/image to be useful outside unit-style memory tests.
+- TCP is an in-tree implementation, not yet a hardened production stack.
+- Some userland headers and syscall wrappers are ahead of the kernel dispatcher; keep ABI changes synchronized.
+- The compositor is CPU-rendered and VM performance depends heavily on resolution.

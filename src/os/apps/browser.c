@@ -194,6 +194,10 @@ void _start(void) {
         input_event_t ev;
         bool changed = false;
         while (wl_poll_event(sid, &ev)) {
+            if (ev.type == EV_CLOSE) {
+                print("[APP_DBG] browser close requested\n");
+                exit(0);
+            }
             if (ev.type == EV_KEY && ev.value == KEY_PRESSED) {
                 u16 sc = ev.code;
                 char c = (sc < 128) ? sc_ascii[sc] : 0;

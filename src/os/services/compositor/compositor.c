@@ -160,6 +160,10 @@ void wl_surface_destroy(wl_surface_t *surface) {
     /* If we haven't started closing animation, trigger it and return */
     if (!surface->anim_closing) {
         surface->anim_closing = true;
+        input_event_t close_ev = { .type = EV_CLOSE, .code = 0, .value = 1 };
+        wl_surface_push_event(surface, close_ev);
+        kprintf("[WL_DBG] close-request id=%u title='%s' owner=%lu\n",
+                surface->id, surface->title, surface->owner_task_id);
         return;
     }
     
@@ -554,7 +558,7 @@ static void composite_menubar(void) {
     u32 dh = g_compositor.scanout->height;
     (void)dh;
     
-    wl_surface_t ds = { .buffer = g_compositor.scanout, .width = dw, .height = 36 };
+    wl_surface_t ds = { .buffer = g_compositor.scanout, .width = dw, .height = dh };
     u32 bar_h = 30;
     
     /* Draw Glass Menubar */
@@ -598,8 +602,12 @@ static void composite_menubar(void) {
     rtc_time_t t;
     rtc_read(&t);
     char time_str[16];
-    ksnprintf(time_str, sizeof(time_str), "%02d:%02d:%02d", t.hour, t.minute, t.second);
-    wl_draw_text(&ds, dw - 104, 8, time_str, 0xFFE8EEF7, 0);
+    int bdt_hour = (t.hour + 6) % 24;
+    int hour12 = bdt_hour % 12;
+    if (hour12 == 0) hour12 = 12;
+    const char *ampm = (bdt_hour >= 12) ? "PM" : "AM";
+    ksnprintf(time_str, sizeof(time_str), "%d:%02d:%02d %s", hour12, t.minute, t.second, ampm);
+    wl_draw_text(&ds, dw - 112, 8, time_str, 0xFFE8EEF7, 0);
     
     wl_draw_rect(&ds, dw - 148, 18, 4, 4, 0xFF34D399);
     wl_draw_rect(&ds, dw - 142, 14, 4, 8, 0xFF34D399);

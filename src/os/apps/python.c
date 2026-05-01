@@ -38,6 +38,7 @@ void _start(void) {
     while (1) {
         input_event_t ev;
         while (wl_poll_event(sid, &ev)) {
+            if (ev.type == EV_CLOSE) exit(0);
             if (ev.type == EV_KEY && ev.value == KEY_PRESSED && ev.code == 1) exit(0);
         }
         sleep_ms(50);

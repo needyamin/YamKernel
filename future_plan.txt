@@ -1,373 +1,277 @@
-================================================================================
-  YamOS — Future Implementation Plan & Market Analysis
-  Version: v0.3.0 → v1.0.0 Roadmap
-  Date: April 2026
-================================================================================
+YamOS Future Plan
+Version: v0.4.0 development tree -> v1.0.0
+Updated: May 2026
 
+===============================================================================
+CURRENT BASELINE
+===============================================================================
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  PART 1: MARKET ANALYSIS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+YamOS has moved past the original v0.3 foundation. The tree now includes:
 
-1.1 COMPETITIVE LANDSCAPE (2026)
-─────────────────────────────────
-  OS              Target Market         Weakness YamOS Can Exploit
-  ─────────────── ──────────────────── ────────────────────────────────────
-  Linux           Server / Desktop      Complex, bloated for embedded/IoT
-  Windows         Desktop / Enterprise  Closed source, heavy resource usage
-  Fuchsia (Google)IoT / Mobile          No ecosystem yet, Google-controlled
-  Zephyr RTOS     IoT / Embedded        No GUI, no AI, bare minimum
-  seL4            Safety-critical       Niche, no desktop/developer story
-  Redox           Hobbyist / Research   Slow progress, tiny community
-  HarmonyOS       Huawei devices        Vendor-locked, not open
-  ReactOS         Windows compat        Legacy focus, no innovation
+- Limine BIOS/UEFI boot, YamBoot, splash assets, and ELF module loading.
+- Core x86_64 kernel setup: GDT, IDT, TSS, CPUID, security flags, APIC/IOAPIC.
+- Limine SMP startup with AP initialization and parking.
+- PMM, VMM, heap, slab, CoW/fork support, brk/mmap/mprotect hooks.
+- CFS-style scheduler, wait queues, mutex/futex, cgroups, OOM, power hooks.
+- YamGraph resources, channels, and capabilities.
+- VFS with initrd root, devfs, procfs, FAT32 driver code, ELF loader.
+- USB XHCI, USB core, HID, input, evdev, touch, gesture, mouse, keyboard paths.
+- e1000 and in-tree ARP/IP/ICMP/UDP/TCP/DHCP/DNS networking code.
+- Wayland-style compositor with login, top menu, dock/taskbar, app launch, VTTY mode.
+- Userland app modules and minimal libc/libgui/libyam support.
 
-1.2 MARKET GAPS YamOS CAN FILL
-───────────────────────────────
-  Gap 1: Lightweight AI-Native OS
-    - No existing lightweight OS has kernel-level AI acceleration
-    - Edge AI devices need an OS that isn't Linux-heavy
-    - YamOS already has tensor memory + compute dispatch in-kernel
+The main remaining theme is not "add everything from scratch"; it is to make the
+existing in-tree systems reliable, integrated, testable, and useful on real
+hardware and in repeatable QEMU scenarios.
 
-  Gap 2: Touchscreen-First Lightweight OS
-    - Embedded touchscreen devices (kiosks, POS, medical, automotive)
-    - Linux is overkill, Zephyr has no GUI, Android is too heavy
-    - YamOS has MT Protocol B + gesture engine + compositor
+===============================================================================
+PHASE 1: v0.4.x STABILIZATION
+===============================================================================
 
-  Gap 3: Capability-Based Security for IoT
-    - IoT devices need fine-grained permissions (not UID/GID)
-    - YamGraph capability model is cleaner than Linux LSM
-    - Suitable for medical devices, industrial control, automotive
+Goal: turn the v0.4 feature set into a dependable developer preview.
 
-  Gap 4: Developer-Friendly Hobby OS
-    - Growing community of OS developers (OSDev, r/osdev)
-    - Clean codebase, single Makefile, modern C
-    - Good learning platform for kernel internals
+1. Boot and scheduler correctness
+   - Keep Limine SMP as the primary path.
+   - Audit AP address-space switching before enabling task scheduling on APs.
+   - Add scheduler assertions around current task, run queue ownership, and fd tables.
+   - Add a boot-mode flag for "single core debug" versus "AP initialized and parked".
 
-1.3 TARGET MARKETS (Priority Order)
-─────────────────────────────────────
-  [1] Edge AI / IoT Devices      — Smart cameras, robots, drones, sensors
-  [2] Embedded Touchscreen        — Kiosks, POS terminals, HMI panels
-  [3] Automotive Infotainment     — Dashboard displays, ADAS companions
-  [4] Education / Research        — OS courses, kernel research platform
-  [5] Lightweight Desktop         — Raspberry Pi, thin clients, old hardware
+2. Syscall ABI cleanup
+   - Synchronize `src/kernel/api/syscall.h` with `src/os/lib/libyam/syscall.h`.
+   - Fix stale wrappers that reference names not dispatched by the kernel.
+   - Add syscall return conventions and errno mapping to developer docs.
+   - Add a small ABI smoke app that exercises open/read/write/close/getpid/sleep.
 
+3. VFS and initrd reliability
+   - Add path normalization and mount-boundary checks.
+   - Wire `stat`, `readdir`, and `lseek` consistently.
+   - Make `/dev/null`, `/dev/tty*`, `/proc/cpuinfo`, and `/proc/meminfo` stable.
+   - Add file descriptor inheritance rules for fork/exec.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  PART 2: FEATURE GAPS (What's Missing for Production)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. FAT32 integration
+   - Mount a real FAT32 disk image in QEMU.
+   - Add read/write/readdir tests against known image contents.
+   - Add short-name and long-name behavior notes.
+   - Add bounds checks around cluster traversal and disk image size.
 
-2.1 CRITICAL (Must Have for v0.4)
-──────────────────────────────────
-  [C1] SMP — AP cores boot and run tasks (INIT-SIPI-SIPI)
-  [C2] Real Filesystem — FAT32 read/write + ext2 read
-  [C3] USB Stack — XHCI controller, HID class (keyboard, mouse, touch)
-  [C4] Networking — Working TCP/IP stack (not just stubs)
-  [C5] POSIX libc — Minimal C library for user apps (printf, malloc, file I/O)
-  [C6] Process exec() — Load and run ELF binaries from filesystem
-  [C7] Virtual Console — Multiple terminal sessions (Alt+F1..F6)
+5. Networking smoke path
+   - Create a QEMU e1000 target with `-netdev user`.
+   - Prove DHCP -> gateway -> ICMP ping -> UDP DNS -> TCP connect.
+   - Add packet counters and ring-state diagnostics to the shell/procfs.
+   - Harden TCP timeout and reset paths.
 
-2.2 IMPORTANT (Should Have for v0.5)
-─────────────────────────────────────
-  [I1]  GPU Acceleration — Virtio-GPU, basic 2D/3D rendering
-  [I2]  Audio Stack — AC97/HDA driver, mixer, PCM playback
-  [I3]  Wayland Protocol — Real Wayland protocol (not custom compositor)
-  [I4]  Package Manager — Download and install apps from network
-  [I5]  Shared Libraries — Dynamic linking (.so support)
-  [I6]  User Accounts — Login, password hashing, home directories
-  [I7]  Journaling FS — ext4 or custom journaling filesystem
-  [I8]  Swap / Paging — Disk-backed virtual memory
-  [I9]  ACPI Power — Sleep (S3), Hibernate (S4), proper shutdown
-  [I10] Bluetooth Stack — L2CAP, RFCOMM, BLE GATT
+6. Desktop and VTTY polish
+   - Make Alt+F1..F6 switching deterministic.
+   - Keep compositor state and VTTY state explicit: login, desktop, VTTY.
+   - Ensure app module launch failures show a visible notification/log.
+   - Add a lower-resolution fallback for slower VMs.
 
-2.3 NICE TO HAVE (v0.6+)
-─────────────────────────
-  [N1]  Container Runtime — Lightweight cgroup+namespace containers
-  [N2]  Rust Support — Rust kernel modules or user-space SDK
-  [N3]  Vulkan Driver — GPU compute for AI acceleration
-  [N4]  ARM64 Port — Raspberry Pi, embedded boards
-  [N5]  Secure Boot — UEFI Secure Boot + measured boot chain
-  [N6]  eBPF Runtime — In-kernel programmable tracing/networking
-  [N7]  WASM Runtime — Run WebAssembly apps natively
-  [N8]  NVMe Driver — Fast SSD storage access
-  [N9]  Wi-Fi Stack — 802.11 with WPA2/WPA3
-  [N10] Camera Driver — V4L2-compatible camera interface for AI vision
+7. Documentation and scripts
+   - Keep README, DEBUGGING, developer.html, and this roadmap aligned.
+   - Add repeatable smoke commands for BIOS, UEFI, serial-only, network, and USB.
+   - Add a short "known limitations" section to release notes.
 
+Exit criteria:
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  PART 3: IMPLEMENTATION PLAN (v0.4 → v1.0)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- `make iso` succeeds on a clean Ubuntu/WSL environment.
+- BIOS and UEFI QEMU boot reach PID 1 and compositor or Safe Mode shell.
+- Serial log includes successful VFS, scheduler, and compositor initialization.
+- At least one user ELF app launches from the desktop.
+- A headless smoke run can be repeated without manual intervention.
 
-═══════════════════════════════════════════
-  PHASE 1: v0.4.0 — "Foundation" (8 weeks)
-═══════════════════════════════════════════
+===============================================================================
+PHASE 2: v0.5 DESKTOP AND USERLAND
+===============================================================================
 
-  Goal: Make YamOS a self-hosting OS that can boot, run programs, and talk to
-        the network. This is the minimum viable product for developers.
+Goal: make YamOS feel like a small usable OS, not just a kernel demo.
 
-  Week 1-2: SMP Boot
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │ • Implement INIT-SIPI-SIPI sequence to wake AP cores               │
-  │ • Per-CPU idle tasks on each core                                   │
-  │ • Load balancer: migrate tasks across CPU run queues                │
-  │ • Per-CPU slab magazines wired to actual CPU IDs                    │
-  │ • IPI (Inter-Processor Interrupt) for cross-CPU wakeup              │
-  │ Files: cpu/smp.c, sched/sched.c, cpu/apic.c                        │
-  └─────────────────────────────────────────────────────────────────────┘
+1. Userland process model
+   - VFS-backed `exec(path, argv, envp)`.
+   - `waitpid`, process exit status, parent/child lifecycle, PID 1 reaping.
+   - Basic signal delivery rules.
+   - Process list in `/proc`.
 
-  Week 3-4: Filesystem + exec()
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │ • FAT32 driver (read/write) — parse BPB, FAT table, directory      │
-  │ • VFS layer: mount, open, read, write, close, stat, readdir        │
-  │ • Ramdisk (initrd) — embed files into ISO for early boot           │
-  │ • exec() syscall — load ELF from VFS, create address space, run    │
-  │ • /bin, /etc, /tmp directory structure                              │
-  │ Files: fs/fat32.c, fs/vfs.c, fs/initrd.c, sched/user.c            │
-  └─────────────────────────────────────────────────────────────────────┘
+2. libc and shell
+   - Complete stdio basics: fopen/fread/fwrite/fclose/fgets/fprintf.
+   - Align unistd wrappers with kernel syscall numbers.
+   - Add a small shell with `ls`, `cat`, `echo`, `ps`, `mount`, `uname`, `reboot`.
+   - Provide stable app headers for GUI and IPC apps.
 
-  Week 5-6: Networking
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │ • e1000 driver: TX/RX ring buffers, interrupt-driven               │
-  │ • Ethernet frame parsing (src/dst MAC, ethertype)                   │
-  │ • ARP: request/reply, ARP cache                                     │
-  │ • IPv4: header parse/build, basic routing                           │
-  │ • ICMP: echo request/reply (ping)                                   │
-  │ • UDP: socket create/bind/sendto/recvfrom                           │
-  │ • DHCP client: auto-configure IP/gateway/DNS                        │
-  │ • TCP: 3-way handshake, data transfer, FIN (simplified)             │
-  │ • DNS resolver: query A records                                     │
-  │ Files: drivers/net/e1000.c, net/tcp.c, net/udp.c, net/dhcp.c       │
-  └─────────────────────────────────────────────────────────────────────┘
+3. Desktop applications
+   - Terminal using VTTY or Wayland surface backend.
+   - Calculator, browser demo, Python demo, image viewer.
+   - Auth/login flow with a minimal `/etc/passwd` model.
+   - Notifications for app launch, crash, and network status.
 
-  Week 7-8: POSIX libc + USB
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │ • Minimal libc: stdio (printf, scanf, fopen), stdlib (malloc, free) │
-  │ • string.h, ctype.h, errno.h, unistd.h stubs                       │
-  │ • USB XHCI controller init + device enumeration                     │
-  │ • USB HID class driver (keyboard, mouse, touchscreen)               │
-  │ • USB mass storage (read-only, for USB boot media)                  │
-  │ Files: userlib/libc.c, drivers/usb/xhci.c, drivers/usb/hid.c       │
-  └─────────────────────────────────────────────────────────────────────┘
+4. Graphics
+   - Reduce full-screen redraw cost.
+   - Add dirty rectangle composition.
+   - Add cursor damage tracking.
+   - Investigate virtio-gpu or a cleaner DRM abstraction.
 
-═══════════════════════════════════════════
-  PHASE 2: v0.5.0 — "Desktop" (8 weeks)
-═══════════════════════════════════════════
+Exit criteria:
 
-  Goal: A usable graphical desktop OS with audio, window management,
-        and basic productivity apps.
+- User can log in, open a terminal, run shell commands, launch apps, and switch VTTYs.
+- User apps communicate through stable syscalls and libraries.
+- Desktop survives app crashes without taking down the compositor.
 
-  Week 9-10: GPU + Real Compositor
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │ • Virtio-GPU driver (2D operations, cursor, multi-display)          │
-  │ • Hardware-accelerated blitting and alpha blending                   │
-  │ • Wayland protocol subset (wl_compositor, wl_surface, wl_seat)      │
-  │ • Window decorations, minimize/maximize/close                        │
-  │ • Multi-window z-ordering, focus management                          │
-  │ • Taskbar with app launcher, clock, system tray                      │
-  │ Files: drivers/gpu/virtio_gpu.c, wayland/compositor.c               │
-  └─────────────────────────────────────────────────────────────────────┘
+===============================================================================
+PHASE 3: v0.6 HARDWARE AND NETWORKING
+===============================================================================
 
-  Week 11-12: Audio + Apps
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │ • AC97 / Intel HDA audio driver                                     │
-  │ • Audio mixer: PCM playback, volume control                          │
-  │ • WAV file playback                                                  │
-  │ • Text Editor app (simple notepad)                                   │
-  │ • File Manager app (browse filesystem)                               │
-  │ • Settings app (display, audio, network config)                      │
-  │ Files: drivers/audio/hda.c, apps/editor.c, apps/filemanager.c       │
-  └─────────────────────────────────────────────────────────────────────┘
+Goal: broaden hardware coverage and make networked workflows real.
 
-  Week 13-14: User Accounts + Security
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │ • User accounts: /etc/passwd, /etc/shadow (bcrypt hashing)          │
-  │ • Login manager with PAM-like auth                                   │
-  │ • Home directories (/home/username)                                  │
-  │ • File permissions (owner/group/other, integrated with YamGraph)     │
-  │ • Capability-based app sandboxing                                    │
-  │ • Secure IPC between GUI apps                                        │
-  │ Files: kernel/auth.c, kernel/user_mgmt.c                            │
-  └─────────────────────────────────────────────────────────────────────┘
+1. Storage
+   - AHCI or NVMe driver.
+   - Block device layer.
+   - Mountable FAT32 disk image and read-only ext2 target.
+   - Optional write-ahead journal for YamOS-native experiments.
 
-  Week 15-16: Package Manager + Polish
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │ • Package format: .yampkg (tar + metadata + signature)              │
-  │ • Package manager: install, remove, update, list                     │
-  │ • HTTP client for downloading packages                               │
-  │ • Repository server spec                                             │
-  │ • System update mechanism                                            │
-  │ • Boot splash improvements, theme support                            │
-  │ Files: pkg/yampkg.c, net/http_client.c                              │
-  └─────────────────────────────────────────────────────────────────────┘
+2. Network
+   - Harden e1000 TX/RX descriptors and interrupts.
+   - Add socket syscalls for TCP/UDP.
+   - HTTP client demo.
+   - DNS cache and DHCP renewal.
+   - Better error codes and nonblocking mode.
 
-═══════════════════════════════════════════
-  PHASE 3: v0.6.0 — "AI Edge" (8 weeks)
-═══════════════════════════════════════════
+3. USB
+   - Complete enumeration state machine.
+   - Mass storage class.
+   - HID boot protocol fallback for keyboards and mice.
+   - Hotplug diagnostics.
 
-  Goal: Position YamOS as THE OS for edge AI devices with real
-        inference capabilities and hardware acceleration.
+4. Audio and Bluetooth
+   - AC97/HDA probe and PCM playback.
+   - Mixer device.
+   - Bluetooth HCI exploration, then L2CAP/RFCOMM later.
 
-  Week 17-18: AI Runtime
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │ • ONNX model parser (load .onnx models in kernel)                   │
-  │ • Inference engine: conv2d, matmul, relu, softmax, batch_norm       │
-  │ • Quantized inference (INT8) for low-power devices                   │
-  │ • Model caching in tensor memory pool                                │
-  │ • User-space inference API (ioctl or dedicated syscalls)             │
-  │ Files: drivers/ai/onnx_parser.c, drivers/ai/inference.c             │
-  └─────────────────────────────────────────────────────────────────────┘
+Exit criteria:
 
-  Week 19-20: Camera + Vision
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │ • V4L2-compatible camera framework                                   │
-  │ • USB camera driver (UVC class)                                      │
-  │ • Frame capture pipeline: camera → buffer → inference → result       │
-  │ • Real-time object detection demo (MobileNet-SSD)                    │
-  │ • Face detection for login (optional biometric)                      │
-  │ Files: drivers/camera/uvc.c, drivers/ai/vision.c                    │
-  └─────────────────────────────────────────────────────────────────────┘
+- YamOS can boot with virtual disk + virtual NIC + USB keyboard/mouse in QEMU.
+- Network socket demo connects to a host service.
+- USB keyboard/mouse works through the USB path, not only PS/2.
 
-  Week 21-22: Containers + Isolation
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │ • Namespace isolation (PID, NET, MOUNT, USER)                        │
-  │ • Container runtime: create, start, stop, destroy                    │
-  │ • Resource limits via cgroups (CPU, memory, I/O)                     │
-  │ • Container image format (layered filesystem)                        │
-  │ • Inter-container networking (virtual bridge)                        │
-  │ Files: sched/namespace.c, sched/container.c                          │
-  └─────────────────────────────────────────────────────────────────────┘
+===============================================================================
+PHASE 4: v0.7 SECURITY AND ISOLATION
+===============================================================================
 
-  Week 23-24: ARM64 Port
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │ • ARM64 boot (device tree, PSCI)                                     │
-  │ • ARM64 MMU (4-level page tables, TTBR0/TTBR1)                      │
-  │ • GIC (Generic Interrupt Controller)                                 │
-  │ • ARM64 context switch + syscall (SVC)                               │
-  │ • Raspberry Pi 4/5 target                                            │
-  │ • Cross-compilation toolchain setup                                  │
-  │ Files: arch/arm64/boot.S, arch/arm64/mmu.c, arch/arm64/gic.c        │
-  └─────────────────────────────────────────────────────────────────────┘
+Goal: make the YamGraph capability model visible and enforceable.
 
-═══════════════════════════════════════════
-  PHASE 4: v1.0.0 — "Release" (8 weeks)
-═══════════════════════════════════════════
+1. Capabilities
+   - Capability checks on file, device, channel, MMIO, and driver syscalls.
+   - Revocation behavior documented and tested.
+   - Capability audit logs.
 
-  Goal: Production-ready OS for edge AI and embedded touchscreen markets.
+2. Driver isolation
+   - Move selected drivers toward user-mode service model.
+   - Gate I/O port, MMIO, IRQ, and PCI config access through capabilities.
+   - Crash containment for user-mode drivers.
 
-  Week 25-26: Stability + Testing
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │ • Kernel fuzzing (syzkaller-style)                                   │
-  │ • Memory leak detection (kmemcheck)                                  │
-  │ • Stress tests: 1000 fork/exit cycles, OOM recovery, CoW stress     │
-  │ • Automated boot tests (QEMU + serial assertion)                     │
-  │ • Code coverage analysis                                             │
-  │ • Fix all known bugs from v0.4–v0.6                                  │
-  └─────────────────────────────────────────────────────────────────────┘
+3. Hardening
+   - Stack canaries.
+   - W^X policy.
+   - KASLR investigation.
+   - Signed kernel/module verification plan.
 
-  Week 27-28: Secure Boot + Hardening
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │ • UEFI Secure Boot integration (signed kernel)                       │
-  │ • Stack canaries (__stack_chk_fail)                                   │
-  │ • KASLR (Kernel Address Space Layout Randomization)                  │
-  │ • W^X enforcement (no page is both writable and executable)          │
-  │ • Capability audit log (who accessed what, when)                     │
-  │ • CVE response process documentation                                 │
-  └─────────────────────────────────────────────────────────────────────┘
+Exit criteria:
 
-  Week 29-30: SDK + Documentation
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │ • YamOS SDK: cross-compiler, libc, headers, linker scripts          │
-  │ • App development guide (Hello World → GUI app → AI app)            │
-  │ • API reference (auto-generated from source comments)                │
-  │ • Architecture whitepaper                                            │
-  │ • Website: yamos.dev (docs, downloads, community)                    │
-  │ • GitHub CI: auto-build ISO on every push                            │
-  └─────────────────────────────────────────────────────────────────────┘
+- A user process cannot open devices or map MMIO without a capability.
+- Revoking a capability blocks future operations and appears in audit logs.
+- Driver crash does not corrupt the kernel or compositor.
 
-  Week 31-32: Launch
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │ • v1.0.0 release ISO (x86_64 + ARM64)                               │
-  │ • Raspberry Pi 5 reference image                                     │
-  │ • Docker-based build environment                                     │
-  │ • Demo videos: AI inference, touchscreen kiosk, desktop session      │
-  │ • Submit to HackerNews, r/osdev, r/programming                      │
-  │ • OSDev Wiki page                                                    │
-  │ • Conference talk submission (FOSDEM, Linux Plumbers, etc.)          │
-  └─────────────────────────────────────────────────────────────────────┘
+===============================================================================
+PHASE 5: v0.8 AI, TOUCH, AND EDGE DEVICE STORY
+===============================================================================
 
+Goal: sharpen the project differentiators.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  PART 4: DIFFERENTIATION STRATEGY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. AI acceleration
+   - Stable tensor object lifecycle.
+   - Device query and job dispatch demos.
+   - Optional ONNX subset parser or a tiny model format.
+   - Zero-copy sensor -> tensor -> result experiment.
 
-  What Makes YamOS Different From Every Other OS:
+2. Touch
+   - MT Protocol B validation.
+   - Calibration persistence.
+   - Gesture configuration UI.
+   - Kiosk-mode shell.
 
-  1. YAMGRAPH RESOURCE MODEL
-     - Not UID/GID (Linux), not ACLs (Windows), not static caps (seL4)
-     - Live directed graph where permissions flow as edges
-     - Revocation cascades through graph topology
-     - Scheduler and IPC reason about resource relationships
+3. Edge profile
+   - Fast boot profile.
+   - Read-only root with writable data partition.
+   - Recovery boot mode.
+   - Watchdog support.
 
-  2. KERNEL-NATIVE AI
-     - Only OS with tensor memory management in the kernel
-     - DMA-pinned, cache-aligned tensor allocations
-     - Zero-copy inference pipeline: sensor → kernel → result
-     - No userspace framework overhead (no PyTorch/TensorFlow needed)
+Exit criteria:
 
-  3. TOUCHSCREEN-FIRST DESIGN
-     - MT Protocol B in the kernel (not bolted on later)
-     - Gesture recognition engine with configurable thresholds
-     - Palm rejection, calibration, pressure sensitivity
-     - Direct compositor integration (no X11/Wayland middleware)
+- Demo shows touchscreen-first UI and an AI job path.
+- Edge/kiosk profile boots into a constrained app with visible health status.
 
-  4. LIGHTWEIGHT + MODERN
-     - Boots in <2 seconds on modern hardware
-     - <16MB RAM for kernel + basic apps
-     - Modern C (no legacy POSIX baggage)
-     - Clean, readable codebase (~15K lines for full kernel)
+===============================================================================
+PHASE 6: v1.0 RELEASE
+===============================================================================
 
+Goal: a clear, reproducible release for developers and OS research.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  PART 5: REVENUE / SUSTAINABILITY MODEL
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Build and CI
+   - Reproducible toolchain container or script.
+   - CI build for kernel and ISO.
+   - Headless QEMU smoke tests.
+   - Artifact publishing.
 
-  Model A: Open-Core
-    - Kernel + base OS: MIT (free forever)
-    - Enterprise features: commercial license
-      • OTA update server
-      • Fleet management dashboard
-      • Certified hardware support
-      • SLA + security patches
+2. Test coverage
+   - Kernel unit tests for pure helpers.
+   - Boot smoke tests for BIOS/UEFI.
+   - Filesystem image tests.
+   - Network packet tests where feasible.
 
-  Model B: Hardware Partnerships
-    - Pre-install YamOS on edge AI devices
-    - Revenue from hardware vendors per unit
-    - Reference designs for kiosks, cameras, robots
+3. Documentation
+   - Developer architecture guide.
+   - Syscall ABI reference.
+   - App development guide.
+   - Driver development guide.
+   - Debug cookbook.
 
-  Model C: Consulting / Training
-    - Custom kernel modifications for specific hardware
-    - OS development courses using YamOS as platform
-    - Porting services (new architectures, new drivers)
+4. Release packaging
+   - v1.0 ISO.
+   - Demo video/script.
+   - Known hardware and QEMU profiles.
+   - Security and limitations statement.
 
+Exit criteria:
 
-================================================================================
-  TIMELINE SUMMARY
-================================================================================
+- A new contributor can build, boot, debug, and run a demo app from the docs.
+- The release has known-good QEMU commands and reproducible artifacts.
+- Limitations are explicit instead of hidden.
 
-  v0.3.0 (NOW)     Zone PMM, CoW VMM, CFS, AI, Touch, OOM, cgroups
-  v0.4.0 (8 weeks) SMP, FAT32, TCP/IP, USB, libc, exec()
-  v0.5.0 (8 weeks) GPU, Audio, Desktop apps, User accounts, Packages
-  v0.6.0 (8 weeks) ONNX inference, Camera, Containers, ARM64 port
-  v1.0.0 (8 weeks) Stable release, SDK, Secure Boot, documentation
+===============================================================================
+MARKET AND POSITIONING
+===============================================================================
 
-  Total: ~32 weeks (8 months) from v0.3.0 to v1.0.0
+Best-fit audiences:
 
-================================================================================
+1. OS development learners who want a modern C/ASM x86_64 kernel with GUI/userland.
+2. Kernel research experiments around graph-based capabilities.
+3. Edge AI and touchscreen/kiosk prototypes.
+4. Hobby desktop OS explorers.
 
+Differentiators:
 
+- YamGraph resource model instead of only UID/GID-style ownership.
+- Kernel-visible AI/tensor abstractions.
+- Touch and GUI paths are first-class project goals.
+- Small, readable, single-repo OS stack.
 
-$ wsl -d Ubuntu -- bash -c "cd /mnt/c/laragon/www/YamOS && qemu-system-x86_64 -cdrom build/yamkernel.iso -m 256M -serial stdio -display gtk -no-reboot"
+Risks:
 
-$ wsl -d Ubuntu -- bash -c "cd /mnt/c/laragon/www/YamOS && timeout 25 qemu-system-x86_64 -cdrom build/yamkernel.iso -m 256M -serial stdio -display none -no-reboot 2>/dev/null"
+- Hardware coverage is tiny compared with Linux/BSD.
+- Networking, USB, FAT32, and desktop code need much more testing.
+- Multi-core scheduling is not enabled yet despite AP initialization.
+- Userland ABI must be cleaned before external app development is pleasant.
 
-$ wsl -d Ubuntu -- bash -c "cd /mnt/c/laragon/www/YamOS && timeout 25 qemu-system-x86_64 -cdrom build/yamkernel.iso -m 256M -serial stdio -display none -no-reboot 2>/dev/null | grep -E '\[(SCHED|CGROUP|OOM|POWER|AI|TOUCH|GESTURE|INIT)\]|Phase|ERROR|PANIC|fault|==='"
+Near-term priority:
+
+Stabilize the v0.4 tree before adding large new subsystems. The fastest path to a
+credible YamOS is repeatable boot, working docs, a reliable shell/app loop, and a
+small set of demos that do exactly what they claim.

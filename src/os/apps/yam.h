@@ -8,7 +8,7 @@
 
 /* Types are inherited from nexus/types.h via syscall.h */
 typedef struct {
-    u32 type;
+    u16 type;
     u16 code;
     i32 value;
 } input_event_t;
@@ -17,6 +17,7 @@ typedef struct {
 #define EV_KEY 0x01
 #define EV_REL 0x02
 #define EV_ABS 0x03
+#define EV_CLOSE 0x100
 #define KEY_PRESSED  1
 #define KEY_RELEASED 0
 

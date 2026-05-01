@@ -13,6 +13,7 @@
 #define EV_KEY      0x01
 #define EV_REL      0x02
 #define EV_ABS      0x03
+#define EV_CLOSE    0x100
 
 /* Relative axes */
 #define REL_X       0x00

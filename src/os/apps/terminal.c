@@ -345,6 +345,10 @@ void _start(void) {
     while (1) {
         input_event_t ev;
         while (wl_poll_event(sid, &ev)) {
+            if (ev.type == EV_CLOSE) {
+                print("[APP_DBG] terminal close requested\n");
+                exit(0);
+            }
             if (ev.type == EV_KEY) {
                 u16 sc = ev.code;
                 if (sc == 0x2A || sc == 0x36) {

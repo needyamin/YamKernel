@@ -195,6 +195,10 @@ void _start(void) {
     while (1) {
         input_event_t ev;
         while (wl_poll_event(sid, &ev)) {
+            if (ev.type == EV_CLOSE) {
+                print("[APP_DBG] calculator close requested\n");
+                exit(0);
+            }
             if (ev.type == EV_ABS && ev.code == 0) last_x = ev.value;
             if (ev.type == EV_ABS && ev.code == 1) last_y = ev.value;
             if (ev.type == EV_KEY && ev.value == KEY_PRESSED) {

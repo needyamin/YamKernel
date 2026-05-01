@@ -1,82 +1,117 @@
 # YamOS
 
-**A Graph-Based Adaptive Operating System** — x86_64, Limine boot, modern Linux-inspired kernel
+YamOS is an experimental x86_64 operating system built around **YamKernel**, a graph-based hybrid kernel. It boots with Limine, brings up a modern kernel core, and layers a small desktop/userland on top of YamGraph, a live resource graph where tasks, memory, devices, files, channels, and capabilities are modeled as connected nodes.
 
-YamOS is a self-contained OS powered by the **YamKernel v0.3.0**. Every resource — processes, memory, devices, files — lives as a node in a live directed graph (**YamGraph**), with permissions flowing through edges as unforgeable capability tokens.
+Current tree: **v0.4.0 development line**.
 
-## Features
+## What Is In This Repo
 
-| Subsystem | Approach | Status |
-|-----------|----------|--------|
-| Boot | **YamBoot** — pre-kernel menu (Normal / Safe / Reboot) | Stable |
-| Resource Model | **YamGraph** — live directed graph of all resources | Stable |
-| Permissions | **Capability tokens** on graph edges | Stable |
-| Memory | **Zone-Aware Cell Allocator** (DMA/DMA32/Normal zones), page descriptors, refcount, watermarks | Stable |
-| Virtual Memory | 4-level paging, **CoW** (Copy-on-Write), **2MB huge pages**, `mprotect`, `brk` | Stable |
-| Heap | **Size-class bucket allocator** (O(1) small alloc) + auto-expansion | Stable |
-| Slab | **Per-CPU magazine** layer, partial/full/empty lists, shrink under pressure | Stable |
-| Scheduler | **Multi-Queue CFS** — O(log n) sorted pick, per-CPU queues, Linux nice-to-weight table | Stable |
-| Process Mgmt | `fork()` (CoW), `waitpid()`, `kill()`, signals, zombie reaping | Stable |
-| Sync | Spinlocks, mutexes, **RW locks**, **semaphores**, **futex** | Stable |
-| Syscalls | **36+ syscalls** — POSIX core + Wayland + drivers + AI + touch | Stable |
-| AI/ML | **Tensor memory pool**, compute job dispatch, accelerator device abstraction | In-tree |
-| Touch | **MT Protocol B** (10 slots), gesture engine, palm rejection, calibration | In-tree |
-| OOM Killer | RSS + nice + AI-hint scoring, memory pressure callbacks | In-tree |
-| Power | CPU idle governor (C-states via `hlt`/`mwait`) | In-tree |
-| cgroups v2 | CPU shares, memory limits, PID limits | In-tree |
-| Display | **Wayland-style Compositor** — glassmorphic UI, damage tracking | Scaffold |
-| Networking | e1000, iwlwifi, TCP/UDP/ICMP/ARP/DHCP/DNS stubs | Scaffold |
+| Area | Status | Notes |
+| --- | --- | --- |
+| Boot | Stable | Limine BIOS/UEFI ISO, YamBoot menu, framebuffer splash, module loading. |
+| CPU | In-tree | GDT/IDT/TSS, CPUID, NX/SMEP/SMAP/UMIP/WP, APIC/IOAPIC, PIT/RTC. |
+| SMP | Partial | Limine starts AP cores; APs initialize and park. Scheduler currently uses CPU 0 only. |
+| Memory | In-tree | Zone-aware PMM, VMM, heap, slab, CoW/fork support, `brk`, `mmap`, `mprotect`. |
+| Scheduler | In-tree | CFS-style scheduler, wait queues, mutexes, futexes, cgroups, OOM, idle/power hooks. |
+| Syscalls | In-tree | File, process, memory, scheduler, Wayland, driver, AI, touch, and YamGraph IPC calls. |
+| Filesystems | In-tree | VFS with initrd root, devfs, procfs, and FAT32 read/write driver code. |
+| Networking | In-tree | e1000 path plus ARP, IPv4, ICMP, UDP, DHCP, DNS, and TCP state-machine code. |
+| USB/Input | In-tree | XHCI controller path, USB core, HID, keyboard, mouse, evdev, touch, gestures. |
+| Desktop | In-tree | Wayland-style compositor, login screen, top menu, dock/taskbar, windows, VTTY mode. |
+| Userland | In-tree | ELF modules for terminal, calculator, browser, Python demo, authd, and drivers. |
+| AI/ML | In-tree | Tensor allocation and accelerator abstraction syscalls. |
 
 ## Quick Start
 
+On Ubuntu/WSL:
+
 ```bash
-make setup        # Install deps (Ubuntu/WSL): nasm, gcc, xorriso, qemu, limine
-make iso          # Build bootable ISO
-make run          # Launch in QEMU (BIOS)
-make run-uefi     # Launch in QEMU (UEFI)
-make clean        # Clean build
+make setup
+make iso
+make run
 ```
 
-**Output:** `build/yamkernel.elf` (kernel) · `build/yamkernel.iso` (bootable ISO)
+Useful targets:
+
+```bash
+make iso              # Build build/yamkernel.iso
+make run              # Run QEMU BIOS mode
+make run-uefi         # Run QEMU UEFI mode
+make run-serial       # Write serial output to build/serial.log
+make run-serial-only  # Headless serial console
+make debug            # QEMU paused with GDB server on localhost:1234
+make clean
+```
+
+Build outputs:
+
+- `build/yamkernel.elf`
+- `build/yamkernel.iso`
+- user modules under `build/*.elf`
+- raw splash assets under `build/logo.bin` and `build/wallpaper.bin`
 
 ## Architecture
 
-```
-+--------------------------- Ring 3 (user) ----------------------------+
-|  User apps (ELF64)  |  AI inference tasks  |  POSIX-ish runtime      |
-+--------------------------- SYSCALL / SYSRET -------------------------+
-|  syscall_dispatch  (36+ syscalls: fork, kill, mmap, AI, touch, ...)  |
-+--------------------------- Ring 0 services ---------------------------+
-|  Scheduler (CFS O(log n))  |  OOM Killer  |  cgroups v2  |  Power    |
-+--------------------------- Core kernel --------------------------------+
-|  YamGraph  | IPC (channels, capabilities) | VFS / NET scaffolds       |
-+--------------------------- Memory + CPU --------------------------------+
-|  PMM (Zone-aware Cell) | VMM (CoW + Huge) | Heap (Buckets) | Slab    |
-|  GDT/IDT/TSS | APIC timer | ACPI/MADT | SYSCALL MSRs | Security     |
-+---------------------------- Hardware (Limine boot) --------------------+
-|  CPU(s) | RAM | LAPIC/IOAPIC | PCI/USB | NIC | Display | Touch | AI  |
-+------------------------------------------------------------------------+
-```
-
-## Shell Commands
-
-```
-help  top  mem  cpu  pci  graph  net  fs  uptime  date  uname  clear  reboot  shutdown
+```text
++---------------------------- Ring 3 --------------------------------+
+| ELF apps: terminal, calculator, browser, Python, authd, drivers     |
+| libc + libgui + libyam syscall wrappers                             |
++----------------------- SYSCALL / SYSRET ---------------------------+
+| File, process, memory, scheduler, Wayland, driver, AI, IPC syscalls |
++---------------------------- Ring 0 --------------------------------+
+| Scheduler | VFS | Net | USB | DRM/Compositor | cgroups | OOM | AI   |
++-------------------------- YamGraph --------------------------------+
+| Nodes: tasks, memory, devices, files, channels, namespaces          |
+| Edges: owns, maps, depends, channel, capability                     |
++----------------------- Memory / CPU / Boot ------------------------+
+| PMM | VMM | Heap | Slab | GDT/IDT | APIC | ACPI | Limine | YamBoot |
++--------------------------------------------------------------------+
 ```
 
-## Comparison
+## Source Tree Highlights
 
-| Aspect | YamKernel | Linux | Windows NT | seL4 | Redox |
-|--------|-----------|-------|------------|------|-------|
-| Style | Hybrid | Monolithic | Hybrid | Microkernel | Microkernel |
-| Language | C + ASM | C + ASM | C + C++ | C (proven) | Rust |
-| Resource model | **YamGraph** | UID/GID + cgroups | SID + ACL | Capabilities | Capabilities |
-| Memory | Zone Cell + Slab + Heap | Buddy + Slub | Pool + LFH | Static + caps | Buddy + Slab |
-| Scheduler | CFS O(log n) | CFS / EEVDF | MLF | Mixed-criticality | Round-robin |
-| AI Accel | ✓ (kernel framework) | ✗ (userspace) | ✗ (userspace) | ✗ | ✗ |
-| Touch/Gesture | ✓ (MT Protocol B) | ✓ | ✓ | ✗ | ✗ |
+```text
+src/boot/                 YamBoot menu
+src/kernel/               kernel entry, shell, panic handling
+src/kernel/api/           syscall numbers and public ABI structs
+src/cpu/                  GDT/IDT/APIC/ACPI/SMP/syscall/security
+src/mem/                  PMM, VMM, heap, slab, OOM
+src/sched/                scheduler, wait queues, cgroups, user entry
+src/fs/                   VFS, FAT32, initrd, ELF loader, poll
+src/ipc/                  IPC scaffolding
+src/net/                  ARP/IP/ICMP/UDP/TCP/DHCP/DNS stack
+src/drivers/              PCI, USB, input, serial, timer, video, DRM, net
+src/nexus/                YamGraph, channels, capabilities
+src/os/apps/              user-mode apps compiled as ELF modules
+src/os/lib/               libc, libgui, libyam
+src/os/dev/               devfs and virtual TTYs
+src/os/proc/              procfs
+src/os/services/          compositor service and demo clients
+```
 
-See `developer.html` for deep architecture reference · See `DEBUGGING.md` for testing guide
+## Boot Flow
+
+1. Limine loads the kernel, framebuffer, and ELF/assets modules.
+2. YamBoot shows Normal, Safe Mode, and Reboot choices.
+3. The kernel initializes framebuffer, CPU tables, security flags, memory, ACPI/APIC/SMP, and syscalls.
+4. YamGraph is initialized and core subsystems are registered.
+5. Drivers and subsystems start unless Safe Mode was selected.
+6. Scheduler, cgroups, OOM, power, AI, PID 1, and the compositor are spawned.
+7. The BSP idle loop yields; AP cores stay initialized and parked.
+
+## Runtime Notes
+
+- Safe Mode skips several driver/subsystem init paths for easier boot triage.
+- `YAM_PREEMPTIVE` and `YAM_WAYLAND` are enabled in `src/kernel/main.c`.
+- `YAM_DEMO_TASKS` is disabled by default.
+- The desktop compositor starts at login, can spawn app modules, and includes a VTTY render mode.
+
+## Documentation
+
+- `developer.html` - current architecture and subsystem reference.
+- `DEBUGGING.md` - build, QEMU, serial, GDB, and triage guide.
+- `future_plan.txt` - updated roadmap from the v0.4 tree toward v1.0.
+- `implementation_plan.md` and `task.md` - implementation planning/history.
 
 ## License
 
