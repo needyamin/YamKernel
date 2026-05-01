@@ -113,7 +113,7 @@
             <tr><td>Networking</td><td><span class="pill amber">Active development</span></td><td>e1000 path plus ARP/IP/ICMP/UDP/TCP/DHCP/DNS code.</td></tr>
             <tr><td>USB/Input</td><td><span class="pill amber">Active development</span></td><td>XHCI, USB core, HID, keyboard, mouse, evdev, touch, gesture.</td></tr>
             <tr><td>Desktop</td><td><span class="pill amber">Active development</span></td><td>First-boot setup, login, Ctrl+Shift+Y bypass, compositor, top menu, dock/taskbar, app launcher, VTTY render mode.</td></tr>
-            <tr><td>Userland</td><td><span class="pill amber">Active development</span></td><td>ELF modules, libc, libgui, libyam, authd, Python demo, plus compositor-native terminal/calculator/browser launch path.</td></tr>
+            <tr><td>Userland</td><td><span class="pill amber">Active development</span></td><td>ELF modules, libc, libgui, libyam, authd, python.org CPython port source/notes, plus compositor-native terminal/calculator/browser launch path.</td></tr>
         </tbody>
     </table>
 
@@ -234,7 +234,7 @@
         </div>
         <div class="card">
             <h3>Apps</h3>
-            <p>Terminal, calculator, and browser currently launch as compositor-native apps for reliable drawing. Python commands run inside the main Terminal. ELF modules for terminal, calculator, browser, Python demo, authd, and services are still built into the ISO.</p>
+            <p>Terminal, calculator, and browser currently launch as compositor-native apps for reliable drawing. Python commands in the main Terminal are reserved for real python.org CPython while the CPython port is wired up. ELF modules for terminal, calculator, browser, Python status, authd, and services are still built into the ISO.</p>
         </div>
         <div class="card">
             <h3>VTTY</h3>
@@ -247,8 +247,9 @@
         <li>Setup asks for computer name, username, and password.</li>
         <li><code>Ctrl+Shift+Y</code> bypasses setup/login, creates <code>root/password</code> and <code>guest/guest</code>, logs in root, and opens the desktop.</li>
         <li>The desktop menu's Python item opens Terminal; normal Python use happens in one Terminal window.</li>
-        <li>In Terminal, <code>python</code>, <code>python3</code>, and <code>py</code> auto-install the YamOS runtime once, then open an in-terminal <code>&gt;&gt;&gt;</code> REPL.</li>
-        <li><code>python -c "print(1+2)"</code>, <code>python3 -c ...</code>, and <code>py -c ...</code> run one line in Terminal.</li>
+        <li>Official CPython 3.14.4 source from python.org is vendored at <code>vendor/cpython/Python-3.14.4</code>; YamOS port notes live in <code>src/os/ports/python/cpython</code>.</li>
+        <li>In Terminal, <code>python</code>, <code>python3</code>, <code>py</code>, <code>pip</code>, and <code>pip3</code> are CPython-only commands. Until CPython is linked, they show CPython port status instead of running a fake interpreter.</li>
+        <li><code>python -c "print(1+2)"</code>, <code>python3 -c ...</code>, <code>py -c ...</code>, and <code>pip install ...</code> are blocked until real CPython can execute inside YamOS.</li>
         <li>Keyboard modifiers are routed through evdev to focused apps, so shifted characters such as <code>Shift+9 = (</code> work in Terminal.</li>
     </ul>
 

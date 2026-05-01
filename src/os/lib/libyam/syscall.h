@@ -21,11 +21,21 @@
 #define SYS_BRK               16
 #define SYS_MPROTECT          17
 #define SYS_CLOCK_GETTIME     18
+#define SYS_GETRUSAGE         19
 
 #define SYS_WL_CREATE_SURFACE 20
 #define SYS_WL_MAP_BUFFER     21
 #define SYS_WL_COMMIT         22
 #define SYS_WL_POLL_EVENT     23
+
+#define SYS_SCHED_SETAFFINITY 40
+#define SYS_SCHED_GETAFFINITY 41
+#define SYS_FUTEX             42
+#define SYS_KILL              43
+#define SYS_GETPPID           44
+#define SYS_DUP               45
+#define SYS_DUP2              46
+#define SYS_SCHED_INFO        47
 
 #define SYS_CHANNEL_SEND      60
 #define SYS_CHANNEL_RECV      61

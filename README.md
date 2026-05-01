@@ -18,7 +18,7 @@ Current tree: **v0.4.0 development line**.
 | Networking | In-tree | e1000 path plus ARP, IPv4, ICMP, UDP, DHCP, DNS, and TCP state-machine code. |
 | USB/Input | In-tree | XHCI controller path, USB core, HID, keyboard, mouse, evdev, touch, gestures. |
 | Desktop | In-tree | Wayland-style compositor, login screen, top menu, dock/taskbar, windows, VTTY mode. |
-| Userland | In-tree | ELF modules for terminal, calculator, browser, Python demo, authd, and drivers. |
+| Userland | In-tree | ELF modules for terminal, calculator, browser, Python status app, authd, and drivers. |
 | AI/ML | In-tree | Tensor allocation and accelerator abstraction syscalls. |
 
 ## Current Desktop Behavior
@@ -30,9 +30,9 @@ Current tree: **v0.4.0 development line**.
   - `guest / guest`
 - Terminal, Browser, and Calculator currently launch as compositor-native apps for reliable drawing.
 - The visible Terminal is `src/os/services/compositor/wl_terminal.c`.
-- In the main Terminal, `python`, `python3`, and `py` auto-install the YamOS Python runtime the first time they are used, then open an in-terminal `>>>` REPL.
-- `python -c "print(1+2)"`, `python3 -c ...`, and `py -c ...` run one-line Python-style code in the same Terminal.
-- The separate `python.elf` module still exists as a runtime/demo module, but the normal workflow is one Terminal only.
+- Real Python work now targets python.org CPython: official CPython 3.14.4 source is vendored at `vendor/cpython/Python-3.14.4`, with YamOS port notes in `src/os/ports/python/cpython`.
+- In the main Terminal, `python`, `python3`, `py`, `pip`, and `pip3` are reserved for python.org CPython only. Until CPython is linked, they show CPython port status instead of running a fake interpreter.
+- The separate `python.elf` module is currently a CPython port-status app; normal workflow remains one Terminal only.
 - Shifted characters such as `Shift+9 = (`, `Shift+0 = )`, and uppercase letters are routed through evdev to focused apps.
 
 ## Quick Start
@@ -120,7 +120,7 @@ src/os/services/          compositor service and demo clients
 - `YAM_DEMO_TASKS` is disabled by default.
 - The desktop compositor starts with first-boot setup/login, can spawn apps, and includes a VTTY render mode.
 - `Ctrl+Shift+Y` bypasses setup/login by creating default accounts and logging into the desktop.
-- Terminal Python is integrated into the compositor-native Terminal; use `python` in Terminal rather than launching a separate Python shell.
+- Terminal `python` and `pip` are integrated into the compositor-native Terminal as CPython-only commands. Real python.org CPython 3.14.4 source is present and the YamOS port notes are under `src/os/ports/python/cpython`.
 - AP cores are initialized and can receive kernel IPIs, but full multi-core task scheduling remains disabled until address-space switching and run-queue ownership are audited.
 - TSC-deadline is detected when the CPU exposes it. The current timer path still uses the calibrated periodic APIC timer unless a later platform-specific timer switch is added.
 - CPU exceptions print register state, and the panic path has a register-frame variant for fatal exception debugging.

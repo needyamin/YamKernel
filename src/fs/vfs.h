@@ -62,6 +62,8 @@ void fd_free(int fd);
 
 int    sys_open(const char *pathname, u32 flags);
 int    sys_close(int fd);
+int    sys_dup(int fd);
+int    sys_dup2(int oldfd, int newfd);
 isize  sys_read(int fd, void *buf, usize count);
 isize  sys_write(int fd, const void *buf, usize count);
 isize  sys_lseek(int fd, isize offset, int whence);

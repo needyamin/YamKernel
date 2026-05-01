@@ -41,8 +41,6 @@ static char input_buf[128];
 static int  input_len = 0;
 static const char *status_text = "ready";
 static bool shift_held = false;
-static bool python_mode = false;
-static const char *py_expr;
 static int mouse_x = 0;
 static int mouse_y = 0;
 static bool selecting = false;
@@ -159,20 +157,6 @@ static void term_puts(const char *s, u32 color) {
     while (*s) term_putchar(*s++, color);
 }
 
-static void term_put_quoted_string(const char *s, char quote, u32 color) {
-    while (*s && *s != quote) {
-        if (*s == '\\' && s[1]) {
-            s++;
-            if (*s == 'n') term_putchar('\n', color);
-            else if (*s == 't') term_puts("    ", color);
-            else term_putchar(*s, color);
-            s++;
-            continue;
-        }
-        term_putchar(*s++, color);
-    }
-}
-
 static void process_command(void);
 static void show_prompt(void);
 
@@ -242,116 +226,18 @@ static void paste_clipboard(void) {
 }
 
 static void show_prompt(void) {
-    if (python_mode) {
-        term_puts(">>> ", COL_ACCENT);
-    } else {
-        term_puts("root@yam", COL_PROMPT);
-        term_puts(":desktop$ ", COL_FG);
-    }
+    term_puts("root@yam", COL_PROMPT);
+    term_puts(":desktop$ ", COL_FG);
 }
 
-static void skip_spaces(void) {
-    while (*py_expr == ' ' || *py_expr == '\t') py_expr++;
-}
-
-static int parse_expr(void);
-
-static int parse_number(void) {
-    skip_spaces();
-    int sign = 1;
-    if (*py_expr == '-') {
-        sign = -1;
-        py_expr++;
-    }
-    skip_spaces();
-    if (*py_expr == '(') {
-        py_expr++;
-        int v = parse_expr();
-        skip_spaces();
-        if (*py_expr == ')') py_expr++;
-        return sign * v;
-    }
-    int v = 0;
-    while (*py_expr >= '0' && *py_expr <= '9') {
-        v = (v * 10) + (*py_expr - '0');
-        py_expr++;
-    }
-    return sign * v;
-}
-
-static int parse_term(void) {
-    int v = parse_number();
-    while (1) {
-        skip_spaces();
-        if (*py_expr == '*') {
-            py_expr++;
-            v *= parse_number();
-        } else if (*py_expr == '/') {
-            py_expr++;
-            int d = parse_number();
-            if (d != 0) v /= d;
-        } else {
-            return v;
-        }
-    }
-}
-
-static int parse_expr(void) {
-    int v = parse_term();
-    while (1) {
-        skip_spaces();
-        if (*py_expr == '+') {
-            py_expr++;
-            v += parse_term();
-        } else if (*py_expr == '-') {
-            py_expr++;
-            v -= parse_term();
-        } else {
-            return v;
-        }
-    }
-}
-
-static void process_python(const char *cmd) {
-    while (*cmd == ' ') cmd++;
-    if (*cmd == 0) return;
-    if (streq(cmd, "exit") || streq(cmd, "quit()") || streq(cmd, "exit()")) {
-        python_mode = false;
-        status_text = "shell";
-        term_puts("leaving Python", COL_DIM); term_putchar('\n', COL_FG);
-        return;
-    }
-    if (streq(cmd, "help")) {
-        term_puts("Python subset: integer math, strings, print(...), exit()", COL_DIM);
-        term_putchar('\n', COL_FG);
-        return;
-    }
-    if (starts_with(cmd, "print(")) {
-        const char *arg = cmd + 6;
-        while (*arg == ' ' || *arg == '\t') arg++;
-        if (*arg == '"' || *arg == '\'') {
-            term_put_quoted_string(arg + 1, *arg, COL_PROMPT);
-        } else {
-            py_expr = arg;
-            int v = parse_expr();
-            char n[16];
-            utoa(n, v);
-            term_puts(n, COL_PROMPT);
-        }
-        term_putchar('\n', COL_FG);
-        return;
-    }
-    if (*cmd == '"' || *cmd == '\'') {
-        term_put_quoted_string(cmd + 1, *cmd, COL_PROMPT);
-        term_putchar('\n', COL_FG);
-        return;
-    }
-    py_expr = cmd;
-    int v = parse_expr();
-    char n[16];
-    utoa(n, v);
-    term_puts(n, COL_PROMPT);
+static void show_cpython_status(void) {
+    term_puts("python.org CPython source is present, but not linked yet.", COL_ACCENT);
     term_putchar('\n', COL_FG);
+    term_puts("Source: vendor/cpython/Python-3.14.4", COL_FG);
+    term_putchar('\n', COL_FG);
+    term_puts("python/pip will execute only after CPython is linked into build/python.elf.", COL_DIM);
+    term_putchar('\n', COL_FG);
+    status_text = "cpython pending";
 }
 
 static void process_command(void) {
@@ -360,18 +246,13 @@ static void process_command(void) {
     while (*cmd == ' ') cmd++;
 
     status_text = "command complete";
-    if (python_mode) {
-        process_python(cmd);
-        input_len = 0;
-        return;
-    }
 
     if (*cmd == 0) {
     } else if (streq(cmd, "help")) {
         term_puts("Commands:", COL_ACCENT); term_putchar('\n', COL_FG);
         term_puts("  help clear uname whoami apps mem sysinfo rusage ps uptime", COL_FG); term_putchar('\n', COL_FG);
-        term_puts("  python python3 py yampy fonttest about echo exit", COL_FG); term_putchar('\n', COL_FG);
-        term_puts("  python -c \"print(1+2)\" runs one line of Python code", COL_DIM); term_putchar('\n', COL_FG);
+        term_puts("  python python3 py pip pip3 fonttest about echo exit", COL_FG); term_putchar('\n', COL_FG);
+        term_puts("  python and pip are reserved for python.org CPython only", COL_DIM); term_putchar('\n', COL_FG);
     } else if (streq(cmd, "clear")) {
         term_clear();
         status_text = "screen cleared";
@@ -429,34 +310,15 @@ static void process_command(void) {
         term_puts("abcdefghijklmnopqrstuvwxyz", COL_PROMPT); term_putchar('\n', COL_FG);
         term_puts("0123456789 +-*/=()[]{}<>?!@#$%^&_", COL_FG); term_putchar('\n', COL_FG);
     } else if (streq(cmd, "python --version") || streq(cmd, "python3 --version") || streq(cmd, "py --version")) {
-        term_puts("Python 3.12.0 (YamOS runtime)", COL_ACCENT); term_putchar('\n', COL_FG);
+        term_puts("Python 3.14.4 source vendored; CPython runtime not linked yet", COL_ACCENT); term_putchar('\n', COL_FG);
     } else if (streq(cmd, "python") || streq(cmd, "python3") || streq(cmd, "py")) {
-        python_mode = true;
-        status_text = "python";
-        term_puts("Python 3.12.0 (YamOS runtime)", COL_ACCENT); term_putchar('\n', COL_FG);
-        term_puts("Type help, print(1+2), print(\"hello\"), or exit()", COL_DIM); term_putchar('\n', COL_FG);
+        show_cpython_status();
     } else if (starts_with(cmd, "python -c ") || starts_with(cmd, "python3 -c ") || starts_with(cmd, "py -c ")) {
-        const char *code = cmd + 10;
-        if (cmd[0] == 'p' && cmd[1] == 'y' && cmd[2] == ' ') code = cmd + 6;
-        else if (cmd[6] == '3') code = cmd + 11;
-        while (*code == ' ') code++;
-        if (*code == '"' || *code == '\'') {
-            char quote = *code++;
-            char one_line[128];
-            int i = 0;
-            while (*code && *code != quote && i < (int)sizeof(one_line) - 1) {
-                one_line[i++] = *code++;
-            }
-            one_line[i] = 0;
-            process_python(one_line);
-        } else {
-            process_python(code);
-        }
-    } else if (streq(cmd, "yampy")) {
-        python_mode = true;
-        status_text = "python";
-        term_puts("Python 3.12.0 (YamOS runtime)", COL_ACCENT); term_putchar('\n', COL_FG);
-        term_puts("Type help, print(1+2), or exit()", COL_DIM); term_putchar('\n', COL_FG);
+        show_cpython_status();
+        term_puts("Cannot execute Python code until CPython is ported.", COL_ERR); term_putchar('\n', COL_FG);
+    } else if (streq(cmd, "pip") || streq(cmd, "pip3") || starts_with(cmd, "pip ") || starts_with(cmd, "pip3 ")) {
+        show_cpython_status();
+        term_puts("pip install needs real CPython, HTTPS, writable storage, and package build support.", COL_ERR); term_putchar('\n', COL_FG);
     } else if (streq(cmd, "about")) {
         term_puts("YamOS desktop shell running in ring 3 over Wayland-style IPC.", COL_FG); term_putchar('\n', COL_FG);
     } else if (starts_with(cmd, "echo ")) {
@@ -486,7 +348,7 @@ static void draw_terminal(wl_user_buffer_t *buf) {
     }
 
     wl_user_draw_rect(buf, 0, TERM_H - 24, TERM_W, 24, COL_PANEL);
-    wl_user_draw_text(buf, 12, TERM_H - 19, python_mode ? "Terminal - Python" : "Terminal", COL_ACCENT);
+    wl_user_draw_text(buf, 12, TERM_H - 19, "Terminal", COL_ACCENT);
     wl_user_draw_text(buf, TERM_W - 128, TERM_H - 19, status_text, COL_DIM);
 
     static int blink = 0;

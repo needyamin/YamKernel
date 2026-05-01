@@ -442,6 +442,8 @@ i64 syscall_dispatch(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5) {
     case SYS_CLOCK_GETTIME: SYSCALL_RETURN(sys_clock_gettime());
     case SYS_GETRUSAGE:     SYSCALL_RETURN(sys_getrusage(a1));
     case SYS_GETPPID:       SYSCALL_RETURN(sys_getppid());
+    case SYS_DUP:           SYSCALL_RETURN(sys_dup((int)a1));
+    case SYS_DUP2:          SYSCALL_RETURN(sys_dup2((int)a1, (int)a2));
     case SYS_KILL:          SYSCALL_RETURN(sys_kill(a1, (u32)a2));
     case SYS_SCHED_SETAFFINITY: SYSCALL_RETURN(sys_sched_setaffinity(a1));
     case SYS_SCHED_GETAFFINITY: SYSCALL_RETURN(sys_sched_getaffinity());

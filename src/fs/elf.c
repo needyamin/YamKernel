@@ -44,7 +44,13 @@ static void elf_user_entry(void *arg) {
 
     kfree(ba);
 
-    enter_user_mode(entry, USER_STACK_TOP);
+    /*
+     * SysV x86_64 functions enter with RSP % 16 == 8, matching the state after
+     * a call pushes a return address. User ELFs use _start as a C function
+     * today, so enter with that ABI shape or compiler-emitted aligned SSE
+     * stores can fault.
+     */
+    enter_user_mode(entry, USER_STACK_TOP - 8);
 }
 
 bool elf_load(const void *file_data, usize file_size, const char *name) {

@@ -40,3 +40,6 @@ terminals/
 task.txt
 info.txt
 *.local.md
+
+# vendor
+vendor/

@@ -192,6 +192,46 @@ void fd_free(int fd) {
     if (t) t->fd_table[fd] = NULL;
 }
 
+static int fd_alloc_from(file_t *file, int start) {
+    task_t *t = sched_current();
+    if (!t) return -1;
+    if (start < 0) start = 0;
+    if (start >= 128) return -1;
+    for (int i = start; i < 128; i++) {
+        if (!t->fd_table[i]) {
+            t->fd_table[i] = file;
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int fd_install_at(file_t *file, int fd) {
+    task_t *t = sched_current();
+    if (!t || fd < 0 || fd >= 128) return -1;
+    t->fd_table[fd] = file;
+    return fd;
+}
+
+static file_t *stdio_file_create(int fd) {
+    if (fd < 0 || fd > 2) return NULL;
+    file_t *f = (file_t *)kmalloc(sizeof(file_t));
+    if (!f) return NULL;
+    memset(f, 0, sizeof(file_t));
+    f->flags = (fd == 0) ? 0 : 1;
+    f->ref_count = 1;
+    f->mount_idx = -1;
+    strncpy(f->path, "/dev/console", sizeof(f->path) - 1);
+    return f;
+}
+
+static file_t *fd_get_or_stdio(int fd) {
+    file_t *f = fd_get(fd);
+    if (f) return f;
+    if (fd >= 0 && fd <= 2) return stdio_file_create(fd);
+    return NULL;
+}
+
 /* ---- Syscall Handlers ---- */
 
 int sys_open(const char *pathname, u32 flags) {
@@ -206,6 +246,7 @@ int sys_open(const char *pathname, u32 flags) {
     memset(f, 0, sizeof(file_t));
     f->offset = 0;
     f->flags  = flags;
+    f->ref_count = 1;
     strncpy(f->path, pathname, 255);
     f->mount_idx = midx;
 
@@ -217,10 +258,47 @@ int sys_open(const char *pathname, u32 flags) {
 int sys_close(int fd) {
     file_t *f = fd_get(fd);
     if (!f) return -1;
+    fd_free(fd);
+    if (f->ref_count > 1) {
+        f->ref_count--;
+        return 0;
+    }
     if (f->fops && f->fops->close) f->fops->close(f);
     kfree(f);
-    fd_free(fd);
     return 0;
+}
+
+int sys_dup(int fd) {
+    bool created_stdio_file = fd_get(fd) == NULL;
+    file_t *f = fd_get_or_stdio(fd);
+    if (!f) return -1;
+
+    int newfd = fd_alloc_from(f, fd <= 2 ? 3 : 0);
+    if (newfd < 0) {
+        if (created_stdio_file) kfree(f);
+        return -1;
+    }
+    if (!created_stdio_file) f->ref_count++;
+    kprintf("[VFS] dup fd%d -> fd%d path='%s' refs=%u\n", fd, newfd, f->path, f->ref_count);
+    return newfd;
+}
+
+int sys_dup2(int oldfd, int newfd) {
+    if (newfd < 0 || newfd >= 128) return -1;
+    if (oldfd == newfd) return fd_get(oldfd) || (oldfd >= 0 && oldfd <= 2) ? newfd : -1;
+
+    bool created_stdio_file = fd_get(oldfd) == NULL;
+    file_t *f = fd_get_or_stdio(oldfd);
+    if (!f) return -1;
+
+    if (fd_get(newfd)) sys_close(newfd);
+    if (fd_install_at(f, newfd) < 0) {
+        if (created_stdio_file) kfree(f);
+        return -1;
+    }
+    if (!created_stdio_file) f->ref_count++;
+    kprintf("[VFS] dup2 fd%d -> fd%d path='%s' refs=%u\n", oldfd, newfd, f->path, f->ref_count);
+    return newfd;
 }
 
 isize sys_read(int fd, void *buf, usize count) {

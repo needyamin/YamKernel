@@ -35,6 +35,8 @@ Toolchain Notes
 - WSL build worked after approval.
 - scripts/test.ps1 was fixed to derive the current repo path instead of using
   stale /mnt/c/laragon/www/kernel.
+- Makefile excludes src/os/ports/* from automatic kernel source discovery so
+  port scaffolds do not compile into the kernel.
 
 Architecture Map
 ----------------
@@ -42,7 +44,20 @@ Architecture Map
 - PID 1 init: src/os/bin/init.c
 - Kernel shell: src/kernel/shell.c
 - GUI userspace terminal app: src/os/apps/terminal.c
-- Python runtime placeholder app: src/os/apps/python.c
+- Python port-status app: src/os/apps/python.c
+- Real python.org CPython source: vendor/cpython/Python-3.14.4
+- CPython source URL:
+  https://www.python.org/ftp/python/3.14.4/Python-3.14.4.tar.xz
+- Python.org source page said latest stable Python 3 was 3.14.4 on
+  2026-05-02.
+- CPython port notes: src/os/ports/python/cpython
+- CPython/pip requirements: src/os/ports/python/cpython/PORT_REQUIREMENTS.md
+- First CPython libc compatibility slice:
+  src/os/lib/libc/posix.c
+  src/os/lib/libc/time.c
+  src/os/lib/libc/sys/stat.h
+- MicroPython source/scaffold was removed. Keep CPython as the only Python
+  source/runtime target.
 - Compositor public state/API: src/os/services/compositor/compositor.h
 - Compositor core/surfaces/task: src/os/services/compositor/compositor.c
 - Compositor input/menu/auth routing: src/os/services/compositor/compositor_input.c
@@ -57,22 +72,86 @@ Recent Python Terminal Work
 ---------------------------
 - IMPORTANT CURRENT TRUTH:
   - YamOS does NOT have real CPython like Windows/Linux yet.
-  - Current Python is a small Python-like runtime/demo in Terminal.
-  - It supports simple integer math, strings, print(...), python -c, help,
-    exit(), quit().
-  - It does NOT support imports, pip, packages, files, full stdlib, classes,
-    exceptions, etc.
-  - Real Python should be implemented later as a MicroPython or CPython port in
-    src/os/ports/python. MicroPython is the realistic next step.
+  - User explicitly wants python.org real Python, i.e. CPython, not MicroPython
+    and not YamPy/fallback.
+  - Official CPython 3.14.4 source has been downloaded into
+    vendor/cpython/Python-3.14.4.
+  - YamOS-specific CPython notes exist at src/os/ports/python/cpython.
+  - Terminal `python`, `python3`, `py`, `pip`, and `pip3` are now CPython-only
+    command names. Until CPython is linked, they show CPython port status and
+    do not execute fake Python/pip code.
+  - User wants auto-download/install if missing and full pip/data science later.
+    Current YamOS lacks HTTPS/TLS downloader, persistent writable system volume,
+    complete POSIX/libc, and linked CPython, so this must be implemented as OS
+    runtime work, not terminal fakery.
+  - Real Python target is now CPython from python.org. It still needs a larger
+    YamOS POSIX/libc/filesystem/tty/process/time compatibility layer before it
+    can execute.
 - src/os/apps/terminal.c:
-  - Older userspace ELF terminal also has Python-like REPL support, but it is
-    NOT currently the normal visible terminal.
+  - Older userspace ELF terminal no longer exposes a Python-like REPL under
+    python/python3/py. Those names are CPython-only there too.
 - src/os/apps/python.c:
-  - Installer placeholder UI now tells user to run python/py/python -c after
-    runtime install.
+  - Python app is now a CPython port-status UI, not a fake downloader.
 - Limitation:
-  - This is not full CPython/MicroPython yet. Real port slot is
-    src/os/ports/python and output should stay build/python.elf.
+  - This is not full CPython yet. CPython source is present, but it is not
+    linked into build/python.elf yet.
+- Build note:
+  - `make iso` passed after removing fallback parser exposure and MicroPython
+    source/scaffold.
+  - `timeout 55s make run` passed after CPython-only switch. Boot reached
+    desktop/compositor, `/boot/python.elf` loaded, Terminal opened from Python
+    menu path, and serial printed:
+    `[PYTHON] CPython source present; no fallback parser exposed as python`.
+    No kernel panic or Python fallback execution appeared.
+  - `make iso` passed after latest pip/installer guard changes.
+  - Added first CPython-oriented libc/POSIX compatibility slice:
+    string helpers (memmove/memchr/strncpy/strcat/strchr/strrchr/strncmp),
+    getenv/setenv/unsetenv, integer conversions, getcwd/chdir/access/isatty,
+    stat/fstat/lstat, time/clock_gettime/localtime stubs, and synchronized
+    userland syscall numbers.
+  - `make iso` passed after adding posix.c/time.c to LIBC_SRCS.
+  - `timeout 55s make run` passed after libc/POSIX slice. Boot reached desktop,
+    Terminal opened, `python` path still reports CPython status, and no panic
+    appeared.
+  - Latest terminal fix: `python`, `python3`, `py`, `pip`, and `pip3` in the
+    compositor-native terminal now call `cmd_python_install()` and launch
+    `/boot/python.elf` through `wl_spawn_app_async(...)` instead of only
+    printing "present but not linked".
+  - `make iso` passed after the terminal installer-launch change.
+  - First `timeout 55s make run` after that showed terminal successfully
+    launching `python-installer`, but the installer crashed with GPF #13 at
+    `0x4011f4`. Cause: ELF userspace entered with 16-byte aligned RSP, while
+    GCC-generated x86_64 C function entry expects RSP % 16 == 8; compiler
+    emitted `movaps` to an unaligned stack slot.
+  - Fixed in `src/fs/elf.c`: enter userspace with `USER_STACK_TOP - 8` to match
+    the SysV x86_64 stack ABI for current C `_start` apps. Also moved the
+    Python installer step string table in `src/os/apps/python.c` out of the
+    local stack.
+  - `make iso` passed after the ELF stack-alignment fix.
+  - `timeout 55s make run` passed after the fix: logs showed
+    `[PYTHON] installer launched from terminal`, `python-installer` ELF load,
+    `[APP_DBG] CPython installer start`, `map-ok`, `first-content`, repeated
+    `[PYTHON] checking CPython installer requirements`, and final
+    `[PYTHON] CPython installer blocked: linker/VFS/HTTPS/pip storage required`.
+    No kernel panic occurred; QEMU exited nonzero only because timeout stopped
+    it.
+  - Follow-up after user saw "CPython installer blocked by missing OS service":
+    implemented real kernel/VFS/libc `dup` and `dup2` support:
+    `src/fs/vfs.c`, `src/fs/vfs.h`, `src/cpu/syscall.c`,
+    `src/os/lib/libc/unistd.h`, and `src/os/lib/libc/posix.c`.
+    This removes one actual CPython POSIX blocker instead of hiding it.
+  - `src/os/apps/python.c` now probes `SYS_DUP` and `SYS_DUP2` at runtime and
+    logs `[PYTHON] POSIX dup/dup2 service ready` when they work. Its final
+    status no longer says the vague "missing OS services"; it now says the next
+    blocker is writable Python `Lib/` path plus static CPython interpreter link.
+  - `make iso` passed after adding dup/dup2.
+  - `timeout 55s make run` passed after adding dup/dup2. Logs showed:
+    `[VFS] dup fd1 -> fd3 path='/dev/console' refs=1`,
+    `[VFS] dup2 fd1 -> fd9 path='/dev/console' refs=1`,
+    `[PYTHON] POSIX dup/dup2 service ready`, and
+    `[PYTHON] CPython next blocker: writable Lib path + static interpreter link`.
+    No kernel panic occurred; QEMU exited nonzero only because timeout stopped
+    it.
 
 Recent First-Boot / Multi-User Work
 -----------------------------------
@@ -113,10 +192,10 @@ Recent First-Boot / Multi-User Work
 - Terminal Python follow-up:
   - Because the visible Terminal is now compositor-native, Python command
     support also exists in src/os/services/compositor/wl_terminal.c.
-  - In that terminal, python/python3/py auto-installs the runtime once, then
-    enters an in-terminal Python-like REPL. python -c / python3 -c / py -c
-    run one line in the same terminal. No separate Python shell/window is
-    needed for the normal workflow.
+  - In that terminal, python/python3/py/pip/pip3 are CPython-only names. They
+    launch `/boot/python.elf` installer/status app and show status until
+    CPython is linked. python -c / python3 -c / py -c and pip install are
+    blocked until real CPython/pip can execute.
   - The desktop Python launcher/menu now opens Terminal for the python command
     instead of launching the separate python.elf window.
   - Ctrl+Shift+Y is the setup/login bypass shortcut. It creates default users
@@ -174,7 +253,7 @@ Docs Updated
   - Ctrl+Shift+Y bypass
   - default users root/password and guest/guest
   - compositor-native Terminal/Browser/Calculator path
-  - in-terminal Python workflow
+  - in-terminal CPython-only command behavior plus CPython source/port notes
   - shifted-character fix
   - WSL helper script behavior
 
@@ -189,10 +268,31 @@ Next Likely Improvements
 - Make authd verify username + password or retire authd fallback path.
 - Add proper session ownership to apps/tasks once scheduler has user IDs.
 - Implement real Python:
-  - Start with MicroPython port in src/os/ports/python.
+  - Continue CPython port from src/os/ports/python/cpython using source in
+    vendor/cpython/Python-3.14.4.
   - Keep output as build/python.elf.
-  - Need enough libc/syscall/VFS support for useful Python behavior.
-  - CPython is much heavier and needs more POSIX/filesystem/dynamic behavior.
+  - Need enough blocking tty/stdin, libc/syscall, VFS, process, time, env, and
+    POSIX compatibility for useful Python behavior.
+  - `dup`/`dup2` are now implemented and tested through the Python installer
+    readiness probe.
+  - For auto-download/install and pip: need HTTPS/TLS, certificate handling,
+    writable persistent package storage, CPython Lib install, ensurepip/pip,
+    and eventually package build/native extension support.
+  - Userland floating point was enabled in USER_CFLAGS with `-msse2
+    -mfpmath=sse` while kernel CFLAGS remain no-SSE. libc now has strtod().
+    Scheduler already saves/restores FPU/XSAVE state, but this needs deeper
+    floating-point user-app testing before CPython/data science can rely on it.
+  - Dedicated Makefile rule now compiles src/os/lib/libc/*.c with USER_CFLAGS,
+    not kernel no-FPU CFLAGS.
+  - ELF userspace now enters with `USER_STACK_TOP - 8` so C `_start` code gets
+    SysV-style RSP alignment. Keep this in mind for CPython and other SSE-using
+    apps.
+  - `make iso` passed after enabling userland SSE2/SSE math and strtod().
+  - `timeout 55s make run` reached desktop and Python terminal path with no
+    panic/invalid-op fault; command exited nonzero only because timeout stopped
+    QEMU.
+  - Dynamic extension modules can wait; first target should be a static CPython
+    interpreter with a limited built-in module set.
 - Optional: switch Terminal/Browser/Calculator back to ELF userspace apps after
   the shared-buffer path is proven stable in repeatable QEMU tests.
 
@@ -205,5 +305,3 @@ Working Style Reminder
   unknown.
 - User strongly prefers low token/context use; do not re-scan the whole repo
   when this file already identifies the relevant files.
-
-

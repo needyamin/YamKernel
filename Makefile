@@ -38,8 +38,8 @@ BUILD_DIR := build
 ISO_DIR   := $(BUILD_DIR)/iso_root
 
 # Source files (Exclude OS-level apps, drivers, and userspace libs from kernel build, keep services like compositor)
-C_SRCS := $(shell find $(SRC_DIR) -name '*.c' -type f -not -path '$(SRC_DIR)/os/apps/*' -not -path '$(SRC_DIR)/os/drivers/*' -not -path '$(SRC_DIR)/os/lib/*')
-ASM_SRCS := $(shell find $(SRC_DIR) -name '*.asm' -type f -not -path '$(SRC_DIR)/os/apps/*' -not -path '$(SRC_DIR)/os/drivers/*' -not -path '$(SRC_DIR)/os/lib/*')
+C_SRCS := $(shell find $(SRC_DIR) -name '*.c' -type f -not -path '$(SRC_DIR)/os/apps/*' -not -path '$(SRC_DIR)/os/drivers/*' -not -path '$(SRC_DIR)/os/lib/*' -not -path '$(SRC_DIR)/os/ports/*')
+ASM_SRCS := $(shell find $(SRC_DIR) -name '*.asm' -type f -not -path '$(SRC_DIR)/os/apps/*' -not -path '$(SRC_DIR)/os/drivers/*' -not -path '$(SRC_DIR)/os/lib/*' -not -path '$(SRC_DIR)/os/ports/*')
 
 # Object files
 C_OBJS   := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(C_SRCS))
@@ -69,12 +69,12 @@ WIFI_ELF    := $(BUILD_DIR)/wifi.elf
 AUTHD_ELF   := $(BUILD_DIR)/authd.elf
 # User-space libc
 LIBC_DIR := src/os/lib/libc
-LIBC_SRCS := $(LIBC_DIR)/stdio.c $(LIBC_DIR)/stdlib.c $(LIBC_DIR)/string.c $(LIBC_DIR)/ctype.c
+LIBC_SRCS := $(LIBC_DIR)/stdio.c $(LIBC_DIR)/stdlib.c $(LIBC_DIR)/string.c $(LIBC_DIR)/ctype.c $(LIBC_DIR)/posix.c $(LIBC_DIR)/time.c
 LIBC_OBJS := $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(LIBC_SRCS))
 
 USER_CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-stack-check \
-               -fno-pie -fno-pic -no-pie -static -m64 -march=x86-64 -mno-80387 -mno-mmx \
-               -mno-sse -mno-sse2 -mno-red-zone -O2 -g \
+               -fno-pie -fno-pic -no-pie -static -m64 -march=x86-64 -msse2 -mfpmath=sse \
+               -mno-red-zone -O2 -g \
                -Isrc -Isrc/include -Isrc/os/lib -Isrc/os/lib/libc
 
 # ============================================================================
@@ -104,6 +104,12 @@ $(BUILD_DIR)/%.asm.o: $(SRC_DIR)/%.asm
 	@mkdir -p $(dir $@)
 	$(AS) $(ASFLAGS) $< -o $@
 	@echo "[ASM]  $<"
+
+# Compile user-space libc with userland ABI flags, not kernel no-FPU flags.
+$(BUILD_DIR)/os/lib/libc/%.o: $(SRC_DIR)/os/lib/libc/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+	@echo "[LIBC] $<"
 
 # ============================================================================
 #  Host Tools & Resources

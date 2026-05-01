@@ -4,6 +4,7 @@
  * ============================================================================ */
 #include "stdlib.h"
 #include "string.h"
+#include "errno.h"
 #include "../libyam/syscall.h"
 
 extern int errno;
@@ -137,6 +138,137 @@ long strtol(const char *s, char **end, int base) {
 
 unsigned long strtoul(const char *s, char **end, int base) {
     return (unsigned long)strtol(s, end, base);
+}
+
+long long strtoll(const char *s, char **end, int base) {
+    return (long long)strtol(s, end, base);
+}
+
+unsigned long long strtoull(const char *s, char **end, int base) {
+    return (unsigned long long)strtoul(s, end, base);
+}
+
+double strtod(const char *s, char **end) {
+    while (*s == ' ' || *s == '\t') s++;
+    double sign = 1.0;
+    if (*s == '-') {
+        sign = -1.0;
+        s++;
+    } else if (*s == '+') {
+        s++;
+    }
+
+    double value = 0.0;
+    while (*s >= '0' && *s <= '9') {
+        value = value * 10.0 + (double)(*s - '0');
+        s++;
+    }
+
+    if (*s == '.') {
+        double place = 0.1;
+        s++;
+        while (*s >= '0' && *s <= '9') {
+            value += (double)(*s - '0') * place;
+            place *= 0.1;
+            s++;
+        }
+    }
+
+    if (*s == 'e' || *s == 'E') {
+        const char *exp_start = s;
+        s++;
+        int exp_sign = 1;
+        if (*s == '-') {
+            exp_sign = -1;
+            s++;
+        } else if (*s == '+') {
+            s++;
+        }
+        int exp = 0;
+        bool have_exp = false;
+        while (*s >= '0' && *s <= '9') {
+            have_exp = true;
+            exp = exp * 10 + (*s - '0');
+            s++;
+        }
+        if (have_exp) {
+            while (exp-- > 0) value = (exp_sign > 0) ? value * 10.0 : value / 10.0;
+        } else {
+            s = exp_start;
+        }
+    }
+
+    if (end) *end = (char *)s;
+    return sign * value;
+}
+
+typedef struct {
+    const char *name;
+    char value[128];
+    bool used;
+} env_slot_t;
+
+static env_slot_t g_env[16] = {
+    { "PATH", "/bin:/usr/bin", true },
+    { "HOME", "/home/root", true },
+    { "PYTHONHOME", "/usr", true },
+    { "PYTHONPATH", "/usr/lib/python3.14", true },
+};
+
+static bool env_name_eq(const char *a, const char *b) {
+    while (*a && *b && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == 0 && *b == 0;
+}
+
+char *getenv(const char *name) {
+    if (!name) return NULL;
+    for (usize i = 0; i < sizeof(g_env) / sizeof(g_env[0]); i++) {
+        if (g_env[i].used && env_name_eq(g_env[i].name, name)) return g_env[i].value;
+    }
+    return NULL;
+}
+
+int setenv(const char *name, const char *value, int overwrite) {
+    if (!name || !*name || !value) {
+        errno = EINVAL;
+        return -1;
+    }
+    for (usize i = 0; i < sizeof(g_env) / sizeof(g_env[0]); i++) {
+        if (g_env[i].used && env_name_eq(g_env[i].name, name)) {
+            if (!overwrite) return 0;
+            strncpy(g_env[i].value, value, sizeof(g_env[i].value) - 1);
+            g_env[i].value[sizeof(g_env[i].value) - 1] = 0;
+            return 0;
+        }
+    }
+    for (usize i = 0; i < sizeof(g_env) / sizeof(g_env[0]); i++) {
+        if (!g_env[i].used) {
+            g_env[i].name = name;
+            strncpy(g_env[i].value, value, sizeof(g_env[i].value) - 1);
+            g_env[i].value[sizeof(g_env[i].value) - 1] = 0;
+            g_env[i].used = true;
+            return 0;
+        }
+    }
+    errno = ENOMEM;
+    return -1;
+}
+
+int unsetenv(const char *name) {
+    if (!name || !*name) {
+        errno = EINVAL;
+        return -1;
+    }
+    for (usize i = 0; i < sizeof(g_env) / sizeof(g_env[0]); i++) {
+        if (g_env[i].used && env_name_eq(g_env[i].name, name)) {
+            g_env[i].used = false;
+            return 0;
+        }
+    }
+    return 0;
 }
 
 /* ---- qsort (non-recursive introsort simplified as insertion sort for small N) ---- */

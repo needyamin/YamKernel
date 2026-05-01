@@ -44,7 +44,9 @@ static inline int open(const char *path, int flags) {
     return (int)syscall2(SYS_OPEN, (u64)path, (u64)flags);
 }
 static inline off_t lseek(int fd, off_t offset, int whence) {
-    return (off_t)syscall3(SYS_LSEEK, (u64)fd, (u64)offset, (u64)whence);
+    (void)fd; (void)offset; (void)whence;
+    errno = ENOSYS;
+    return -1;
 }
 static inline pid_t getpid(void) {
     return (pid_t)syscall0(SYS_GETPID);
@@ -57,15 +59,17 @@ static inline void _exit(int status) {
     __builtin_unreachable();
 }
 static inline unsigned int sleep(unsigned int seconds) {
-    syscall1(SYS_SLEEP, (u64)(seconds * 1000));
+    syscall1(SYS_SLEEPMS, (u64)(seconds * 1000));
     return 0;
 }
 static inline int usleep(unsigned int usec) {
-    syscall1(SYS_SLEEP, (u64)(usec / 1000));
+    syscall1(SYS_SLEEPMS, (u64)(usec / 1000));
     return 0;
 }
 static inline int execve(const char *path, char *const argv[], char *const envp[]) {
-    return (int)syscall3(SYS_EXEC, (u64)path, (u64)argv, (u64)envp);
+    (void)path; (void)argv; (void)envp;
+    errno = ENOSYS;
+    return -1;
 }
 static inline pid_t fork(void) {
     return (pid_t)syscall0(SYS_FORK);
@@ -73,3 +77,19 @@ static inline pid_t fork(void) {
 static inline pid_t waitpid(pid_t pid, int *status, int options) {
     return (pid_t)syscall3(SYS_WAITPID, (u64)pid, (u64)status, (u64)options);
 }
+
+char   *getcwd(char *buf, size_t size);
+int     chdir(const char *path);
+int     access(const char *path, int mode);
+int     isatty(int fd);
+static inline int dup(int fd) {
+    return (int)syscall1(SYS_DUP, (u64)fd);
+}
+static inline int dup2(int oldfd, int newfd) {
+    return (int)syscall2(SYS_DUP2, (u64)oldfd, (u64)newfd);
+}
+
+#define F_OK 0
+#define X_OK 1
+#define W_OK 2
+#define R_OK 4
