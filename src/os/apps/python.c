@@ -25,7 +25,7 @@ static void draw_python_status(wl_user_buffer_t *buf, int pct, const char *statu
 
     wl_user_draw_rect(buf, 18, 222, PY_W - 36, 72, 0xFF172033);
     wl_user_draw_text(buf, 36, 242, installed ? "Runtime installed into /apps/python/runtime" : "Preparing package cache", 0xFFE8EEF7);
-    wl_user_draw_text(buf, 36, 268, installed ? "Open Terminal and run: python" : "Installer will launch automatically", 0xFF9AA8BA);
+    wl_user_draw_text(buf, 36, 268, installed ? "Terminal: python, py, or python -c \"print(1+2)\"" : "Installer will launch automatically", 0xFF9AA8BA);
 
     wl_user_draw_text(buf, 18, PY_H - 28, installed ? "Python launcher: ready" : "Downloading runtime from YamNet", 0xFF36D399);
 }

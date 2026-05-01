@@ -89,6 +89,7 @@ static void keyboard_isr(interrupt_frame_t *frame) {
 
     /* Handle modifier keys */
     if (scancode == 0x2A || scancode == 0x36) {
+        evdev_push_event(EV_KEY, scancode, KEY_PRESSED);
         shift_pressed = true;
         return;
     }

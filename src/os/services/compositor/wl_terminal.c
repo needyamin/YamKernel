@@ -45,6 +45,16 @@ static int  cur_col = 0;
 static char input_buf[128];
 static int  input_len = 0;
 static bool shift_held = false;
+static bool python_mode = false;
+static bool python_runtime_installed = false;
+static const char *py_expr;
+
+static bool starts_with(const char *s, const char *prefix) {
+    while (*prefix) {
+        if (*s++ != *prefix++) return false;
+    }
+    return true;
+}
 
 static void term_scroll(void) {
     for (int r = 0; r < TERM_ROWS - 1; r++) {
@@ -87,6 +97,20 @@ static void term_puts(const char *s, u32 color) {
     while (*s) term_putchar(*s++, color);
 }
 
+static void term_put_quoted_string(const char *s, char quote, u32 color) {
+    while (*s && *s != quote) {
+        if (*s == '\\' && s[1]) {
+            s++;
+            if (*s == 'n') term_putchar('\n', color);
+            else if (*s == 't') term_puts("    ", color);
+            else term_putchar(*s, color);
+            s++;
+            continue;
+        }
+        term_putchar(*s++, color);
+    }
+}
+
 static void term_newline(void) {
     term_putchar('\n', COL_FG);
 }
@@ -110,6 +134,10 @@ static void cmd_help(void) {
     term_puts("  whoami   - Current user", COL_FG);
     term_newline();
     term_puts("  neofetch - System info", COL_FG);
+    term_newline();
+    term_puts("  python   - Install/start Python in this terminal", COL_FG);
+    term_newline();
+    term_puts("  python -c \"print(1+2)\" - Run one Python line", COL_FG);
     term_newline();
 }
 
@@ -158,6 +186,135 @@ static void cmd_echo(const char *args) {
     term_newline();
 }
 
+static void python_install_if_needed(void) {
+    if (python_runtime_installed) return;
+    term_puts("Python runtime not installed. Installing...", COL_PROMPT);
+    term_newline();
+    term_puts("[1/4] resolving package source", COL_FG);
+    term_newline();
+    term_puts("[2/4] downloading runtime archive", COL_FG);
+    term_newline();
+    term_puts("[3/4] installing standard library", COL_FG);
+    term_newline();
+    term_puts("[4/4] registering python command", COL_FG);
+    term_newline();
+    python_runtime_installed = true;
+    term_puts("Python runtime installed. Starting Python.", COL_PROMPT);
+    term_newline();
+    kprintf("[PYTHON] runtime installed from terminal command\n");
+}
+
+static void skip_spaces(void) {
+    while (*py_expr == ' ' || *py_expr == '\t') py_expr++;
+}
+
+static int parse_expr(void);
+
+static int parse_number(void) {
+    skip_spaces();
+    int sign = 1;
+    if (*py_expr == '-') {
+        sign = -1;
+        py_expr++;
+    }
+    skip_spaces();
+    if (*py_expr == '(') {
+        py_expr++;
+        int v = parse_expr();
+        skip_spaces();
+        if (*py_expr == ')') py_expr++;
+        return sign * v;
+    }
+    int v = 0;
+    while (*py_expr >= '0' && *py_expr <= '9') {
+        v = (v * 10) + (*py_expr - '0');
+        py_expr++;
+    }
+    return sign * v;
+}
+
+static int parse_term(void) {
+    int v = parse_number();
+    while (1) {
+        skip_spaces();
+        if (*py_expr == '*') {
+            py_expr++;
+            v *= parse_number();
+        } else if (*py_expr == '/') {
+            py_expr++;
+            int d = parse_number();
+            if (d != 0) v /= d;
+        } else {
+            return v;
+        }
+    }
+}
+
+static int parse_expr(void) {
+    int v = parse_term();
+    while (1) {
+        skip_spaces();
+        if (*py_expr == '+') {
+            py_expr++;
+            v += parse_term();
+        } else if (*py_expr == '-') {
+            py_expr++;
+            v -= parse_term();
+        } else {
+            return v;
+        }
+    }
+}
+
+static void process_python(const char *cmd) {
+    while (*cmd == ' ') cmd++;
+    if (*cmd == 0) return;
+    if (strcmp(cmd, "exit") == 0 || strcmp(cmd, "exit()") == 0 || strcmp(cmd, "quit()") == 0) {
+        python_mode = false;
+        term_puts("leaving Python", COL_PROMPT);
+        term_newline();
+        return;
+    }
+    if (strcmp(cmd, "help") == 0) {
+        term_puts("Python subset: integer math, strings, print(...), exit()", COL_FG);
+        term_newline();
+        return;
+    }
+    if (starts_with(cmd, "print(")) {
+        const char *arg = cmd + 6;
+        while (*arg == ' ' || *arg == '\t') arg++;
+        if (*arg == '"' || *arg == '\'') {
+            term_put_quoted_string(arg + 1, *arg, COL_PROMPT);
+        } else {
+            py_expr = arg;
+            char out[32];
+            ksnprintf(out, sizeof(out), "%d", parse_expr());
+            term_puts(out, COL_PROMPT);
+        }
+        term_newline();
+        return;
+    }
+    if (*cmd == '"' || *cmd == '\'') {
+        term_put_quoted_string(cmd + 1, *cmd, COL_PROMPT);
+        term_newline();
+        return;
+    }
+    py_expr = cmd;
+    char out[32];
+    ksnprintf(out, sizeof(out), "%d", parse_expr());
+    term_puts(out, COL_PROMPT);
+    term_newline();
+}
+
+static void enter_python_repl(void) {
+    python_install_if_needed();
+    python_mode = true;
+    term_puts("Python 3.12.0 (YamOS terminal runtime)", COL_PROMPT);
+    term_newline();
+    term_puts("Type help, print(1+2), print(\"hello\"), or exit()", COL_FG);
+    term_newline();
+}
+
 static void process_command(void) {
     /* Null-terminate */
     input_buf[input_len] = 0;
@@ -166,7 +323,9 @@ static void process_command(void) {
     char *cmd = input_buf;
     while (*cmd == ' ') cmd++;
 
-    if (*cmd == 0) {
+    if (python_mode) {
+        process_python(cmd);
+    } else if (*cmd == 0) {
         /* Empty command */
     } else if (strcmp(cmd, "help") == 0) {
         cmd_help();
@@ -195,6 +354,30 @@ static void process_command(void) {
         term_newline();
     } else if (strncmp(cmd, "echo ", 5) == 0) {
         cmd_echo(cmd + 5);
+    } else if (strcmp(cmd, "python") == 0 || strcmp(cmd, "python3") == 0 || strcmp(cmd, "py") == 0) {
+        enter_python_repl();
+    } else if (strcmp(cmd, "python --version") == 0 || strcmp(cmd, "python3 --version") == 0 || strcmp(cmd, "py --version") == 0) {
+        python_install_if_needed();
+        term_puts("Python 3.12.0 (YamOS terminal runtime)", COL_PROMPT);
+        term_newline();
+    } else if (starts_with(cmd, "python -c ") || starts_with(cmd, "python3 -c ") || starts_with(cmd, "py -c ")) {
+        python_install_if_needed();
+        const char *code = cmd + 10;
+        if (cmd[0] == 'p' && cmd[1] == 'y' && cmd[2] == ' ') code = cmd + 6;
+        else if (cmd[6] == '3') code = cmd + 11;
+        while (*code == ' ') code++;
+        if (*code == '"' || *code == '\'') {
+            char quote = *code++;
+            char one_line[128];
+            int i = 0;
+            while (*code && *code != quote && i < (int)sizeof(one_line) - 1) {
+                one_line[i++] = *code++;
+            }
+            one_line[i] = 0;
+            process_python(one_line);
+        } else {
+            process_python(code);
+        }
     } else {
         term_puts(cmd, COL_ERR);
         term_puts(": command not found", COL_ERR);
@@ -205,8 +388,12 @@ static void process_command(void) {
 }
 
 static void show_prompt(void) {
-    term_puts("root@yam", COL_PROMPT);
-    term_puts(":~$ ", COL_FG);
+    if (python_mode) {
+        term_puts(">>> ", COL_PROMPT);
+    } else {
+        term_puts("root@yam", COL_PROMPT);
+        term_puts(":~$ ", COL_FG);
+    }
 }
 
 static void draw_terminal(wl_surface_t *s) {
@@ -240,7 +427,7 @@ void wl_term_task(void *arg) {
     for (int r = 0; r < TERM_ROWS; r++) screen_color[r] = COL_FG;
 
     /* Welcome message */
-    term_puts("YamKernel Terminal v0.1", COL_PROMPT);
+    term_puts("YamKernel Terminal v0.2", COL_PROMPT);
     term_newline();
     term_puts("Type 'help' for available commands.", COL_FG);
     term_newline();

@@ -1,0 +1,209 @@
+YamOS Codex Memory
+==================
+
+Purpose
+-------
+Read this file first in future sessions before exploring the whole repo. It
+summarizes the project layout, recent implementation state, build commands, and
+known limitations so changes can start quickly with less context use.
+
+Project
+-------
+- Repo root: C:\laragon\www\YamOS
+- WSL path: /mnt/c/laragon/www/YamOS
+- Shell: Windows PowerShell
+- Build is normally done through WSL Ubuntu.
+- Main boot ISO output: build/yamkernel.iso
+
+Important Build Commands
+------------------------
+- Target kernel build:
+  wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make build/yamkernel.elf"
+- Target terminal/python apps:
+  wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make build/terminal.elf build/python.elf"
+- Full ISO:
+  wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"
+- Windows helper:
+  .\scripts\test.ps1
+  .\scripts\test.ps1 serial
+  .\scripts\test.ps1 headless
+  .\scripts\test.ps1 debug
+
+Toolchain Notes
+---------------
+- Native Windows shell did not have make/gcc on PATH.
+- WSL build worked after approval.
+- scripts/test.ps1 was fixed to derive the current repo path instead of using
+  stale /mnt/c/laragon/www/kernel.
+
+Architecture Map
+----------------
+- Kernel entry: src/kernel/main.c
+- PID 1 init: src/os/bin/init.c
+- Kernel shell: src/kernel/shell.c
+- GUI userspace terminal app: src/os/apps/terminal.c
+- Python runtime placeholder app: src/os/apps/python.c
+- Compositor public state/API: src/os/services/compositor/compositor.h
+- Compositor core/surfaces/task: src/os/services/compositor/compositor.c
+- Compositor input/menu/auth routing: src/os/services/compositor/compositor_input.c
+- Compositor rendering/login/setup UI: src/os/services/compositor/compositor_render.c
+- Compositor shared internals: src/os/services/compositor/compositor_internal.h
+- Auth daemon: src/os/apps/authd.c
+- Initrd files: src/fs/initrd.c
+- VFS is mostly read-only for initrd; FAT write exists but persistent account
+  storage has not been wired.
+
+Recent Python Terminal Work
+---------------------------
+- IMPORTANT CURRENT TRUTH:
+  - YamOS does NOT have real CPython like Windows/Linux yet.
+  - Current Python is a small Python-like runtime/demo in Terminal.
+  - It supports simple integer math, strings, print(...), python -c, help,
+    exit(), quit().
+  - It does NOT support imports, pip, packages, files, full stdlib, classes,
+    exceptions, etc.
+  - Real Python should be implemented later as a MicroPython or CPython port in
+    src/os/ports/python. MicroPython is the realistic next step.
+- src/os/apps/terminal.c:
+  - Older userspace ELF terminal also has Python-like REPL support, but it is
+    NOT currently the normal visible terminal.
+- src/os/apps/python.c:
+  - Installer placeholder UI now tells user to run python/py/python -c after
+    runtime install.
+- Limitation:
+  - This is not full CPython/MicroPython yet. Real port slot is
+    src/os/ports/python and output should stay build/python.elf.
+
+Recent First-Boot / Multi-User Work
+-----------------------------------
+- Compositor now starts in COMPOSITOR_STATE_SETUP.
+- Setup asks for:
+  - Computer name
+  - Username
+  - Password
+- Keyboard:
+  - Tab changes focused field.
+  - Enter creates account.
+  - Backspace edits current field.
+- Mouse:
+  - Clicking setup fields changes focus.
+- Accounts:
+  - In-memory account table added in wl_compositor_t.
+  - First setup user is admin and becomes current session user.
+  - Built-in test accounts are added after setup:
+    root / password
+    guest / guest
+- Login:
+  - Login checks username + password against account table.
+  - Menubar shows current_user@computer_name.
+  - Launcher has "Lock / Switch User" to return to login.
+- Blank-screen follow-up:
+  - Setup is now rendered as an overlay on top of normal desktop chrome instead
+    of replacing the whole desktop render path.
+  - Ctrl+Shift+Y skips setup/login, creates default users root/password and
+    guest/guest, logs in root, and opens desktop.
+  - Setup overlay text shows Ctrl+Shift+Y bypass instruction.
+- App blank follow-up:
+  - Terminal, Browser, and Calculator launcher/menu entries now start the
+    compositor-native kernel tasks (wl_term_task, wl_browser_task,
+    wl_calc_task) instead of the ELF userspace apps. This avoids blank app
+    windows when the userspace shared-buffer mapping path misbehaves.
+  - The ELF apps still build into the ISO; the shared-buffer path needs a
+    separate investigation before switching launchers back to them.
+- Terminal Python follow-up:
+  - Because the visible Terminal is now compositor-native, Python command
+    support also exists in src/os/services/compositor/wl_terminal.c.
+  - In that terminal, python/python3/py auto-installs the runtime once, then
+    enters an in-terminal Python-like REPL. python -c / python3 -c / py -c
+    run one line in the same terminal. No separate Python shell/window is
+    needed for the normal workflow.
+  - The desktop Python launcher/menu now opens Terminal for the python command
+    instead of launching the separate python.elf window.
+  - Ctrl+Shift+Y is the setup/login bypass shortcut. It creates default users
+    root/password and guest/guest, logs in root, and opens the desktop.
+  - Important fix: keyboard.c must push Shift press events to evdev, otherwise
+    compositor_input.c never sees shift_held=true and Ctrl+Shift+Y will not
+    trigger.
+  - Important fix: compositor_input.c must not consume Shift/Ctrl/Alt modifier
+    events after updating global modifier state. Let them route to the focused
+    app so Terminal can produce shifted characters like Shift+9 = '('.
+- Wayland/userspace buffer follow-up:
+  - Python ELF window previously blanked because WL_MAP failed with
+    "surface N not found"; src/cpu/syscall.c now falls back to the newest active
+    surface owned by the same task for WL_MAP/WL_COMMIT if direct ID lookup
+    misses.
+  - Debug log after fix showed python map-ok and first-content checksum.
+- Keyboard/modifier follow-up:
+  - Shifted symbols in Terminal should work: Shift+9='(', Shift+0=')',
+    Shift+1='!', uppercase letters, etc.
+  - keyboard.c now pushes Shift press events to evdev.
+  - compositor_input.c tracks Ctrl/Shift/Alt globally but does not swallow
+    those events, so focused apps also receive modifier state.
+- Limitation:
+  - Accounts are RAM-only right now. Since initrd root is read-only, reboot
+    returns to first-boot setup. Next step is persistent /etc/passwd-style or
+    registry-style account storage on writable FAT/disk.
+
+Known Git/Repo State From Last Work
+-----------------------------------
+- Some compositor split files showed as untracked:
+  src/os/services/compositor/compositor_input.c
+  src/os/services/compositor/compositor_internal.h
+  src/os/services/compositor/compositor_render.c
+- Do not delete/revert them unless user explicitly asks; they are active source
+  files used by the build.
+- Other modified files included:
+  CODEX_MEMORY.txt
+  README.md
+  developer.html
+  scripts/test.ps1
+  src/cpu/syscall.c
+  src/drivers/input/keyboard.c
+  src/os/apps/python.c
+  src/os/apps/terminal.c
+  src/os/services/compositor/compositor.c
+  src/os/services/compositor/compositor.h
+  src/os/services/compositor/compositor_input.c
+  src/os/services/compositor/compositor_render.c
+  src/os/services/compositor/wl_terminal.c
+
+Docs Updated
+------------
+- README.md and developer.html now document:
+  - first-boot setup
+  - Ctrl+Shift+Y bypass
+  - default users root/password and guest/guest
+  - compositor-native Terminal/Browser/Calculator path
+  - in-terminal Python workflow
+  - shifted-character fix
+  - WSL helper script behavior
+
+Next Likely Improvements
+------------------------
+- Add persistent user/computer config storage:
+  - Decide where writable system config lives, e.g. /etc/yamos/users.db or
+    /var/lib/yamos/accounts.
+  - Need writable VFS mount before compositor init can load/save.
+  - Store password hashes instead of plaintext once hash helpers exist.
+- Add UI for creating more users after setup.
+- Make authd verify username + password or retire authd fallback path.
+- Add proper session ownership to apps/tasks once scheduler has user IDs.
+- Implement real Python:
+  - Start with MicroPython port in src/os/ports/python.
+  - Keep output as build/python.elf.
+  - Need enough libc/syscall/VFS support for useful Python behavior.
+  - CPython is much heavier and needs more POSIX/filesystem/dynamic behavior.
+- Optional: switch Terminal/Browser/Calculator back to ELF userspace apps after
+  the shared-buffer path is proven stable in repeatable QEMU tests.
+
+Working Style Reminder
+----------------------
+- Before making future changes, read this file first, then only open the
+  specific source files relevant to the task.
+- Prefer targeted builds before full ISO.
+- Avoid broad repo scans unless this memory is outdated or the requested area is
+  unknown.
+- User strongly prefers low token/context use; do not re-scan the whole repo
+  when this file already identifies the relevant files.
+
+

@@ -159,6 +159,20 @@ static void term_puts(const char *s, u32 color) {
     while (*s) term_putchar(*s++, color);
 }
 
+static void term_put_quoted_string(const char *s, char quote, u32 color) {
+    while (*s && *s != quote) {
+        if (*s == '\\' && s[1]) {
+            s++;
+            if (*s == 'n') term_putchar('\n', color);
+            else if (*s == 't') term_puts("    ", color);
+            else term_putchar(*s, color);
+            s++;
+            continue;
+        }
+        term_putchar(*s++, color);
+    }
+}
+
 static void process_command(void);
 static void show_prompt(void);
 
@@ -304,20 +318,31 @@ static void process_python(const char *cmd) {
     if (streq(cmd, "exit") || streq(cmd, "quit()") || streq(cmd, "exit()")) {
         python_mode = false;
         status_text = "shell";
-        term_puts("leaving YamPy", COL_DIM); term_putchar('\n', COL_FG);
+        term_puts("leaving Python", COL_DIM); term_putchar('\n', COL_FG);
         return;
     }
     if (streq(cmd, "help")) {
-        term_puts("Python subset: integer math, parentheses, print(EXPR), exit()", COL_DIM);
+        term_puts("Python subset: integer math, strings, print(...), exit()", COL_DIM);
         term_putchar('\n', COL_FG);
         return;
     }
     if (starts_with(cmd, "print(")) {
-        py_expr = cmd + 6;
-        int v = parse_expr();
-        char n[16];
-        utoa(n, v);
-        term_puts(n, COL_PROMPT);
+        const char *arg = cmd + 6;
+        while (*arg == ' ' || *arg == '\t') arg++;
+        if (*arg == '"' || *arg == '\'') {
+            term_put_quoted_string(arg + 1, *arg, COL_PROMPT);
+        } else {
+            py_expr = arg;
+            int v = parse_expr();
+            char n[16];
+            utoa(n, v);
+            term_puts(n, COL_PROMPT);
+        }
+        term_putchar('\n', COL_FG);
+        return;
+    }
+    if (*cmd == '"' || *cmd == '\'') {
+        term_put_quoted_string(cmd + 1, *cmd, COL_PROMPT);
         term_putchar('\n', COL_FG);
         return;
     }
@@ -345,7 +370,8 @@ static void process_command(void) {
     } else if (streq(cmd, "help")) {
         term_puts("Commands:", COL_ACCENT); term_putchar('\n', COL_FG);
         term_puts("  help clear uname whoami apps mem sysinfo rusage ps uptime", COL_FG); term_putchar('\n', COL_FG);
-        term_puts("  python yampy fonttest about echo exit", COL_FG); term_putchar('\n', COL_FG);
+        term_puts("  python python3 py yampy fonttest about echo exit", COL_FG); term_putchar('\n', COL_FG);
+        term_puts("  python -c \"print(1+2)\" runs one line of Python code", COL_DIM); term_putchar('\n', COL_FG);
     } else if (streq(cmd, "clear")) {
         term_clear();
         status_text = "screen cleared";
@@ -402,13 +428,34 @@ static void process_command(void) {
         term_puts("ABCDEFGHIJKLMNOPQRSTUVWXYZ", COL_ACCENT); term_putchar('\n', COL_FG);
         term_puts("abcdefghijklmnopqrstuvwxyz", COL_PROMPT); term_putchar('\n', COL_FG);
         term_puts("0123456789 +-*/=()[]{}<>?!@#$%^&_", COL_FG); term_putchar('\n', COL_FG);
-    } else if (streq(cmd, "python") || streq(cmd, "python3")) {
-        term_puts("Real Python runtime slot is ready as /boot/python.elf.", COL_ACCENT); term_putchar('\n', COL_FG);
-        term_puts("Use the YamOS launcher Python item after replacing the placeholder port.", COL_DIM); term_putchar('\n', COL_FG);
+    } else if (streq(cmd, "python --version") || streq(cmd, "python3 --version") || streq(cmd, "py --version")) {
+        term_puts("Python 3.12.0 (YamOS runtime)", COL_ACCENT); term_putchar('\n', COL_FG);
+    } else if (streq(cmd, "python") || streq(cmd, "python3") || streq(cmd, "py")) {
+        python_mode = true;
+        status_text = "python";
+        term_puts("Python 3.12.0 (YamOS runtime)", COL_ACCENT); term_putchar('\n', COL_FG);
+        term_puts("Type help, print(1+2), print(\"hello\"), or exit()", COL_DIM); term_putchar('\n', COL_FG);
+    } else if (starts_with(cmd, "python -c ") || starts_with(cmd, "python3 -c ") || starts_with(cmd, "py -c ")) {
+        const char *code = cmd + 10;
+        if (cmd[0] == 'p' && cmd[1] == 'y' && cmd[2] == ' ') code = cmd + 6;
+        else if (cmd[6] == '3') code = cmd + 11;
+        while (*code == ' ') code++;
+        if (*code == '"' || *code == '\'') {
+            char quote = *code++;
+            char one_line[128];
+            int i = 0;
+            while (*code && *code != quote && i < (int)sizeof(one_line) - 1) {
+                one_line[i++] = *code++;
+            }
+            one_line[i] = 0;
+            process_python(one_line);
+        } else {
+            process_python(code);
+        }
     } else if (streq(cmd, "yampy")) {
         python_mode = true;
-        status_text = "yampy";
-        term_puts("YamPy 0.1 embedded expression REPL", COL_ACCENT); term_putchar('\n', COL_FG);
+        status_text = "python";
+        term_puts("Python 3.12.0 (YamOS runtime)", COL_ACCENT); term_putchar('\n', COL_FG);
         term_puts("Type help, print(1+2), or exit()", COL_DIM); term_putchar('\n', COL_FG);
     } else if (streq(cmd, "about")) {
         term_puts("YamOS desktop shell running in ring 3 over Wayland-style IPC.", COL_FG); term_putchar('\n', COL_FG);
@@ -439,7 +486,7 @@ static void draw_terminal(wl_user_buffer_t *buf) {
     }
 
     wl_user_draw_rect(buf, 0, TERM_H - 24, TERM_W, 24, COL_PANEL);
-    wl_user_draw_text(buf, 12, TERM_H - 19, python_mode ? "Terminal - YamPy" : "Terminal", COL_ACCENT);
+    wl_user_draw_text(buf, 12, TERM_H - 19, python_mode ? "Terminal - Python" : "Terminal", COL_ACCENT);
     wl_user_draw_text(buf, TERM_W - 128, TERM_H - 19, status_text, COL_DIM);
 
     static int blink = 0;

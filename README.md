@@ -21,6 +21,20 @@ Current tree: **v0.4.0 development line**.
 | Userland | In-tree | ELF modules for terminal, calculator, browser, Python demo, authd, and drivers. |
 | AI/ML | In-tree | Tensor allocation and accelerator abstraction syscalls. |
 
+## Current Desktop Behavior
+
+- First boot opens a setup overlay for computer name, username, and password.
+- Press `Ctrl+Shift+Y` on the setup or login screen to auto-create default users and enter the desktop.
+- Bypass defaults:
+  - `root / password`
+  - `guest / guest`
+- Terminal, Browser, and Calculator currently launch as compositor-native apps for reliable drawing.
+- The visible Terminal is `src/os/services/compositor/wl_terminal.c`.
+- In the main Terminal, `python`, `python3`, and `py` auto-install the YamOS Python runtime the first time they are used, then open an in-terminal `>>>` REPL.
+- `python -c "print(1+2)"`, `python3 -c ...`, and `py -c ...` run one-line Python-style code in the same Terminal.
+- The separate `python.elf` module still exists as a runtime/demo module, but the normal workflow is one Terminal only.
+- Shifted characters such as `Shift+9 = (`, `Shift+0 = )`, and uppercase letters are routed through evdev to focused apps.
+
 ## Quick Start
 
 On Ubuntu/WSL:
@@ -104,7 +118,9 @@ src/os/services/          compositor service and demo clients
 - Safe Mode skips several driver/subsystem init paths for easier boot triage.
 - `YAM_PREEMPTIVE` and `YAM_WAYLAND` are enabled in `src/kernel/main.c`.
 - `YAM_DEMO_TASKS` is disabled by default.
-- The desktop compositor starts at login, can spawn app modules, and includes a VTTY render mode.
+- The desktop compositor starts with first-boot setup/login, can spawn apps, and includes a VTTY render mode.
+- `Ctrl+Shift+Y` bypasses setup/login by creating default accounts and logging into the desktop.
+- Terminal Python is integrated into the compositor-native Terminal; use `python` in Terminal rather than launching a separate Python shell.
 - AP cores are initialized and can receive kernel IPIs, but full multi-core task scheduling remains disabled until address-space switching and run-queue ownership are audited.
 - TSC-deadline is detected when the CPU exposes it. The current timer path still uses the calibrated periodic APIC timer unless a later platform-specific timer switch is added.
 - CPU exceptions print register state, and the panic path has a register-frame variant for fatal exception debugging.

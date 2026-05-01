@@ -219,8 +219,19 @@ static i64 sys_wl_map_buffer(u32 surface_id, u64 uvaddr) {
         }
     }
     if (!s) {
-        kprintf("[WL_MAP] task '%s' id=%lu surface %u not found\n", t->name, t->id, surface_id);
-        return -3;
+        for (int i = WL_MAX_SURFACES - 1; i >= 0; i--) {
+            if (comp->surfaces[i].state != WL_SURFACE_FREE &&
+                comp->surfaces[i].owner_task_id == t->id) {
+                s = &comp->surfaces[i];
+                kprintf("[WL_MAP] task '%s' id=%lu surface %u not found; using owned surface %u\n",
+                        t->name, t->id, surface_id, s->id);
+                break;
+            }
+        }
+        if (!s) {
+            kprintf("[WL_MAP] task '%s' id=%lu surface %u not found\n", t->name, t->id, surface_id);
+            return -3;
+        }
     }
     if (s->owner_task_id != t->id) {
         kprintf("[WL_MAP] task '%s' id=%lu surface %u owner=%lu mismatch\n",
@@ -253,6 +264,7 @@ static i64 sys_wl_commit(u32 surface_id) {
     static u32 last_missing_surface = 0;
     static u32 missing_repeat = 0;
     wl_compositor_t *comp = wl_get_compositor();
+    wl_surface_t *owned_fallback = NULL;
     for (int i = 0; i < WL_MAX_SURFACES; i++) {
         if (comp->surfaces[i].state != WL_SURFACE_FREE && comp->surfaces[i].id == surface_id) {
             if (comp->surfaces[i].owner_task_id != t->id) {
@@ -263,6 +275,16 @@ static i64 sys_wl_commit(u32 surface_id) {
             wl_surface_commit(&comp->surfaces[i]);
             return 0;
         }
+        if (comp->surfaces[i].state != WL_SURFACE_FREE &&
+            comp->surfaces[i].owner_task_id == t->id) {
+            owned_fallback = &comp->surfaces[i];
+        }
+    }
+    if (owned_fallback) {
+        kprintf("[WL_DBG] commit surface %u not found for task='%s'; using owned surface %u\n",
+                surface_id, t->name, owned_fallback->id);
+        wl_surface_commit(owned_fallback);
+        return 0;
     }
     if (last_missing_surface != surface_id) {
         last_missing_surface = surface_id;

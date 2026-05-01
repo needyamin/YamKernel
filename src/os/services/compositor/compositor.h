@@ -73,10 +73,21 @@ typedef struct wl_surface {
 
 /* Compositor system state */
 typedef enum {
-    COMPOSITOR_STATE_LOGIN = 0,
+    COMPOSITOR_STATE_SETUP = 0,
+    COMPOSITOR_STATE_LOGIN,
     COMPOSITOR_STATE_DESKTOP,
     COMPOSITOR_STATE_VTTY
 } compositor_state_t;
+
+#define YAM_MAX_USERS 8
+
+typedef struct {
+    char username[32];
+    char password[32];
+    char display_name[32];
+    bool admin;
+    bool active;
+} yam_user_account_t;
 
 /* Compositor state */
 typedef struct wl_compositor {
@@ -85,6 +96,16 @@ typedef struct wl_compositor {
     char            login_pass[32];
     bool            login_focus_pass;
     bool            login_failed;
+    char            setup_user[32];
+    char            setup_pass[32];
+    char            setup_computer[32];
+    u8              setup_focus;       /* 0 computer, 1 user, 2 password */
+    bool            setup_failed;
+    bool            setup_complete;
+    char            current_user[32];
+    char            computer_name[32];
+    yam_user_account_t users[YAM_MAX_USERS];
+    u32             user_count;
 
     wl_surface_t    surfaces[WL_MAX_SURFACES];
     u32             surface_count;
