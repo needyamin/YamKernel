@@ -157,6 +157,11 @@ task_t *sched_spawn(const char *name, void (*entry)(void *), void *arg, u8 prio)
     t->cgroup = NULL;
     memset(t->name, 0, sizeof(t->name));
     for (u32 i = 0; i < sizeof(t->name) - 1 && name[i]; i++) t->name[i] = name[i];
+    if (t->parent && t->parent->cwd[0]) {
+        strncpy(t->cwd, t->parent->cwd, sizeof(t->cwd) - 1);
+    } else {
+        strncpy(t->cwd, "/", sizeof(t->cwd) - 1);
+    }
     t->graph_node = yamgraph_node_create(YAM_NODE_TASK, t->name, t);
 
     t->stack = (u8 *)vmm_alloc_kernel_stack(SCHED_STACK_SIZE);
@@ -257,6 +262,7 @@ void sched_init(void) {
     boot->state  = TASK_RUNNING;
     boot->cpu_affinity = ~0ULL;
     boot->name[0] = 'b'; boot->name[1] = 's'; boot->name[2] = 'p';
+    strncpy(boot->cwd, "/", sizeof(boot->cwd) - 1);
 
     u32 fpu_sz_boot = cpuid_get_info()->xsave_size;
     if (fpu_sz_boot == 0) fpu_sz_boot = 512;

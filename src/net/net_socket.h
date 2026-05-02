@@ -69,15 +69,4 @@ static inline u32 make_ip(u8 a, u8 b, u8 c, u8 d) {
     return ((u32)a << 24) | ((u32)b << 16) | ((u32)c << 8) | d;
 }
 
-/* Kernel socket syscall numbers */
-#define SYS_SOCKET    200
-#define SYS_BIND      201
-#define SYS_CONNECT   202
-#define SYS_LISTEN    203
-#define SYS_ACCEPT    204
-#define SYS_SEND      205
-#define SYS_RECV      206
-#define SYS_SENDTO    207
-#define SYS_RECVFROM  208
-#define SYS_SHUTDOWN  209
-#define SYS_GETPEERNAME 210
+/* Syscall numbers live in src/kernel/api/syscall.h. */

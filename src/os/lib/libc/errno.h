@@ -39,9 +39,14 @@
 #define ENOSYS   38  /* Function not implemented */
 #define ENOTEMPTY 39 /* Directory not empty */
 #define ELOOP    40  /* Too many symbolic links encountered */
+#define ENOTSUP  45  /* Operation not supported */
+#define EOPNOTSUPP ENOTSUP
 #define EWOULDBLOCK EAGAIN
 #define ENOMSG   42  /* No message of desired type */
+#define EALREADY 114 /* Operation already in progress */
+#define EINPROGRESS 115 /* Operation now in progress */
 #define ENOTSOCK 88  /* Socket operation on non-socket */
+#define ECONNABORTED 103 /* Software caused connection abort */
 #define EADDRINUSE 98  /* Address already in use */
 #define ECONNREFUSED 111 /* Connection refused */
 #define ETIMEDOUT 110  /* Connection timed out */

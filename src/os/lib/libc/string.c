@@ -46,6 +46,15 @@ void *memchr(const void *s, int c, usize n) {
     return NULL;
 }
 
+void *memrchr(const void *s, int c, usize n) {
+    const u8 *p = (const u8 *)s + n;
+    while (n--) {
+        p--;
+        if (*p == (u8)c) return (void *)p;
+    }
+    return NULL;
+}
+
 usize strlen(const char *s) {
     usize len = 0;
     while (*s++) len++;
@@ -56,6 +65,16 @@ char *strcpy(char *dest, const char *src) {
     char *d = dest;
     while ((*d++ = *src++));
     return dest;
+}
+
+extern void *malloc(usize size);
+
+char *strdup(const char *s) {
+    usize len = strlen(s) + 1;
+    char *copy = (char *)malloc(len);
+    if (!copy) return NULL;
+    memcpy(copy, s, len);
+    return copy;
 }
 
 char *strncpy(char *dest, const char *src, usize n) {
@@ -86,6 +105,39 @@ char *strrchr(const char *s, int c) {
     return (char *)last;
 }
 
+char *strstr(const char *haystack, const char *needle) {
+    if (!*needle) return (char *)haystack;
+    for (; *haystack; haystack++) {
+        const char *h = haystack;
+        const char *n = needle;
+        while (*h && *n && *h == *n) {
+            h++;
+            n++;
+        }
+        if (!*n) return (char *)haystack;
+    }
+    return NULL;
+}
+
+char *strpbrk(const char *s, const char *accept) {
+    for (; *s; s++) {
+        for (const char *a = accept; *a; a++) {
+            if (*s == *a) return (char *)s;
+        }
+    }
+    return NULL;
+}
+
+usize strcspn(const char *s, const char *reject) {
+    usize n = 0;
+    for (; s[n]; n++) {
+        for (const char *r = reject; *r; r++) {
+            if (s[n] == *r) return n;
+        }
+    }
+    return n;
+}
+
 int strcmp(const char *s1, const char *s2) {
     while (*s1 && (*s1 == *s2)) {
         s1++; s2++;
@@ -100,4 +152,9 @@ int strncmp(const char *s1, const char *s2, usize n) {
         n--;
     }
     return n ? (*(const u8 *)s1 - *(const u8 *)s2) : 0;
+}
+
+char *strerror(int errnum) {
+    (void)errnum;
+    return "YamOS libc error";
 }

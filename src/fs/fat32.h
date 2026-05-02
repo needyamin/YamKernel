@@ -115,6 +115,7 @@ isize fat32_write_file(fat32_vol_t *vol, const char *path, const void *data, usi
 
 bool fat32_lookup(fat32_vol_t *vol, const char *path, fat32_fileinfo_t *info);
 bool fat32_mkdir(fat32_vol_t *vol, const char *path);
+bool fat32_unlink(fat32_vol_t *vol, const char *path);
 
 /* Read at most max_entries directory entries from path into out[] */
 int  fat32_readdir(fat32_vol_t *vol, const char *path, fat32_fileinfo_t *out, int max_entries);

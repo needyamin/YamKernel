@@ -45,3 +45,5 @@ task_trampoline:
     cli
     hlt
     jmp  .dead
+
+section .note.GNU-stack noalloc noexec nowrite progbits

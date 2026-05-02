@@ -18,6 +18,7 @@ struct _FILE {
     char unget;
     bool has_unget;
     bool eof;
+    bool err;
 };
 
 static struct _FILE g_files[64];
@@ -49,6 +50,7 @@ FILE *fopen(const char *path, const char *mode) {
             g_files[i].mode = m;
             g_files[i].has_unget = false;
             g_files[i].eof = false;
+            g_files[i].err = false;
             return &g_files[i];
         }
     }
@@ -63,19 +65,41 @@ int fclose(FILE *fp) {
     return 0;
 }
 
+FILE *fdopen(int fd, const char *mode) {
+    files_init();
+    if (fd < 0) return NULL;
+    int m = 0;
+    if (mode && mode[0] == 'w') m = 1;
+    else if (mode && mode[0] == 'a') m = 3;
+    if (mode && mode[1] == '+') m = 2;
+
+    for (int i = 3; i < 64; i++) {
+        if (g_files[i].fd < 0) {
+            g_files[i].fd = fd;
+            g_files[i].mode = m;
+            g_files[i].has_unget = false;
+            g_files[i].eof = false;
+            g_files[i].err = false;
+            return &g_files[i];
+        }
+    }
+    return NULL;
+}
+
 usize fread(void *buf, usize size, usize count, FILE *fp) {
     if (!fp || fp->fd < 0 || fp->eof) return 0;
     usize total = size * count;
     long n = (long)syscall3(SYS_READ, (u64)fp->fd, (u64)buf, (u64)total);
-    if (n <= 0) { fp->eof = true; return 0; }
+    if (n < 0) { fp->err = true; return 0; }
+    if (n == 0) { fp->eof = true; return 0; }
     return (usize)n / size;
 }
 
 usize fwrite(const void *buf, usize size, usize count, FILE *fp) {
     if (!fp || fp->fd < 0) return 0;
     usize total = size * count;
-    long n = (long)syscall3(SYS_WRITE, (u64)fp->fd, (u64)buf, (u64)total);
-    if (n < 0) return 0;
+    long n = (long)syscall3(SYS_WRITE_FD, (u64)fp->fd, (u64)buf, (u64)total);
+    if (n < 0) { fp->err = true; return 0; }
     return (usize)n / size;
 }
 
@@ -85,7 +109,8 @@ char *fgets(char *buf, int n, FILE *fp) {
     while (i < n - 1) {
         char c;
         long r = (long)syscall3(SYS_READ, (u64)fp->fd, (u64)&c, 1);
-        if (r <= 0) { fp->eof = true; break; }
+        if (r < 0) { fp->err = true; break; }
+        if (r == 0) { fp->eof = true; break; }
         buf[i++] = c;
         if (c == '\n') break;
     }
@@ -95,12 +120,51 @@ char *fgets(char *buf, int n, FILE *fp) {
 }
 
 int feof(FILE *fp) { return fp ? fp->eof : 1; }
+int ferror(FILE *fp) { return fp ? fp->err : 1; }
 int fileno(FILE *fp) { return fp ? fp->fd : -1; }
 
 int ungetc(int c, FILE *fp) {
     if (!fp) return -1;
     fp->unget = (char)c; fp->has_unget = true;
     return c;
+}
+
+int getc(FILE *fp) {
+    if (!fp || fp->fd < 0) return EOF;
+    if (fp->has_unget) {
+        fp->has_unget = false;
+        return (unsigned char)fp->unget;
+    }
+    unsigned char c;
+    long r = (long)syscall3(SYS_READ, (u64)fp->fd, (u64)&c, 1);
+    if (r < 0) {
+        fp->err = true;
+        return EOF;
+    }
+    if (r == 0) {
+        fp->eof = true;
+        return EOF;
+    }
+    return c;
+}
+
+int getc_unlocked(FILE *fp) { return getc(fp); }
+void flockfile(FILE *fp) { (void)fp; }
+void funlockfile(FILE *fp) { (void)fp; }
+void clearerr(FILE *fp) {
+    if (!fp) return;
+    fp->eof = false;
+    fp->err = false;
+}
+long ftell(FILE *fp) {
+    if (!fp || fp->fd < 0) return -1;
+    return (long)syscall3(SYS_LSEEK, (u64)fp->fd, 0, 1);
+}
+void rewind(FILE *fp) {
+    if (!fp || fp->fd < 0) return;
+    syscall3(SYS_LSEEK, (u64)fp->fd, 0, 0);
+    fp->eof = false;
+    fp->err = false;
 }
 
 /* ---- vsprintf with full format support ---- */
@@ -213,6 +277,11 @@ int sprintf(char *buf, const char *fmt, ...) {
 int snprintf(char *buf, usize size, const char *fmt, ...) {
     va_list a; va_start(a, fmt); int n = vsnprintf(buf, size, fmt, a); va_end(a); return n;
 }
+int sscanf(const char *str, const char *fmt, ...) {
+    (void)str;
+    (void)fmt;
+    return 0;
+}
 int printf(const char *fmt, ...) {
     char buf[2048]; va_list a; va_start(a, fmt);
     int n = vsnprintf(buf, sizeof(buf), fmt, a); va_end(a);
@@ -223,19 +292,45 @@ int fprintf(FILE *fp, const char *fmt, ...) {
     char buf[2048]; va_list a; va_start(a, fmt);
     int n = vsnprintf(buf, sizeof(buf), fmt, a); va_end(a);
     if (!fp || fp->fd < 0) return -1;
-    syscall3(SYS_WRITE, (u64)fp->fd, (u64)buf, (u64)n);
+    syscall3(SYS_WRITE_FD, (u64)fp->fd, (u64)buf, (u64)n);
+    return n;
+}
+int vfprintf(FILE *fp, const char *fmt, va_list args) {
+    char buf[2048];
+    int n = vsnprintf(buf, sizeof(buf), fmt, args);
+    if (!fp || fp->fd < 0) return -1;
+    syscall3(SYS_WRITE_FD, (u64)fp->fd, (u64)buf, (u64)n);
     return n;
 }
 int fputs(const char *s, FILE *fp) {
     if (!fp || fp->fd < 0 || !s) return -1;
     usize l = strlen(s);
-    return (int)syscall3(SYS_WRITE, (u64)fp->fd, (u64)s, (u64)l);
+    return (int)syscall3(SYS_WRITE_FD, (u64)fp->fd, (u64)s, (u64)l);
+}
+int fputc(int c, FILE *fp) {
+    unsigned char ch = (unsigned char)c;
+    return fwrite(&ch, 1, 1, fp) == 1 ? ch : EOF;
+}
+int putchar(int c) { return fputc(c, stdout); }
+int setvbuf(FILE *fp, char *buf, int mode, usize size) {
+    (void)fp;
+    (void)buf;
+    (void)mode;
+    (void)size;
+    return 0;
 }
 int puts(const char *s) {
     if (!s) return -1;
     syscall3(SYS_WRITE, 1, (u64)s, (u64)strlen(s));
     syscall3(SYS_WRITE, 1, (u64)"\n", 1);
     return 0;
+}
+void perror(const char *s) {
+    if (s && *s) {
+        fputs(s, stderr);
+        fputs(": ", stderr);
+    }
+    fputs("YamOS libc error\n", stderr);
 }
 int fflush(FILE *fp) { (void)fp; return 0; }
 

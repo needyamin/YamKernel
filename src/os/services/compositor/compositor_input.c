@@ -4,17 +4,10 @@
 #include "nexus/channel.h"
 #include "nexus/graph.h"
 
-extern void *g_calc_module;
-extern usize g_calc_module_size;
-extern void *g_term_module;
-extern usize g_term_module_size;
-extern void *g_browser_module;
-extern usize g_browser_module_size;
-extern void *g_python_module;
-extern usize g_python_module_size;
 extern void wl_term_task(void *);
 extern void wl_browser_task(void *);
 extern void wl_calc_task(void *);
+extern void wl_file_manager_task(void *);
 
 static wl_surface_t *focused_surface(void) {
     for (int i = 0; i < WL_MAX_SURFACES; i++) {
@@ -24,6 +17,75 @@ static wl_surface_t *focused_surface(void) {
         }
     }
     return NULL;
+}
+
+static void surface_frame_rect(wl_surface_t *s, i32 *x, i32 *y, i32 *w, i32 *h) {
+    if (!s) return;
+    if (s->maximized) {
+        if (x) *x = 12;
+        if (y) *y = 42;
+        if (w) *w = (i32)g_compositor.display_w - 24;
+        if (h) *h = (i32)g_compositor.display_h - 126 + 36;
+    } else {
+        if (x) *x = s->x;
+        if (y) *y = s->y;
+        if (w) *w = (i32)s->width;
+        if (h) *h = (i32)s->height + 36;
+    }
+}
+
+static void desktop_bar_regions(i32 *status_x, i32 *clock_x) {
+    i32 dw = (i32)g_compositor.display_w;
+    i32 tray_right = dw - 12;
+    i32 left_limit = 372;
+    i32 gap = 8;
+    i32 sound_w = 70;
+    i32 net_w = 94;
+    i32 wifi_w = 78;
+    i32 clock_w = 150;
+    bool show_wifi = true;
+
+    i32 tray_w = sound_w + net_w + wifi_w + clock_w + gap * 3;
+    if (tray_w > tray_right - left_limit) {
+        sound_w = 54;
+        net_w = 68;
+        wifi_w = 58;
+        clock_w = 126;
+        tray_w = sound_w + net_w + wifi_w + clock_w + gap * 3;
+    }
+    if (tray_w > tray_right - left_limit) {
+        show_wifi = false;
+        sound_w = 46;
+        net_w = 58;
+        clock_w = 116;
+        tray_w = sound_w + net_w + clock_w + gap * 2;
+    }
+
+    i32 tray_x = tray_right - tray_w;
+    if (tray_x < left_limit) tray_x = left_limit;
+    if (status_x) *status_x = tray_x;
+    if (clock_x) {
+        i32 net_x = tray_x + sound_w + gap;
+        i32 wifi_x = net_x + net_w + gap;
+        *clock_x = show_wifi ? (wifi_x + wifi_w + gap) : (net_x + net_w + gap);
+    }
+    (void)clock_w;
+}
+
+static void toggle_surface_maximize(wl_surface_t *s) {
+    if (!s) return;
+    if (!s->maximized) {
+        s->restore_x = s->x;
+        s->restore_y = s->y;
+        s->maximized = true;
+        g_compositor.dragging = false;
+        kprintf("[WAYLAND] Titlebar maximize surface %u ('%s')\n", s->id, s->title);
+    } else {
+        s->maximized = false;
+        s->x = s->restore_x;
+        s->y = s->restore_y;
+        kprintf("[WAYLAND] Titlebar restore surface %u ('%s')\n", s->id, s->title);
+    }
 }
 
 static void clipboard_copy_focused(void) {
@@ -93,21 +155,13 @@ static void field_append(char *buf, char c) {
     }
 }
 
-static void add_account(const char *username, const char *password, const char *display_name, bool admin) {
-    if (g_compositor.user_count >= YAM_MAX_USERS) return;
-    yam_user_account_t *u = &g_compositor.users[g_compositor.user_count++];
-    memset(u, 0, sizeof(*u));
-    strncpy(u->username, username, sizeof(u->username) - 1);
-    strncpy(u->password, password, sizeof(u->password) - 1);
-    strncpy(u->display_name, display_name, sizeof(u->display_name) - 1);
-    u->admin = admin;
-    u->active = true;
-}
-
 static bool validate_account(const char *username, const char *password) {
+    char hash[32];
+    wl_password_hash(password, hash);
     for (u32 i = 0; i < g_compositor.user_count; i++) {
         yam_user_account_t *u = &g_compositor.users[i];
-        if (u->active && strcmp(u->username, username) == 0 && strcmp(u->password, password) == 0) {
+        if (u->active && strcmp(u->username, username) == 0 &&
+            (strcmp(u->password, hash) == 0 || strcmp(u->password, password) == 0)) {
             strcpy(g_compositor.current_user, u->username);
             return true;
         }
@@ -124,31 +178,41 @@ static void finish_first_boot_setup(void) {
     }
 
     strcpy(g_compositor.computer_name, g_compositor.setup_computer);
-    add_account(g_compositor.setup_user, g_compositor.setup_pass, g_compositor.setup_user, true);
-    add_account("root", "password", "root", true);
-    add_account("guest", "guest", "guest", false);
+    wl_compositor_add_account(g_compositor.setup_user, g_compositor.setup_pass, g_compositor.setup_user, true);
+    wl_compositor_add_account("root", "password", "root", true);
+    wl_compositor_add_account("guest", "guest", "guest", false);
 
     strcpy(g_compositor.current_user, g_compositor.setup_user);
     strcpy(g_compositor.login_user, g_compositor.setup_user);
     g_compositor.login_pass[0] = '\0';
     g_compositor.setup_complete = true;
-    g_compositor.state = COMPOSITOR_STATE_DESKTOP;
+    if (wl_compositor_save_profile()) {
+        g_compositor.state = COMPOSITOR_STATE_DESKTOP;
+    } else {
+        g_compositor.setup_failed = true;
+        return;
+    }
     KINFO("SETUP", "Computer '%s' initialized; first user '%s' created",
           g_compositor.computer_name, g_compositor.current_user);
 }
 
 static void skip_first_boot_setup(void) {
     if (g_compositor.user_count == 0) {
-        add_account("root", "password", "root", true);
-        add_account("guest", "guest", "guest", false);
+        wl_compositor_add_account("root", "password", "root", true);
+        wl_compositor_add_account("guest", "guest", "guest", false);
     }
     strcpy(g_compositor.computer_name, "yamos-pc");
     strcpy(g_compositor.current_user, "root");
     strcpy(g_compositor.login_user, "root");
     g_compositor.login_pass[0] = '\0';
     g_compositor.setup_complete = true;
-    g_compositor.state = COMPOSITOR_STATE_DESKTOP;
-    KINFO("SETUP", "First-boot setup skipped; using root/password and guest/guest");
+    if (wl_compositor_save_profile()) {
+        g_compositor.state = COMPOSITOR_STATE_DESKTOP;
+    } else {
+        g_compositor.setup_failed = true;
+        return;
+    }
+    KINFO("SETUP", "First-boot setup skipped and persisted; using root/password and guest/guest");
 }
 
 static char *setup_focused_field(void) {
@@ -171,8 +235,10 @@ void wl_compositor_process_input(void) {
             if (g_compositor.dragging) {
                 wl_surface_t *s = &g_compositor.surfaces[g_compositor.drag_surface_id];
                 if (s->state == WL_SURFACE_ACTIVE) {
-                    s->x = g_compositor.cursor_x - g_compositor.drag_off_x;
-                    s->y = g_compositor.cursor_y - g_compositor.drag_off_y;
+                    if (!s->maximized) {
+                        s->x = g_compositor.cursor_x - g_compositor.drag_off_x;
+                        s->y = g_compositor.cursor_y - g_compositor.drag_off_y;
+                    }
                 }
             }
             
@@ -274,15 +340,23 @@ void wl_compositor_process_input(void) {
                 } else if (is_mouse_btn && ev.value == KEY_PRESSED) {
                     i32 dw = g_compositor.scanout->width;
                     i32 dh = g_compositor.scanout->height;
-                    i32 bx = (dw - 480) / 2;
-                    i32 by = (dh - 360) / 2;
-                    if (g_compositor.cursor_x >= bx + 60 && g_compositor.cursor_x <= bx + 420) {
-                        if (g_compositor.cursor_y >= by + 106 && g_compositor.cursor_y <= by + 146) {
+                    i32 bx = (dw - 760) / 2;
+                    i32 by = (dh - 430) / 2;
+                    i32 cx = bx + 270;
+                    if (g_compositor.cursor_x >= cx && g_compositor.cursor_x <= cx + 390) {
+                        if (g_compositor.cursor_y >= by + 122 && g_compositor.cursor_y <= by + 164) {
                             g_compositor.setup_focus = 0;
-                        } else if (g_compositor.cursor_y >= by + 176 && g_compositor.cursor_y <= by + 216) {
+                        } else if (g_compositor.cursor_y >= by + 200 && g_compositor.cursor_y <= by + 242) {
                             g_compositor.setup_focus = 1;
-                        } else if (g_compositor.cursor_y >= by + 246 && g_compositor.cursor_y <= by + 286) {
+                        } else if (g_compositor.cursor_y >= by + 278 && g_compositor.cursor_y <= by + 320) {
                             g_compositor.setup_focus = 2;
+                        }
+                    }
+                    if (g_compositor.cursor_y >= by + 356 && g_compositor.cursor_y <= by + 396) {
+                        if (g_compositor.cursor_x >= cx && g_compositor.cursor_x <= cx + 176) {
+                            finish_first_boot_setup();
+                        } else if (g_compositor.cursor_x >= cx + 192 && g_compositor.cursor_x <= cx + 330) {
+                            skip_first_boot_setup();
                         }
                     }
                 }
@@ -357,13 +431,13 @@ void wl_compositor_process_input(void) {
                     /* Click to switch focus */
                     i32 dw = g_compositor.scanout->width;
                     i32 dh = g_compositor.scanout->height;
-                    i32 bx = (dw - 400) / 2;
-                    i32 by = (dh - 300) / 2;
+                    i32 bx = (dw - 520) / 2;
+                    i32 by = (dh - 360) / 2;
                     
-                    if (g_compositor.cursor_x >= bx + 50 && g_compositor.cursor_x <= bx + 350) {
-                        if (g_compositor.cursor_y >= by + 120 && g_compositor.cursor_y <= by + 160) {
+                    if (g_compositor.cursor_x >= bx + 50 && g_compositor.cursor_x <= bx + 470) {
+                        if (g_compositor.cursor_y >= by + 148 && g_compositor.cursor_y <= by + 190) {
                             g_compositor.login_focus_pass = false;
-                        } else if (g_compositor.cursor_y >= by + 190 && g_compositor.cursor_y <= by + 230) {
+                        } else if (g_compositor.cursor_y >= by + 236 && g_compositor.cursor_y <= by + 278) {
                             g_compositor.login_focus_pass = true;
                         }
                     }
@@ -389,6 +463,8 @@ void wl_compositor_process_input(void) {
                         g_compositor.context_surface_id = g_compositor.focused_id;
                         g_compositor.desktop_menu_open = 0;
                         g_compositor.show_power_menu = false;
+                        g_compositor.calendar_open = false;
+                        g_compositor.quick_settings_open = false;
                         kprintf("[CLIPBOARD] context menu open at %d,%d\n",
                                 g_compositor.context_x, g_compositor.context_y);
                         continue;
@@ -416,19 +492,44 @@ void wl_compositor_process_input(void) {
                         g_compositor.context_menu_open = false;
                     }
 
-                    if (is_left_btn && ev.value == KEY_PRESSED && g_compositor.cursor_y >= 0 && g_compositor.cursor_y < 30) {
+                    if (is_left_btn && ev.value == KEY_PRESSED && g_compositor.cursor_y >= 0 && g_compositor.cursor_y < 34) {
+                        i32 status_x = 0;
+                        i32 clock_x = 0;
+                        desktop_bar_regions(&status_x, &clock_x);
+                        if (g_compositor.cursor_x >= clock_x) {
+                            g_compositor.calendar_open = !g_compositor.calendar_open;
+                            g_compositor.quick_settings_open = false;
+                            g_compositor.desktop_menu_open = 0;
+                            g_compositor.show_power_menu = false;
+                            kprintf("[DESKTOP] calendar %s\n", g_compositor.calendar_open ? "open" : "closed");
+                            continue;
+                        }
+                        if (g_compositor.cursor_x >= status_x && g_compositor.cursor_x < clock_x) {
+                            g_compositor.quick_settings_open = !g_compositor.quick_settings_open;
+                            g_compositor.calendar_open = false;
+                            g_compositor.desktop_menu_open = 0;
+                            g_compositor.show_power_menu = false;
+                            kprintf("[DESKTOP] quick settings %s\n", g_compositor.quick_settings_open ? "open" : "closed");
+                            continue;
+                        }
                         if (g_compositor.cursor_x >= 182 && g_compositor.cursor_x < 230) {
                             g_compositor.desktop_menu_open = (g_compositor.desktop_menu_open == 1) ? 0 : 1;
+                            g_compositor.calendar_open = false;
+                            g_compositor.quick_settings_open = false;
                             kprintf("[WL_DBG] desktop menu File %s\n", g_compositor.desktop_menu_open ? "open" : "closed");
                             continue;
                         }
                         if (g_compositor.cursor_x >= 234 && g_compositor.cursor_x < 284) {
                             g_compositor.desktop_menu_open = (g_compositor.desktop_menu_open == 2) ? 0 : 2;
+                            g_compositor.calendar_open = false;
+                            g_compositor.quick_settings_open = false;
                             kprintf("[WL_DBG] desktop menu View %s\n", g_compositor.desktop_menu_open ? "open" : "closed");
                             continue;
                         }
                         if (g_compositor.cursor_x >= 288 && g_compositor.cursor_x < 360) {
                             g_compositor.desktop_menu_open = (g_compositor.desktop_menu_open == 3) ? 0 : 3;
+                            g_compositor.calendar_open = false;
+                            g_compositor.quick_settings_open = false;
                             kprintf("[WL_DBG] desktop menu Window %s\n", g_compositor.desktop_menu_open ? "open" : "closed");
                             continue;
                         }
@@ -440,7 +541,7 @@ void wl_compositor_process_input(void) {
                         if (g_compositor.desktop_menu_open == 2) mx = 234;
                         if (g_compositor.desktop_menu_open == 3) mx = 288;
                         if (g_compositor.cursor_x >= mx && g_compositor.cursor_x < mx + 204 &&
-                            g_compositor.cursor_y >= 34 && g_compositor.cursor_y < 192) {
+                            g_compositor.cursor_y >= 34 && g_compositor.cursor_y < 222) {
                             i32 row = (g_compositor.cursor_y - 42) / 30;
                             if (row < 0) row = 0;
                             if (g_compositor.desktop_menu_open == 1) {
@@ -453,8 +554,11 @@ void wl_compositor_process_input(void) {
                                 } else if (row == 2) {
                                     kprintf("[WAYLAND] Menu launching Calculator (kernel compositor app)...\n");
                                     sched_spawn("wl-calc-k", wl_calc_task, NULL, 2);
+                                } else if (row == 3) {
+                                    kprintf("[WAYLAND] Menu launching File Manager...\n");
+                                    sched_spawn("wl-files-k", wl_file_manager_task, NULL, 2);
                                 } else {
-                                    kprintf("[WAYLAND] Menu opening Terminal for Python command...\n");
+                                    kprintf("[WAYLAND] Menu launching driver probe terminal...\n");
                                     sched_spawn("wl-term-k", wl_term_task, NULL, 2);
                                 }
                             } else if (g_compositor.desktop_menu_open == 2) {
@@ -481,6 +585,8 @@ void wl_compositor_process_input(void) {
                                     focused->state = WL_SURFACE_MINIMIZED;
                                     focused->focused = false;
                                     g_compositor.focused_id = 0;
+                                } else if (row == 2 && focused && focused->state == WL_SURFACE_ACTIVE) {
+                                    toggle_surface_maximize(focused);
                                 } else {
                                     kprintf("[WAYLAND] Menu restore all surfaces\n");
                                     for (int i = 0; i < WL_MAX_SURFACES; i++) {
@@ -498,7 +604,7 @@ void wl_compositor_process_input(void) {
 
                     /* Check Power/App Menu Clicks */
                     if (is_left_btn && g_compositor.show_power_menu && ev.value == KEY_PRESSED) {
-                        i32 mw = 300, mh = 344;
+                        i32 mw = 300, mh = 392;
                         i32 mx = dock_x;
                         if (g_compositor.cursor_x >= mx && g_compositor.cursor_x <= mx + mw) {
                             if (g_compositor.cursor_y >= dock_y - mh - 10 && g_compositor.cursor_y < dock_y - 10) {
@@ -513,20 +619,23 @@ void wl_compositor_process_input(void) {
                                     kprintf("[WAYLAND] Launching Calculator (kernel compositor app)...\n");
                                     sched_spawn("wl-calc-k", wl_calc_task, NULL, 2);
                                 } else if (rel_y >= 212 && rel_y < 254) {
-                                    kprintf("[WAYLAND] Opening Terminal for Python command...\n");
+                                    kprintf("[WAYLAND] Launching File Manager...\n");
+                                    sched_spawn("wl-files-k", wl_file_manager_task, NULL, 2);
+                                } else if (rel_y >= 260 && rel_y < 302) {
+                                    kprintf("[WAYLAND] Opening Terminal for driver probe...\n");
                                     sched_spawn("wl-term-k", wl_term_task, NULL, 2);
-                                } else if (rel_y >= 260 && rel_y < 294) {
+                                } else if (rel_y >= 316 && rel_y < 350) {
                                     kprintf("[AUTH] Locking desktop for switch-user login\n");
                                     g_compositor.state = COMPOSITOR_STATE_LOGIN;
                                     g_compositor.login_pass[0] = '\0';
                                     g_compositor.login_failed = false;
                                     g_compositor.login_focus_pass = false;
                                     g_compositor.current_user[0] = '\0';
-                                } else if (rel_y >= 304 && rel_y < 332 && g_compositor.cursor_x < mx + 146) {
+                                } else if (rel_y >= 356 && rel_y < 384 && g_compositor.cursor_x < mx + 146) {
                                     /* RESTART */
                                     kprintf("[POWER] Restarting system...\n");
                                     outb(0x64, 0xFE);
-                                } else if (rel_y >= 304 && rel_y < 332 && g_compositor.cursor_x >= mx + 146) {
+                                } else if (rel_y >= 356 && rel_y < 384 && g_compositor.cursor_x >= mx + 146) {
                                     /* SHUTDOWN */
                                     kprintf("[POWER] Shutting down...\n");
                                     outw(0x604, 0x2000);
@@ -542,6 +651,8 @@ void wl_compositor_process_input(void) {
                         /* Launcher tile */
                         if (g_compositor.cursor_x >= dock_x + 10 && g_compositor.cursor_x <= dock_x + 58) {
                             g_compositor.show_power_menu = !g_compositor.show_power_menu;
+                            g_compositor.calendar_open = false;
+                            g_compositor.quick_settings_open = false;
                         } else {
                             /* Check Dock App Icons */
                             i32 abx = dock_x + 76;
@@ -559,6 +670,12 @@ void wl_compositor_process_input(void) {
                         }
                         continue;
                     } else if (is_left_btn) {
+                        if (ev.value == KEY_PRESSED &&
+                            (g_compositor.calendar_open || g_compositor.quick_settings_open) &&
+                            g_compositor.cursor_y >= 34) {
+                            g_compositor.calendar_open = false;
+                            g_compositor.quick_settings_open = false;
+                        }
                         /* Mouse button */
                         if (ev.value == KEY_RELEASED) {
                             g_compositor.dragging = false;
@@ -568,37 +685,48 @@ void wl_compositor_process_input(void) {
                         for (int i = WL_MAX_SURFACES - 1; i >= 0; i--) {
                             wl_surface_t *s = &g_compositor.surfaces[i];
                             if (s->state == WL_SURFACE_ACTIVE) {
-                                if (g_compositor.cursor_x >= s->x && g_compositor.cursor_x < s->x + (i32)s->width &&
-                                    g_compositor.cursor_y >= s->y && g_compositor.cursor_y < s->y + (i32)s->height + 30) {
+                                i32 fx, fy, fw, fh;
+                                surface_frame_rect(s, &fx, &fy, &fw, &fh);
+                                if (g_compositor.cursor_x >= fx && g_compositor.cursor_x < fx + fw &&
+                                    g_compositor.cursor_y >= fy && g_compositor.cursor_y < fy + fh) {
                                     
-                                    if (ev.value == KEY_PRESSED && g_compositor.cursor_y < s->y + 30) {
+                                    if (ev.value == KEY_PRESSED && g_compositor.cursor_y < fy + 36) {
                                         /* Clicked Titlebar area */
-                                        if (g_compositor.cursor_x >= s->x + 10 && g_compositor.cursor_x <= s->x + 28) {
-                                            /* Close button */
-                                            kprintf("[WAYLAND] Titlebar close surface %u ('%s')\n", s->id, s->title);
-                                            wl_surface_destroy(s);
-                                        } else if (g_compositor.cursor_x > s->x + 28 && g_compositor.cursor_x <= s->x + 48) {
+                                        i32 close_x = fx + fw - 42;
+                                        i32 max_x = close_x - 40;
+                                        i32 min_x = max_x - 40;
+                                        if (g_compositor.cursor_x >= min_x && g_compositor.cursor_x < min_x + 34) {
                                             kprintf("[WAYLAND] Titlebar minimize surface %u ('%s')\n", s->id, s->title);
                                             s->state = WL_SURFACE_MINIMIZED;
                                             s->focused = false;
                                             if (g_compositor.focused_id == s->id) g_compositor.focused_id = 0;
-                                        } else if (g_compositor.cursor_x > s->x + 48 && g_compositor.cursor_x <= s->x + 68) {
-                                            kprintf("[WAYLAND] Titlebar center surface %u ('%s')\n", s->id, s->title);
-                                            s->x = (i32)(g_compositor.display_w - s->width) / 2;
-                                            s->y = 48;
+                                        } else if (g_compositor.cursor_x >= max_x && g_compositor.cursor_x < max_x + 34) {
+                                            toggle_surface_maximize(s);
+                                        } else if (g_compositor.cursor_x >= close_x && g_compositor.cursor_x < close_x + 34) {
+                                            kprintf("[WAYLAND] Titlebar close surface %u ('%s')\n", s->id, s->title);
+                                            wl_surface_destroy(s);
                                         } else {
                                             /* Start Dragging */
                                             wl_surface_focus(s);
-                                            g_compositor.dragging = true;
-                                            g_compositor.drag_surface_id = i;
-                                            g_compositor.drag_off_x = g_compositor.cursor_x - s->x;
-                                            g_compositor.drag_off_y = g_compositor.cursor_y - s->y;
+                                            if (!s->maximized) {
+                                                g_compositor.dragging = true;
+                                                g_compositor.drag_surface_id = i;
+                                                g_compositor.drag_off_x = g_compositor.cursor_x - s->x;
+                                                g_compositor.drag_off_y = g_compositor.cursor_y - s->y;
+                                            }
                                         }
                                     } else {
                                         if (ev.value == KEY_PRESSED) wl_surface_focus(s);
                                         /* Push mouse coordinates relative to content area (below titlebar) */
-                                        input_event_t ex = { .type = EV_ABS, .code = 0, .value = g_compositor.cursor_x - s->x };
-                                        input_event_t ey = { .type = EV_ABS, .code = 1, .value = g_compositor.cursor_y - (s->y + 30) };
+                                        i32 content_h = fh - 36;
+                                        i32 rel_x = g_compositor.cursor_x - fx;
+                                        i32 rel_y = g_compositor.cursor_y - (fy + 36);
+                                        if (content_h > 0) {
+                                            rel_x = (rel_x * (i32)s->width) / fw;
+                                            rel_y = (rel_y * (i32)s->height) / content_h;
+                                        }
+                                        input_event_t ex = { .type = EV_ABS, .code = 0, .value = rel_x };
+                                        input_event_t ey = { .type = EV_ABS, .code = 1, .value = rel_y };
                                         wl_surface_push_event(s, ex);
                                         wl_surface_push_event(s, ey);
                                         wl_surface_push_event(s, ev);

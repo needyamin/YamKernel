@@ -85,6 +85,7 @@
         <ul>
             <li><a href="#status">Implementation Status</a></li>
             <li><a href="#architecture">Architecture</a></li>
+            <li><a href="#app-architecture">Application Architecture</a></li>
             <li><a href="#boot">Boot Pipeline</a></li>
             <li><a href="#syscalls">Syscall ABI</a></li>
             <li><a href="#memory">Memory</a></li>
@@ -109,19 +110,19 @@
             <tr><td>Memory</td><td><span class="pill green">In-tree</span></td><td>PMM, VMM, heap, slab, CoW, fork, mmap, brk, mprotect, guarded kernel/user stacks, NX-aware mappings, TLB shootdown hooks.</td></tr>
             <tr><td>Scheduler</td><td><span class="pill green">In-tree</span></td><td>CFS-style run queue, wait queues, mutexes, futex, cgroups, OOM, power hooks.</td></tr>
             <tr><td>YamGraph</td><td><span class="pill green">In-tree</span></td><td>Nodes, edges, capabilities, channels, subsystem registration.</td></tr>
-            <tr><td>VFS</td><td><span class="pill amber">Active development</span></td><td>initrd root, devfs, procfs, fd routing, FAT32 driver code.</td></tr>
-            <tr><td>Networking</td><td><span class="pill amber">Active development</span></td><td>e1000 path plus ARP/IP/ICMP/UDP/TCP/DHCP/DNS code.</td></tr>
+            <tr><td>VFS</td><td><span class="pill amber">Active development</span></td><td>initrd root, writable ramfs mounts, devfs, procfs, fd routing, per-process cwd, relative paths, readdir, unlink/delete, truncate-on-open, FAT32 driver code.</td></tr>
+            <tr><td>Networking</td><td><span class="pill amber">Active development</span></td><td>e1000 path plus ARP/IP/ICMP/UDP/TCP/DHCP/DNS code and first fd-backed AF_INET/SOCK_STREAM socket ABI.</td></tr>
             <tr><td>USB/Input</td><td><span class="pill amber">Active development</span></td><td>XHCI, USB core, HID, keyboard, mouse, evdev, touch, gesture.</td></tr>
-            <tr><td>Desktop</td><td><span class="pill amber">Active development</span></td><td>First-boot setup, login, Ctrl+Shift+Y bypass, compositor, top menu, dock/taskbar, app launcher, VTTY render mode.</td></tr>
-            <tr><td>Userland</td><td><span class="pill amber">Active development</span></td><td>ELF modules, libc, libgui, libyam, authd, python.org CPython port source/notes, plus compositor-native terminal/calculator/browser launch path.</td></tr>
+            <tr><td>Desktop</td><td><span class="pill amber">Active development</span></td><td>Polished first-boot setup, login, Ctrl+Shift+Y bypass, compositor, File Manager, top menu, dock/taskbar, app launcher, standard window controls, maximize/restore, VTTY render mode.</td></tr>
+            <tr><td>Userland</td><td><span class="pill amber">Active development</span></td><td>Minimal authd ELF service, libc/libyam syscall support, native app manifests, kernel app registry, and compositor-native terminal/calculator/browser paths.</td></tr>
         </tbody>
     </table>
 
     <h2 id="architecture">Architecture</h2>
 <pre><code>+---------------------------- Ring 3 --------------------------------+
-| ELF apps, services, userspace drivers, libc/libgui/libyam           |
+| authd ELF service, libc/libyam                                      |
 +----------------------- SYSCALL / SYSRET ---------------------------+
-| file/process/memory/scheduler/Wayland/driver/AI/touch/IPC syscalls  |
+| file/process/memory/scheduler/Wayland/driver/AI/touch/IPC/app ABI   |
 +---------------------------- Ring 0 --------------------------------+
 | scheduler | VFS | net | USB | input | DRM/compositor | cgroups/OOM  |
 +-------------------------- YamGraph --------------------------------+
@@ -131,6 +132,19 @@
 +--------------------------------------------------------------------+</code></pre>
 
     <p>YamGraph is the organizing model: resources are nodes, authority travels as capability-carrying edges, and subsystems can reason about ownership, mappings, dependencies, and channels.</p>
+
+    <h2 id="app-architecture">Application Architecture</h2>
+    <p>YamOS now has a kernel-owned application registry and native app manifest ABI. This is the first concrete slice of a Windows/Linux-style developer platform: apps identify their type, requested permissions, version, and publisher through a stable syscall-backed contract.</p>
+    <table>
+        <thead><tr><th>Layer</th><th>Path</th><th>Purpose</th></tr></thead>
+        <tbody>
+            <tr><td>Kernel ABI</td><td><code>src/kernel/api/syscall.h</code></td><td>Shared syscall numbers, OS info structs, app manifest structs, app type and permission flags.</td></tr>
+            <tr><td>Kernel registry</td><td><code>src/os/services/app_registry/</code></td><td>Tracks registered Ring 3 services/apps by PID, YamGraph node, name, type, permissions, publisher, version, and description.</td></tr>
+            <tr><td>Native SDK</td><td><code>src/os/lib/libyam/app.h</code></td><td>Provides <code>yam_os_info()</code>, <code>yam_app_register()</code>, <code>yam_app_query()</code>, and basic process helpers.</td></tr>
+            <tr><td>Example service</td><td><code>src/os/apps/authd.c</code></td><td>Registers as a YamOS service with IPC permission before listening on YamGraph channels.</td></tr>
+        </tbody>
+    </table>
+    <p class="muted">This registry currently records app intent. The next production hardening step is capability enforcement on file, network, device, installer, and driver syscalls.</p>
 
     <h2 id="boot">Boot Pipeline</h2>
     <ol>
@@ -152,10 +166,13 @@
             <tr><td>1-13</td><td>Core POSIX-ish calls</td><td><code>WRITE</code>, <code>EXIT</code>, <code>GETPID</code>, <code>OPEN</code>, <code>READ</code>, <code>MMAP</code>, <code>PIPE</code>, <code>POLL</code></td></tr>
             <tr><td>14-19</td><td>Process and memory management</td><td><code>FORK</code>, <code>WAITPID</code>, <code>BRK</code>, <code>MPROTECT</code>, <code>CLOCK_GETTIME</code>, <code>GETRUSAGE</code></td></tr>
             <tr><td>20-23</td><td>Wayland-style GUI</td><td><code>WL_CREATE_SURFACE</code>, <code>WL_MAP_BUFFER</code>, <code>WL_COMMIT</code>, <code>WL_POLL_EVENT</code></td></tr>
+            <tr><td>24-29</td><td>VFS helpers</td><td><code>LSEEK</code>, <code>MKDIR</code>, <code>UNLINK</code>, <code>READDIR</code>, <code>CHDIR</code>, <code>GETCWD</code></td></tr>
             <tr><td>30-34</td><td>Privileged driver access</td><td><code>IOPORT_READ</code>, <code>IOPORT_WRITE</code>, <code>MAP_MMIO</code>, <code>PCI_CONFIG_READ</code></td></tr>
             <tr><td>40-47</td><td>Scheduling and task control</td><td><code>SCHED_SETAFFINITY</code>, <code>FUTEX</code>, <code>KILL</code>, <code>GETPPID</code>, <code>SCHED_INFO</code></td></tr>
             <tr><td>50-58</td><td>AI and touch</td><td><code>AI_TENSOR_ALLOC</code>, <code>AI_SUBMIT_JOB</code>, <code>TOUCH_GET_SLOTS</code>, <code>GESTURE_CONFIG</code></td></tr>
             <tr><td>60-62</td><td>YamGraph IPC</td><td><code>CHANNEL_SEND</code>, <code>CHANNEL_RECV</code>, <code>CHANNEL_LOOKUP</code></td></tr>
+            <tr><td>67-69</td><td>Application ABI</td><td><code>OS_INFO</code>, <code>APP_REGISTER</code>, <code>APP_QUERY</code></td></tr>
+            <tr><td>70-76</td><td>Socket ABI</td><td><code>SOCKET</code>, <code>BIND</code>, <code>CONNECT</code>, <code>LISTEN</code>, <code>ACCEPT</code>, <code>SENDTO</code>, <code>RECVFROM</code></td></tr>
         </tbody>
     </table>
     <p class="muted">The syscall numbers live in <code>src/kernel/api/syscall.h</code>. Userspace wrappers should be kept synchronized with that file.</p>
@@ -213,7 +230,7 @@
     <table>
         <thead><tr><th>Component</th><th>Role</th></tr></thead>
         <tbody>
-            <tr><td><code>src/fs/vfs.c</code></td><td>Mount table, path routing, fd allocation, syscall handlers.</td></tr>
+            <tr><td><code>src/fs/vfs.c</code></td><td>Mount table, path routing, per-process cwd resolution, fd allocation, syscall handlers.</td></tr>
             <tr><td><code>src/fs/initrd.c</code></td><td>In-memory root filesystem for early boot files.</td></tr>
             <tr><td><code>src/os/dev/devfs.c</code></td><td>Device namespace for virtual devices.</td></tr>
             <tr><td><code>src/os/proc/procfs.c</code></td><td>Read-only process/system information files.</td></tr>
@@ -222,7 +239,7 @@
     </table>
 
     <h2 id="network">Networking</h2>
-    <p>The networking tree contains Ethernet/e1000 integration plus ARP, IPv4, ICMP, UDP, DHCP, DNS, and a TCP state machine. Treat it as active development until QEMU network smoke tests and socket ABI cleanup are complete.</p>
+    <p>The networking tree contains Ethernet/e1000 integration plus ARP, IPv4, ICMP, UDP, DHCP, DNS, a TCP state machine, and first fd-backed TCP socket syscalls. Treat it as active development until nonblocking sockets, UDP datagrams, select/epoll-style readiness, TLS, and stress tests are complete.</p>
     <pre><code>qemu-system-x86_64 -cdrom build/yamkernel.iso -m 256M -smp 2 \
   -netdev user,id=n0 -device e1000,netdev=n0 -serial stdio</code></pre>
 
@@ -230,11 +247,11 @@
     <div class="grid">
         <div class="card">
             <h3>Compositor</h3>
-            <p>CPU-rendered Wayland-style compositor with first-boot setup, login state, desktop state, top menu, dock/taskbar, window chrome, app launch, and debug overlay.</p>
+            <p>CPU-rendered Wayland-style compositor with full first-boot setup, login state, desktop state, top menu, dock/taskbar, right-side window controls, maximize/restore, app launch, and debug overlay.</p>
         </div>
         <div class="card">
             <h3>Apps</h3>
-            <p>Terminal, calculator, and browser currently launch as compositor-native apps for reliable drawing. Python commands in the main Terminal are reserved for real python.org CPython while the CPython port is wired up. ELF modules for terminal, calculator, browser, Python status, authd, and services are still built into the ISO.</p>
+            <p>Terminal, calculator, browser, and File Manager launch as compositor-native apps for reliable drawing. Browser uses kernel DNS/TCP/plain-HTTP fetch with history, toolbar controls, response status, a scrollable static document paint layer, and first inline color/background style handling for headings, paragraphs, list items, links, pre/code blocks, buttons, form placeholders, and image placeholders. File Manager can browse writable ramfs mounts, create files/folders, edit/save text files, and delete entries. The packaged user ELF service is authd, which registers itself through the native app manifest ABI.</p>
         </div>
         <div class="card">
             <h3>VTTY</h3>
@@ -242,14 +259,13 @@
         </div>
     </div>
 
-    <h3>First-Boot, Login, and Terminal Python</h3>
+    <h3>First-Boot, Login, and Terminal</h3>
     <ul>
         <li>Setup asks for computer name, username, and password.</li>
         <li><code>Ctrl+Shift+Y</code> bypasses setup/login, creates <code>root/password</code> and <code>guest/guest</code>, logs in root, and opens the desktop.</li>
-        <li>The desktop menu's Python item opens Terminal; normal Python use happens in one Terminal window.</li>
-        <li>Official CPython 3.14.4 source from python.org is vendored at <code>vendor/cpython/Python-3.14.4</code>; YamOS port notes live in <code>src/os/ports/python/cpython</code>.</li>
-        <li>In Terminal, <code>python</code>, <code>python3</code>, <code>py</code>, <code>pip</code>, and <code>pip3</code> are CPython-only commands. Until CPython is linked, they show CPython port status instead of running a fake interpreter.</li>
-        <li><code>python -c "print(1+2)"</code>, <code>python3 -c ...</code>, <code>py -c ...</code>, and <code>pip install ...</code> are blocked until real CPython can execute inside YamOS.</li>
+        <li>The OS installer service exposes package status and install requests through kernel syscalls.</li>
+        <li>In Terminal, <code>install kernel-net</code> and <code>installer status</code> query/request the generic OS capability probe through that service.</li>
+        <li>Terminal <code>cd</code> and <code>pwd</code> use kernel cwd syscalls, and file commands resolve relative paths through VFS.</li>
         <li>Keyboard modifiers are routed through evdev to focused apps, so shifted characters such as <code>Shift+9 = (</code> work in Terminal.</li>
     </ul>
 
@@ -265,11 +281,11 @@ src/ipc/                  IPC scaffolding
 src/net/                  ARP/IP/ICMP/UDP/TCP/DHCP/DNS
 src/drivers/              PCI, USB, input, serial, timer, video, DRM, net
 src/nexus/                YamGraph, channels, capabilities
-src/os/apps/              user ELF apps
-src/os/lib/               libc, libgui, libyam
+src/os/apps/              authd ELF service and user linker script
+src/os/lib/               libc and libyam
 src/os/dev/               devfs, vtty
 src/os/proc/              procfs
-src/os/services/          compositor and demo clients</code></pre>
+src/os/services/          compositor, app registry, and OS services</code></pre>
 
     <h2 id="build">Build and Debug</h2>
     <pre><code>make setup

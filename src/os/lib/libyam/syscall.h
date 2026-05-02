@@ -27,6 +27,12 @@
 #define SYS_WL_MAP_BUFFER     21
 #define SYS_WL_COMMIT         22
 #define SYS_WL_POLL_EVENT     23
+#define SYS_LSEEK             24
+#define SYS_MKDIR             25
+#define SYS_UNLINK            26
+#define SYS_READDIR           27
+#define SYS_CHDIR             28
+#define SYS_GETCWD            29
 
 #define SYS_SCHED_SETAFFINITY 40
 #define SYS_SCHED_GETAFFINITY 41
@@ -40,6 +46,20 @@
 #define SYS_CHANNEL_SEND      60
 #define SYS_CHANNEL_RECV      61
 #define SYS_CHANNEL_LOOKUP    62
+#define SYS_CLIPBOARD_SET     63
+#define SYS_CLIPBOARD_GET     64
+#define SYS_INSTALLER_STATUS  65
+#define SYS_INSTALLER_REQUEST 66
+#define SYS_OS_INFO           67
+#define SYS_APP_REGISTER      68
+#define SYS_APP_QUERY         69
+#define SYS_SOCKET            70
+#define SYS_BIND              71
+#define SYS_CONNECT           72
+#define SYS_LISTEN            73
+#define SYS_ACCEPT            74
+#define SYS_SENDTO            75
+#define SYS_RECVFROM          76
 
 static inline u64 syscall0(u64 num) {
     u64 ret;

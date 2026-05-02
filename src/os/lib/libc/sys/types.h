@@ -1,0 +1,27 @@
+#ifndef _LIBC_SYS_TYPES_H
+#define _LIBC_SYS_TYPES_H
+
+#include <nexus/types.h>
+
+typedef unsigned int mode_t;
+typedef unsigned long ino_t;
+typedef unsigned long dev_t;
+typedef long off_t;
+typedef int pid_t;
+typedef unsigned int uid_t;
+typedef unsigned int gid_t;
+typedef long ssize_t;
+typedef usize size_t;
+typedef long time_t;
+typedef long clock_t;
+typedef int clockid_t;
+
+#ifndef _LIBC_TIMESPEC_DEFINED
+#define _LIBC_TIMESPEC_DEFINED
+struct timespec {
+    time_t tv_sec;
+    long tv_nsec;
+};
+#endif
+
+#endif

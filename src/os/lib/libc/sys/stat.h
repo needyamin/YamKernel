@@ -27,17 +27,43 @@ struct stat {
 
 #define S_IFMT  0170000
 #define S_IFDIR 0040000
+#define S_IFCHR 0020000
 #define S_IFREG 0100000
 #define S_IRUSR 0400
 #define S_IWUSR 0200
 #define S_IXUSR 0100
 
+#define AT_FDCWD -100
+#define AT_SYMLINK_NOFOLLOW 0x100
+#define AT_EACCESS 0x200
+#define AT_REMOVEDIR 0x200
+
 #define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+#define S_ISCHR(m) (((m) & S_IFMT) == S_IFCHR)
 #define S_ISREG(m) (((m) & S_IFMT) == S_IFREG)
 
 int stat(const char *path, struct stat *st);
 int fstat(int fd, struct stat *st);
 int lstat(const char *path, struct stat *st);
-int mkdir(const char *path, mode_t mode);
+static inline int fstatat(int dirfd, const char *path, struct stat *st, int flags) {
+    (void)dirfd;
+    (void)flags;
+    return stat(path, st);
+}
+static inline int faccessat(int dirfd, const char *path, int mode, int flags) {
+    (void)dirfd;
+    (void)flags;
+    return access(path, mode);
+}
+static inline int fchmod(int fd, mode_t mode) { (void)fd; (void)mode; return 0; }
+static inline int chmod(const char *path, mode_t mode) { (void)path; (void)mode; return 0; }
+static inline int lchmod(const char *path, mode_t mode) { (void)path; (void)mode; return 0; }
+static inline int fchmodat(int dirfd, const char *path, mode_t mode, int flags) {
+    (void)dirfd; (void)path; (void)mode; (void)flags; return 0;
+}
+static inline int mkdirat(int dirfd, const char *path, mode_t mode) {
+    (void)dirfd;
+    return mkdir(path, mode);
+}
 
 #endif

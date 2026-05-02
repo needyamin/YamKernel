@@ -232,45 +232,39 @@ bool xhci_control_transfer(xhci_ctrl_t *ctrl, int slot,
 void xhci_probe_all(void) {
     kprintf_color(0xFF00DDFF, "[XHCI] Scanning PCI for XHCI controllers...\n");
 
-    /* Scan PCI bus for XHCI (Class 0x0C, SubClass 0x03, ProgIF 0x30) */
-    for (u16 bus = 0; bus < 256; bus++) {
-        for (u8 dev = 0; dev < 32; dev++) {
-            for (u8 func = 0; func < 8; func++) {
-                u32 class_info = pci_read_32((u8)bus, dev, func, 0x08);
-                u8 base_class = (class_info >> 24) & 0xFF;
-                u8 sub_class  = (class_info >> 16) & 0xFF;
-                u8 prog_if    = (class_info >>  8) & 0xFF;
+    for (u32 i = 0; i < pci_device_count(); i++) {
+        pci_device_t *dev = pci_device_at(i);
+        if (!dev) continue;
+        if (dev->class_id == XHCI_PCI_CLASS &&
+            dev->subclass_id == XHCI_PCI_SUBCLASS &&
+            dev->prog_if == XHCI_PCI_PROG_IF) {
 
-                if (base_class == XHCI_PCI_CLASS &&
-                    sub_class  == XHCI_PCI_SUBCLASS &&
-                    prog_if    == XHCI_PCI_PROG_IF) {
+            pci_bar_t bar0;
+            if (!pci_read_bar(dev, 0, &bar0) || bar0.type == PCI_BAR_IO || !bar0.base) {
+                kprintf_color(0xFFFF3333, "[XHCI] Found at %02x:%02x.%x but BAR0 is invalid\n",
+                              dev->bus, dev->slot, dev->func);
+                continue;
+            }
 
-                    /* Read BAR0 for MMIO base */
-                    u32 bar0 = pci_read_32((u8)bus, dev, func, 0x10);
-                    u64 mmio_phys = bar0 & ~0xF;
-                    if (!mmio_phys) continue;
+            kprintf_color(0xFF00DDFF, "[XHCI] Found at %02x:%02x.%x MMIO=%llx size=%llx caps:%s%s\n",
+                          dev->bus, dev->slot, dev->func, bar0.base, bar0.size,
+                          pci_has_msi(dev) ? " msi" : "",
+                          pci_has_msix(dev) ? " msix" : "");
 
-                    kprintf_color(0xFF00DDFF, "[XHCI] Found at %02x:%02x.%x MMIO=%llx\n",
-                                  bus, dev, func, mmio_phys);
+            pci_enable_mmio(dev);
+            pci_enable_bus_master(dev);
 
-                    /* Enable bus mastering and memory space */
-                    u32 cmd_sts = pci_read_32((u8)bus, dev, func, 0x04);
-                    pci_write_32((u8)bus, dev, func, 0x04, cmd_sts | 0x06);
-
-                    if (xhci_init(&g_xhci, mmio_phys, 0x10000)) {
-                        g_xhci_ready = true;
-                        /* Enumerate ports */
-                        for (int p = 0; p < g_xhci.num_ports && p < XHCI_MAX_PORTS; p++) {
-                            if (xhci_port_reset(&g_xhci, p)) {
-                                kprintf_color(0xFF00FF88,
-                                    "[XHCI] Device on port %d — enumerating...\n", p);
-                                usb_enumerate_device(&g_xhci, p);
-                            }
-                        }
+            if (xhci_init(&g_xhci, bar0.base, bar0.size ? bar0.size : 0x10000)) {
+                g_xhci_ready = true;
+                for (int p = 0; p < g_xhci.num_ports && p < XHCI_MAX_PORTS; p++) {
+                    if (xhci_port_reset(&g_xhci, p)) {
+                        kprintf_color(0xFF00FF88,
+                            "[XHCI] Device on port %d - enumerating...\n", p);
+                        usb_enumerate_device(&g_xhci, p);
                     }
-                    return; /* Use first controller found */
                 }
             }
+            return;
         }
     }
     kprintf_color(0xFF888888, "[XHCI] No XHCI controller found\n");

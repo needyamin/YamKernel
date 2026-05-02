@@ -114,6 +114,7 @@ u16 udp_checksum(u32 src_ip, u32 dst_ip, const udp_hdr_t *hdr, usize len);
 
 /* ---- Init functions ---- */
 void net_init(void);
+void net_poll(void);
 void net_arp_init(void);
 void net_ip_init(void);
 void net_tcp_init(void);
@@ -121,6 +122,8 @@ void net_udp_init(void);
 void net_icmp_init(void);
 void net_dhcp_init(void);
 void net_dns_init(void);
+void net_http_init(void);
+void net_tls_init(void);
 
 /* ---- Packet receive dispatch (called by driver on RX) ---- */
 void net_receive(const void *buf, usize len);
@@ -153,6 +156,7 @@ int  tcp_listen(int fd, u16 port);
 int  tcp_accept(int fd);
 int  tcp_send(int fd, const void *data, usize len);
 int  tcp_recv(int fd, void *buf, usize max_len);
+int  tcp_available(int fd);
 int  tcp_close(int fd);
 void tcp_receive(const ip_hdr_t *ip, const tcp_hdr_t *tcp, const void *data, usize data_len);
 
@@ -162,5 +166,14 @@ void dhcp_receive(u32 src_ip, u16 src_port, const void *data, usize len);
 
 /* ---- DNS API ---- */
 int dns_resolve(const char *hostname, u32 *ip_out);
+
+/* ---- HTTP API ---- */
+int http_get(const char *host, const char *path, char *out, usize out_cap, usize *out_len);
+
+/* ---- TLS / Certificate API ---- */
+bool cert_store_ready(void);
+u32  cert_store_anchor_count(void);
+bool tls_service_ready(void);
+int  tls_probe_host(const char *host);
 
 #endif

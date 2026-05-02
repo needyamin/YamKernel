@@ -146,10 +146,18 @@ int tcp_connect(int fd, u32 dst_ip, u16 dst_port) {
     tcp_send_segment(s, TCP_SYN, NULL, 0);
 
     /* Wait for SYN-ACK (blocking poll) */
-    for (int i = 0; i < 1000000 && s->waiting_syn_ack; i++)
+    for (int i = 0; i < 8000000 && s->waiting_syn_ack; i++) {
+        if ((i % 100) == 0) net_poll();
         __asm__ volatile("pause");
+    }
 
-    if (s->state != SOCK_STATE_ESTABLISHED) return -1;
+    if (s->state != SOCK_STATE_ESTABLISHED) {
+        kprintf("[TCP] connect timeout/fail dst=%u.%u.%u.%u:%u state=%u snd_nxt=%u rcv_nxt=%u\n",
+                (dst_ip >> 24) & 0xFF, (dst_ip >> 16) & 0xFF,
+                (dst_ip >> 8) & 0xFF, dst_ip & 0xFF,
+                dst_port, s->state, s->snd_nxt, s->rcv_nxt);
+        return -1;
+    }
     return 0;
 }
 
@@ -185,13 +193,15 @@ int tcp_send(int fd, const void *data, usize len) {
 }
 
 int tcp_recv(int fd, void *buf, usize max_len) {
-    if (fd < 0 || fd >= TCP_MAX_SOCKETS || !g_tcp_socks[fd].active) return -1;
+    if (fd < 0 || fd >= TCP_MAX_SOCKETS) return -1;
     tcp_sock_t *s = &g_tcp_socks[fd];
+    if (!s->active && s->recv_head == s->recv_tail) return -1;
 
     /* Wait for data (blocking) */
     for (int i = 0; i < 1000000; i++) {
         if (s->recv_head != s->recv_tail) break;
         if (s->state == SOCK_STATE_CLOSE_WAIT || s->state == SOCK_STATE_CLOSED) return 0;
+        if ((i % 1000) == 0) net_poll();
         __asm__ volatile("pause");
     }
 
@@ -216,16 +226,26 @@ int tcp_recv(int fd, void *buf, usize max_len) {
     return (int)copy;
 }
 
+int tcp_available(int fd) {
+    if (fd < 0 || fd >= TCP_MAX_SOCKETS || !g_tcp_socks[fd].active) return 0;
+    tcp_sock_t *s = &g_tcp_socks[fd];
+    if (s->recv_head >= s->recv_tail)
+        return (int)(s->recv_head - s->recv_tail);
+    return (int)(TCP_RECV_BUF - s->recv_tail + s->recv_head);
+}
+
 int tcp_close(int fd) {
     if (fd < 0 || fd >= TCP_MAX_SOCKETS || !g_tcp_socks[fd].active) return -1;
     tcp_sock_t *s = &g_tcp_socks[fd];
-    if (s->state == SOCK_STATE_ESTABLISHED) {
+    if (s->state == SOCK_STATE_ESTABLISHED || s->state == SOCK_STATE_CLOSE_WAIT) {
         s->state = SOCK_STATE_FIN_WAIT1;
         tcp_send_segment(s, TCP_FIN | TCP_ACK, NULL, 0);
     }
     /* Wait for close to complete */
-    for (int i = 0; i < 1000000 && s->state != SOCK_STATE_CLOSED; i++)
+    for (int i = 0; i < 1000000 && s->state != SOCK_STATE_CLOSED; i++) {
+        if ((i % 1000) == 0) net_poll();
         __asm__ volatile("pause");
+    }
     s->active = false;
     return 0;
 }
@@ -243,6 +263,12 @@ void tcp_receive(const ip_hdr_t *ip, const tcp_hdr_t *tcp,
 
     /* Find socket */
     tcp_sock_t *s = tcp_find_sock(src_ip, src_port, dst_port);
+    if (!s && (flags & (TCP_SYN | TCP_ACK | TCP_RST))) {
+        kprintf("[TCP] no socket for %u.%u.%u.%u:%u -> local:%u flags=0x%x\n",
+                (src_ip >> 24) & 0xFF, (src_ip >> 16) & 0xFF,
+                (src_ip >> 8) & 0xFF, src_ip & 0xFF,
+                src_port, dst_port, flags);
+    }
 
     /* Handle SYN to a listening socket */
     if ((flags & TCP_SYN) && !(flags & TCP_ACK) && !s) {
@@ -330,9 +356,6 @@ void tcp_receive(const ip_hdr_t *ip, const tcp_hdr_t *tcp,
         tcp_send_segment(s, TCP_ACK, NULL, 0);
         if (s->state == SOCK_STATE_ESTABLISHED) {
             s->state = SOCK_STATE_CLOSE_WAIT;
-            /* Automatically send FIN back (simplified) */
-            s->state = SOCK_STATE_LAST_ACK;
-            tcp_send_segment(s, TCP_FIN | TCP_ACK, NULL, 0);
         } else if (s->state == SOCK_STATE_FIN_WAIT2) {
             s->state = SOCK_STATE_TIME_WAIT;
             /* In real TCP we'd wait 2*MSL; simplified: close immediately */

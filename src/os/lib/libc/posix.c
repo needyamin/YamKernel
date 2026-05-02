@@ -8,17 +8,22 @@ char *getcwd(char *buf, size_t size) {
         errno = EINVAL;
         return NULL;
     }
-    buf[0] = '/';
-    buf[1] = 0;
+    long rc = (long)syscall2(SYS_GETCWD, (u64)buf, (u64)size);
+    if (rc < 0) {
+        errno = ERANGE;
+        return NULL;
+    }
     return buf;
 }
 
 int chdir(const char *path) {
-    if (!path || path[0] != '/') {
+    if (!path || !*path) {
         errno = ENOENT;
         return -1;
     }
-    return 0;
+    int rc = (int)syscall1(SYS_CHDIR, (u64)path);
+    if (rc < 0) errno = ENOENT;
+    return rc;
 }
 
 int access(const char *path, int mode) {
@@ -74,11 +79,4 @@ int fstat(int fd, struct stat *st) {
     st->st_blksize = 512;
     st->st_nlink = 1;
     return 0;
-}
-
-int mkdir(const char *path, mode_t mode) {
-    (void)path;
-    (void)mode;
-    errno = ENOSYS;
-    return -1;
 }

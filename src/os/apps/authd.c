@@ -4,6 +4,7 @@
 #include "ctype.h"
 #include "../libyam/syscall.h"
 #include "../libyam/ipc.h"
+#include "../libyam/app.h"
 
 int main();
 
@@ -12,6 +13,20 @@ void _start(void) {
 }
 
 int main() {
+    yam_app_manifest_t manifest = YAM_APP_MANIFEST(
+        "authd",
+        YAM_APP_TYPE_SERVICE,
+        YAM_APP_PERM_IPC,
+        "Authentication service"
+    );
+    yam_app_register(&manifest);
+
+    yam_os_info_t os_info;
+    if (yam_os_info(&os_info) == 0) {
+        printf("[AUTHD] ABI=%u syscalls=%u kernel=%s\n",
+               os_info.abi_version, os_info.syscall_max, os_info.kernel_name);
+    }
+
     printf("[AUTHD] Authentication Daemon started in Ring 3!\n");
     
     // Wait for the compositor to create the "auth_channel"
@@ -19,7 +34,7 @@ int main() {
     while (1) {
         chan_id = yam_channel_lookup("auth_channel");
         if (chan_id != (u32)-1) break;
-        syscall1(SYS_SLEEPMS, 100);
+        yam_sleep_ms(100);
     }
     
     printf("[AUTHD] Found auth_channel! Listening for auth requests...\n");
@@ -53,7 +68,7 @@ int main() {
                 yam_channel_send(chan_id, reply_type, NULL, 0);
             }
         } else {
-            syscall1(SYS_SLEEPMS, 50); // polling
+            yam_sleep_ms(50); // polling
         }
     }
     

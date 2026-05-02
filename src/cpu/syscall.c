@@ -18,6 +18,11 @@
 #include "nexus/channel.h"
 #include "nexus/graph.h"
 #include "cpu/smp.h"
+#include "os/services/installer/installer.h"
+#include "os/services/app_registry/app_registry.h"
+#include "net/net.h"
+#include "net/net_socket.h"
+#include "mem/heap.h"
 
 extern void syscall_entry(void);   /* in syscall.asm */
 
@@ -64,6 +69,7 @@ static i64 sys_getppid(void) {
 }
 static i64 sys_yield(void) { sched_yield(); return 0; }
 static i64 sys_sleepms(u64 ms) { task_sleep_ms(ms); return 0; }
+static i64 copy_to_user(u64 uout, const void *src, usize len);
 
 static i64 sys_exit(u64 code) {
     task_t *t = this_cpu()->current;
@@ -185,6 +191,309 @@ static i64 sys_clipboard_get(u64 uout, u32 cap) {
     ((char *)uout)[n] = '\0';
     if (smap) __asm__ volatile ("clac");
     return (i64)n;
+}
+
+static void copy_user_string(char *dst, usize cap, u64 usrc) {
+    if (!dst || cap == 0) return;
+    dst[0] = 0;
+    if (!usrc) return;
+    bool smap = (read_cr4() & CR4_SMAP) != 0;
+    if (smap) __asm__ volatile ("stac");
+    const char *src = (const char *)usrc;
+    usize i = 0;
+    for (; i + 1 < cap && src[i]; i++) dst[i] = src[i];
+    dst[i] = 0;
+    if (smap) __asm__ volatile ("clac");
+}
+
+static i64 copy_installer_status_to_user(u64 uout, const yam_installer_status_t *st, i64 rc) {
+    if (!uout || !st) return -1;
+    bool smap = (read_cr4() & CR4_SMAP) != 0;
+    if (smap) __asm__ volatile ("stac");
+    memcpy((void *)uout, st, sizeof(*st));
+    if (smap) __asm__ volatile ("clac");
+    return rc;
+}
+
+static i64 sys_installer_status(u64 upackage, u64 uout) {
+    char package[32];
+    yam_installer_status_t st;
+    copy_user_string(package, sizeof(package), upackage);
+    i64 rc = installer_status(package, &st);
+    return copy_installer_status_to_user(uout, &st, rc);
+}
+
+static i64 sys_installer_request(u64 upackage, u64 uout) {
+    char package[32];
+    yam_installer_status_t st;
+    copy_user_string(package, sizeof(package), upackage);
+    i64 rc = installer_request(package, &st);
+    return copy_installer_status_to_user(uout, &st, rc);
+}
+
+static i64 sys_readdir_user(u64 upath, u32 index, u64 uout) {
+    char path[256];
+    vfs_dirent_t dent;
+    yam_dirent_t out;
+
+    copy_user_string(path, sizeof(path), upath);
+    if (!path[0] || !uout) return -1;
+    if (sys_readdir(path, index, &dent) < 0) return -1;
+
+    memset(&out, 0, sizeof(out));
+    strncpy(out.name, dent.name, sizeof(out.name) - 1);
+    out.size = dent.size;
+    out.is_dir = dent.is_dir ? 1 : 0;
+    return copy_to_user(uout, &out, sizeof(out));
+}
+
+static i64 sys_unlink_user(u64 upath) {
+    char path[256];
+    copy_user_string(path, sizeof(path), upath);
+    if (!path[0]) return -1;
+    return sys_unlink(path);
+}
+
+static i64 sys_open_user(u64 upath, u32 flags) {
+    char path[256];
+    copy_user_string(path, sizeof(path), upath);
+    if (!path[0]) return -1;
+    return sys_open(path, flags);
+}
+
+static i64 sys_mkdir_user(u64 upath, u32 mode) {
+    char path[256];
+    copy_user_string(path, sizeof(path), upath);
+    if (!path[0]) return -1;
+    return sys_mkdir(path, mode);
+}
+
+static i64 sys_chdir_user(u64 upath) {
+    char path[256];
+    copy_user_string(path, sizeof(path), upath);
+    if (!path[0]) return -1;
+    return sys_chdir(path);
+}
+
+static i64 sys_getcwd_user(u64 uout, usize size) {
+    char cwd[256];
+    isize n = sys_getcwd(cwd, sizeof(cwd));
+    if (n < 0 || !uout || size == 0) return -1;
+    if ((usize)n + 1 > size) return -1;
+    return copy_to_user(uout, cwd, (usize)n + 1) == 0 ? n : -1;
+}
+
+static i64 copy_to_user(u64 uout, const void *src, usize len) {
+    if (!uout || !src || len == 0) return -1;
+    bool smap = (read_cr4() & CR4_SMAP) != 0;
+    if (smap) __asm__ volatile ("stac");
+    memcpy((void *)uout, src, len);
+    if (smap) __asm__ volatile ("clac");
+    return 0;
+}
+
+static i64 sys_os_info(u64 uout) {
+    yam_os_info_t info;
+    memset(&info, 0, sizeof(info));
+    info.abi_version = YAM_ABI_VERSION;
+    info.syscall_max = SYS_MAX;
+    info.page_size = PAGE_SIZE;
+    info.pointer_bits = 64;
+    info.cpu_count = smp_cpu_count();
+    info.flags = YAM_OS_FLAG_PREEMPTIVE |
+                 YAM_OS_FLAG_GRAPH_IPC |
+                 YAM_OS_FLAG_GUI_COMPOSITOR |
+                 YAM_OS_FLAG_DRIVER_SYSCALLS |
+                 YAM_OS_FLAG_NETWORK_STACK |
+                 YAM_OS_FLAG_INSTALLER_SERVICE |
+                 YAM_OS_FLAG_SOCKET_ABI;
+    strncpy(info.os_name, YAM_OS_NAME, sizeof(info.os_name) - 1);
+    strncpy(info.kernel_name, YAM_KERNEL_NAME, sizeof(info.kernel_name) - 1);
+    return copy_to_user(uout, &info, sizeof(info));
+}
+
+static i64 sys_app_register(u64 umanifest) {
+    if (!umanifest) return -1;
+    yam_app_manifest_t manifest;
+    bool smap = (read_cr4() & CR4_SMAP) != 0;
+    if (smap) __asm__ volatile ("stac");
+    memcpy(&manifest, (const void *)umanifest, sizeof(manifest));
+    if (smap) __asm__ volatile ("clac");
+
+    manifest.name[sizeof(manifest.name) - 1] = 0;
+    manifest.publisher[sizeof(manifest.publisher) - 1] = 0;
+    manifest.version[sizeof(manifest.version) - 1] = 0;
+    manifest.description[sizeof(manifest.description) - 1] = 0;
+    return app_registry_register(this_cpu()->current, &manifest);
+}
+
+static i64 sys_app_query(u32 index, u64 uout) {
+    yam_app_record_t record;
+    i64 rc = app_registry_query(index, &record);
+    if (rc < 0) return rc;
+    return copy_to_user(uout, &record, sizeof(record));
+}
+
+typedef struct {
+    int domain;
+    int type;
+    int proto;
+    int tcp_fd;
+    u16 bound_port;
+    bool listening;
+} yam_socket_file_t;
+
+static isize socket_read(file_t *file, void *buf, usize count) {
+    yam_socket_file_t *sock = (yam_socket_file_t *)file->private_data;
+    if (!sock || sock->type != SOCK_STREAM || sock->tcp_fd < 0) return -1;
+    bool smap = (read_cr4() & CR4_SMAP) != 0;
+    if (smap) __asm__ volatile ("stac");
+    int rc = tcp_recv(sock->tcp_fd, buf, count);
+    if (smap) __asm__ volatile ("clac");
+    return rc;
+}
+
+static isize socket_write(file_t *file, const void *buf, usize count) {
+    yam_socket_file_t *sock = (yam_socket_file_t *)file->private_data;
+    if (!sock || sock->type != SOCK_STREAM || sock->tcp_fd < 0) return -1;
+    bool smap = (read_cr4() & CR4_SMAP) != 0;
+    if (smap) __asm__ volatile ("stac");
+    int rc = tcp_send(sock->tcp_fd, buf, count);
+    if (smap) __asm__ volatile ("clac");
+    return rc;
+}
+
+static int socket_poll(file_t *file) {
+    yam_socket_file_t *sock = (yam_socket_file_t *)file->private_data;
+    if (!sock || sock->type != SOCK_STREAM || sock->tcp_fd < 0) return 0;
+    if (tcp_available(sock->tcp_fd) > 0) return 1;
+    return sock->listening ? 1 : 0;
+}
+
+static int socket_close(file_t *file) {
+    yam_socket_file_t *sock = (yam_socket_file_t *)file->private_data;
+    if (sock) {
+        if (sock->tcp_fd >= 0) tcp_close(sock->tcp_fd);
+        kfree(sock);
+        file->private_data = NULL;
+    }
+    return 0;
+}
+
+static file_operations_t socket_fops = {
+    .read = socket_read,
+    .write = socket_write,
+    .mmap = NULL,
+    .poll = socket_poll,
+    .close = socket_close,
+};
+
+static int socket_wrap_tcp_fd(int tcp_fd, int domain, int type, int proto, u16 bound_port, bool listening) {
+    yam_socket_file_t *sock = (yam_socket_file_t *)kmalloc(sizeof(*sock));
+    if (!sock) {
+        if (tcp_fd >= 0) tcp_close(tcp_fd);
+        return -1;
+    }
+    memset(sock, 0, sizeof(*sock));
+    sock->domain = domain;
+    sock->type = type;
+    sock->proto = proto;
+    sock->tcp_fd = tcp_fd;
+    sock->bound_port = bound_port;
+    sock->listening = listening;
+
+    file_t *f = (file_t *)kmalloc(sizeof(file_t));
+    if (!f) {
+        tcp_close(tcp_fd);
+        kfree(sock);
+        return -1;
+    }
+    memset(f, 0, sizeof(*f));
+    f->fops = &socket_fops;
+    f->private_data = sock;
+    f->ref_count = 1;
+    f->mount_idx = -1;
+    strncpy(f->path, "socket:[tcp]", sizeof(f->path) - 1);
+
+    int fd = fd_alloc(f);
+    if (fd < 0) {
+        socket_close(f);
+        kfree(f);
+        return -1;
+    }
+    return fd;
+}
+
+static i64 sys_socket_user(int domain, int type, int proto) {
+    if (domain != AF_INET) return -1;
+    if (type != SOCK_STREAM) return -1;
+    if (proto != 0 && proto != IPPROTO_TCP) return -1;
+    int tcpfd = tcp_socket();
+    if (tcpfd < 0) return -1;
+    int fd = socket_wrap_tcp_fd(tcpfd, domain, type, proto ? proto : IPPROTO_TCP, 0, false);
+    if (fd >= 0) kprintf("[SOCKET] socket(AF_INET, SOCK_STREAM) -> fd%d tcp%d\n", fd, tcpfd);
+    return fd;
+}
+
+static i64 copy_sockaddr_in_from_user(u64 uaddr, u32 len, sockaddr_in_t *out) {
+    if (!uaddr || !out || len < sizeof(sockaddr_in_t)) return -1;
+    bool smap = (read_cr4() & CR4_SMAP) != 0;
+    if (smap) __asm__ volatile ("stac");
+    memcpy(out, (const void *)uaddr, sizeof(*out));
+    if (smap) __asm__ volatile ("clac");
+    if (out->sin_family != AF_INET) return -1;
+    return 0;
+}
+
+static i64 sys_bind_user(int fd, u64 uaddr, u32 len) {
+    file_t *f = fd_get(fd);
+    if (!f || f->fops != &socket_fops) return -1;
+    yam_socket_file_t *sock = (yam_socket_file_t *)f->private_data;
+    sockaddr_in_t addr;
+    if (!sock || copy_sockaddr_in_from_user(uaddr, len, &addr) < 0) return -1;
+    sock->bound_port = ntohs(addr.sin_port);
+    kprintf("[SOCKET] bind fd%d port=%u\n", fd, sock->bound_port);
+    return 0;
+}
+
+static i64 sys_connect_user(int fd, u64 uaddr, u32 len) {
+    file_t *f = fd_get(fd);
+    if (!f || f->fops != &socket_fops) return -1;
+    yam_socket_file_t *sock = (yam_socket_file_t *)f->private_data;
+    sockaddr_in_t addr;
+    if (!sock || sock->type != SOCK_STREAM || copy_sockaddr_in_from_user(uaddr, len, &addr) < 0) return -1;
+    u32 ip = ntohl(addr.sin_addr.s_addr);
+    u16 port = ntohs(addr.sin_port);
+    int rc = tcp_connect(sock->tcp_fd, ip, port);
+    kprintf("[SOCKET] connect fd%d -> %u.%u.%u.%u:%u rc=%d\n",
+            fd, (ip >> 24) & 0xFF, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF, port, rc);
+    return rc;
+}
+
+static i64 sys_listen_user(int fd, int backlog) {
+    (void)backlog;
+    file_t *f = fd_get(fd);
+    if (!f || f->fops != &socket_fops) return -1;
+    yam_socket_file_t *sock = (yam_socket_file_t *)f->private_data;
+    if (!sock || sock->type != SOCK_STREAM || sock->bound_port == 0) return -1;
+    int rc = tcp_listen(sock->tcp_fd, sock->bound_port);
+    if (rc == 0) sock->listening = true;
+    kprintf("[SOCKET] listen fd%d port=%u rc=%d\n", fd, sock->bound_port, rc);
+    return rc;
+}
+
+static i64 sys_accept_user(int fd, u64 uaddr, u64 ulen) {
+    (void)uaddr;
+    (void)ulen;
+    file_t *f = fd_get(fd);
+    if (!f || f->fops != &socket_fops) return -1;
+    yam_socket_file_t *sock = (yam_socket_file_t *)f->private_data;
+    if (!sock || !sock->listening) return -1;
+    int client_tcp = tcp_accept(sock->tcp_fd);
+    if (client_tcp < 0) return -1;
+    int client_fd = socket_wrap_tcp_fd(client_tcp, sock->domain, sock->type, sock->proto, 0, false);
+    kprintf("[SOCKET] accept fd%d -> fd%d tcp%d\n", fd, client_fd, client_tcp);
+    return client_fd;
 }
 
 /* ---- Wayland / GUI Syscall Handlers ---- */
@@ -425,7 +734,7 @@ i64 syscall_dispatch(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5) {
     case SYS_GETPID:   SYSCALL_RETURN(sys_getpid());
     case SYS_YIELD:    SYSCALL_RETURN(sys_yield());
     case SYS_SLEEPMS:  SYSCALL_RETURN(sys_sleepms(a1));
-    case SYS_OPEN:     SYSCALL_RETURN(sys_open((const char *)a1, (u32)a2));
+    case SYS_OPEN:     SYSCALL_RETURN(sys_open_user(a1, (u32)a2));
     case SYS_CLOSE:    SYSCALL_RETURN(sys_close((int)a1));
     case SYS_READ:     SYSCALL_RETURN(sys_read((int)a1, (void *)a2, (usize)a3));
     case SYS_WRITE_FD: SYSCALL_RETURN(sys_write((int)a1, (const void *)a2, (usize)a3));
@@ -451,12 +760,30 @@ i64 syscall_dispatch(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5) {
     case SYS_FUTEX:         SYSCALL_RETURN(sys_futex((u32 *)a1, (int)a2, (u32)a3, a4));
     case SYS_CLIPBOARD_SET: SYSCALL_RETURN(sys_clipboard_set(a1, (u32)a2));
     case SYS_CLIPBOARD_GET: SYSCALL_RETURN(sys_clipboard_get(a1, (u32)a2));
+    case SYS_INSTALLER_STATUS:  SYSCALL_RETURN(sys_installer_status(a1, a2));
+    case SYS_INSTALLER_REQUEST: SYSCALL_RETURN(sys_installer_request(a1, a2));
+    case SYS_OS_INFO:           SYSCALL_RETURN(sys_os_info(a1));
+    case SYS_APP_REGISTER:      SYSCALL_RETURN(sys_app_register(a1));
+    case SYS_APP_QUERY:         SYSCALL_RETURN(sys_app_query((u32)a1, a2));
+    case SYS_SOCKET:            SYSCALL_RETURN(sys_socket_user((int)a1, (int)a2, (int)a3));
+    case SYS_BIND:              SYSCALL_RETURN(sys_bind_user((int)a1, a2, (u32)a3));
+    case SYS_CONNECT:           SYSCALL_RETURN(sys_connect_user((int)a1, a2, (u32)a3));
+    case SYS_LISTEN:            SYSCALL_RETURN(sys_listen_user((int)a1, (int)a2));
+    case SYS_ACCEPT:            SYSCALL_RETURN(sys_accept_user((int)a1, a2, a3));
+    case SYS_SENDTO:            SYSCALL_RETURN(-1);
+    case SYS_RECVFROM:          SYSCALL_RETURN(-1);
 
     /* Wayland */
     case SYS_WL_CREATE_SURFACE: SYSCALL_RETURN(sys_wl_create_surface(a1, (i32)a2, (i32)a3, (u32)a4, (u32)a5));
     case SYS_WL_MAP_BUFFER:     SYSCALL_RETURN(sys_wl_map_buffer((u32)a1, a2));
     case SYS_WL_COMMIT:         SYSCALL_RETURN(sys_wl_commit((u32)a1));
     case SYS_WL_POLL_EVENT:     SYSCALL_RETURN(sys_wl_poll_event((u32)a1, a2));
+    case SYS_LSEEK:             SYSCALL_RETURN(sys_lseek((int)a1, (isize)a2, (int)a3));
+    case SYS_MKDIR:             SYSCALL_RETURN(sys_mkdir_user(a1, (u32)a2));
+    case SYS_UNLINK:            SYSCALL_RETURN(sys_unlink_user(a1));
+    case SYS_READDIR:           SYSCALL_RETURN(sys_readdir_user(a1, (u32)a2, a3));
+    case SYS_CHDIR:             SYSCALL_RETURN(sys_chdir_user(a1));
+    case SYS_GETCWD:            SYSCALL_RETURN(sys_getcwd_user(a1, (usize)a2));
 
     /* Drivers */
     case SYS_IOPORT_READ:     SYSCALL_RETURN(sys_ioport_read((u16)a1, (u8)a2));

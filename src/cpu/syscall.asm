@@ -73,3 +73,5 @@ syscall_entry:
     mov   rsp, [gs:32]              ; restore user RSP
     swapgs                          ; GS_BASE = user
     o64 sysret
+
+section .note.GNU-stack noalloc noexec nowrite progbits

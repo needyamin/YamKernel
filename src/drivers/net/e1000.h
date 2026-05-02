@@ -28,6 +28,18 @@
 #define E1000_REG_MTA      0x05200
 #define E1000_REG_RAL      0x05400
 #define E1000_REG_RAH      0x05404
+#define E1000_REG_RDTR     0x02820
+#define E1000_REG_TIPG     0x00410
+
+#define E1000_CTRL_SLU     (1u << 6)
+#define E1000_STATUS_LU    (1u << 1)
+
+#define E1000_RX_STATUS_DD 0x01
+
+#define E1000_TX_CMD_EOP   0x01
+#define E1000_TX_CMD_IFCS  0x02
+#define E1000_TX_CMD_RS    0x08
+#define E1000_TX_STATUS_DD 0x01
 
 /* Direct Memory Access Rings */
 typedef struct {
@@ -50,5 +62,6 @@ typedef struct {
 } PACKED e1000_tx_desc_t;
 
 void e1000_init(void);
+void e1000_poll(void);
 
 #endif

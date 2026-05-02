@@ -25,7 +25,7 @@ CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-stack-check \
           -fno-pie -fno-pic -m64 -march=x86-64 -mno-80387 -mno-mmx \
           -mno-sse -mno-sse2 -mno-red-zone -mcmodel=kernel \
           -Wall -Wextra -Werror -O2 -g \
-          -Isrc/include -Isrc -Ivendor
+          -Isrc/include -Isrc
 
 KERNEL_CFLAGS := $(CFLAGS) -DYAM_KERNEL
 
@@ -49,27 +49,18 @@ OBJS     := $(C_OBJS) $(ASM_OBJS)
 # Final targets
 KERNEL_ELF := $(BUILD_DIR)/$(KERNEL_NAME).elf
 KERNEL_ISO := $(BUILD_DIR)/$(KERNEL_NAME).iso
+DISK_IMG   := $(BUILD_DIR)/yamos-fat32.disk
 
 # Splash screen images
 IMG2RAW       := $(BUILD_DIR)/img2raw
 LOGO_BIN      := $(BUILD_DIR)/logo.bin
 WALLPAPER_BIN := $(BUILD_DIR)/wallpaper.bin
 
-# User-space ELF apps
-USER_ELF := $(BUILD_DIR)/test_app.elf
-CALC_ELF := $(BUILD_DIR)/calculator.elf
-TERM_ELF := $(BUILD_DIR)/terminal.elf
-BROWSER_ELF := $(BUILD_DIR)/browser.elf
-PYTHON_ELF := $(BUILD_DIR)/python.elf
-NET_ELF     := $(BUILD_DIR)/net_service.elf
-VIDEO_ELF   := $(BUILD_DIR)/video.elf
-AUDIO_ELF   := $(BUILD_DIR)/audio.elf
-IMG_ELF     := $(BUILD_DIR)/image.elf
-WIFI_ELF    := $(BUILD_DIR)/wifi.elf
+# User-space OS services
 AUTHD_ELF   := $(BUILD_DIR)/authd.elf
 # User-space libc
 LIBC_DIR := src/os/lib/libc
-LIBC_SRCS := $(LIBC_DIR)/stdio.c $(LIBC_DIR)/stdlib.c $(LIBC_DIR)/string.c $(LIBC_DIR)/ctype.c $(LIBC_DIR)/posix.c $(LIBC_DIR)/time.c
+LIBC_SRCS := $(LIBC_DIR)/stdio.c $(LIBC_DIR)/stdlib.c $(LIBC_DIR)/string.c $(LIBC_DIR)/ctype.c $(LIBC_DIR)/posix.c $(LIBC_DIR)/time.c $(LIBC_DIR)/wchar.c
 LIBC_OBJS := $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(LIBC_SRCS))
 
 USER_CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-stack-check \
@@ -81,7 +72,7 @@ USER_CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-stack-check \
 #  Targets
 # ============================================================================
 
-.PHONY: all clean run run-vmware run-serial run-serial-only debug iso setup
+.PHONY: all clean run run-vmware run-serial run-serial-only verify-log debug iso setup
 
 all: $(KERNEL_ELF)
 
@@ -127,67 +118,28 @@ $(WALLPAPER_BIN): assets/owl_wallpaper.jpg $(IMG2RAW)
 	@mkdir -p $(dir $@)
 	$(IMG2RAW) $< $@ 1920
 
-# User Apps (Linked with libc)
-$(USER_ELF): src/os/apps/test_app.c src/os/apps/user.ld $(LIBC_OBJS)
-	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/test_app.c $(LIBC_OBJS)
-	@echo "[USER] $@"
-
-$(CALC_ELF): src/os/apps/calculator.c src/os/apps/font_data.c src/os/apps/user.ld $(LIBC_OBJS)
-	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/calculator.c src/os/apps/font_data.c $(LIBC_OBJS)
-	@echo "[CALC] $@"
-
-$(TERM_ELF): src/os/apps/terminal.c src/os/apps/font_data.c src/os/apps/user.ld $(LIBC_OBJS)
-	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/terminal.c src/os/apps/font_data.c $(LIBC_OBJS)
-	@echo "[TERM] $@"
-
-$(BROWSER_ELF): src/os/apps/browser.c src/os/apps/font_data.c src/os/apps/user.ld $(LIBC_OBJS)
-	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/browser.c src/os/apps/font_data.c $(LIBC_OBJS)
-	@echo "[BROWSER] $@"
-
-$(PYTHON_ELF): src/os/apps/python.c src/os/apps/font_data.c src/os/apps/user.ld $(LIBC_OBJS)
-	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/python.c src/os/apps/font_data.c $(LIBC_OBJS)
-	@echo "[PYTHON] $@"
-
-$(NET_ELF): src/os/drivers/net_service.c src/os/apps/user.ld $(LIBC_OBJS)
-	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/net_service.c $(LIBC_OBJS)
-	@echo "[DRV_NET] $@"
-
-$(VIDEO_ELF): src/os/drivers/video.c src/os/apps/user.ld $(LIBC_OBJS)
-	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/video.c $(LIBC_OBJS)
-	@echo "[DRV_VID] $@"
-
-$(AUDIO_ELF): src/os/drivers/audio.c src/os/apps/user.ld $(LIBC_OBJS)
-	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/audio.c $(LIBC_OBJS)
-	@echo "[DRV_AUD] $@"
-
-$(IMG_ELF): src/os/drivers/image.c src/os/apps/user.ld $(LIBC_OBJS)
-	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/image.c $(LIBC_OBJS)
-	@echo "[DRV_IMG] $@"
-
-$(WIFI_ELF): src/os/drivers/wifi.c src/os/apps/user.ld $(LIBC_OBJS)
-	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/drivers/wifi.c $(LIBC_OBJS)
-	@echo "[DRV_WIFI] $@"
-
 $(AUTHD_ELF): src/os/apps/authd.c src/os/apps/user.ld $(LIBC_OBJS)
 	@mkdir -p $(dir $@)
 	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/authd.c $(LIBC_OBJS)
 	@echo "[SVC_AUTH] $@"
 
+$(DISK_IMG):
+	@mkdir -p $(dir $@)
+	truncate -s 32M $@
+	@if command -v mkfs.fat >/dev/null 2>&1; then \
+		mkfs.fat -F 32 -n YAMOS $@ >/dev/null; \
+	elif command -v mformat >/dev/null 2>&1; then \
+		mformat -i $@ -F -v YAMOS ::; \
+	else \
+		echo "[DISK] warning: mkfs.fat/mformat not found; disk will remain unformatted"; \
+	fi
+	@echo "[DISK] $@"
+
 # ============================================================================
 #  ISO Creation (Limine-based bootable ISO)
 # ============================================================================
 
-$(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN) $(USER_ELF) $(CALC_ELF) $(TERM_ELF) $(BROWSER_ELF) $(PYTHON_ELF) $(NET_ELF) $(VIDEO_ELF) $(AUDIO_ELF) $(IMG_ELF) $(WIFI_ELF) $(AUTHD_ELF)
+$(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN) $(AUTHD_ELF)
 	@echo "[ISO]  Building bootable ISO..."
 	@rm -rf $(ISO_DIR)
 	@mkdir -p $(ISO_DIR)/boot/limine
@@ -198,16 +150,6 @@ $(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN) $(USER_ELF) $(CALC_ELF
 	cp $(KERNEL_ELF) $(ISO_DIR)/boot/$(KERNEL_NAME).elf
 	cp $(LOGO_BIN) $(ISO_DIR)/boot/logo.bin
 	cp $(WALLPAPER_BIN) $(ISO_DIR)/boot/wallpaper.bin
-	cp $(USER_ELF) $(ISO_DIR)/boot/test_app.elf
-	cp $(CALC_ELF) $(ISO_DIR)/boot/calculator.elf
-	cp $(TERM_ELF) $(ISO_DIR)/boot/terminal.elf
-	cp $(BROWSER_ELF) $(ISO_DIR)/boot/browser.elf
-	cp $(PYTHON_ELF) $(ISO_DIR)/boot/python.elf
-	cp $(NET_ELF) $(ISO_DIR)/boot/net_service.elf
-	cp $(VIDEO_ELF) $(ISO_DIR)/boot/video.elf
-	cp $(AUDIO_ELF) $(ISO_DIR)/boot/audio.elf
-	cp $(IMG_ELF) $(ISO_DIR)/boot/image.elf
-	cp $(WIFI_ELF) $(ISO_DIR)/boot/wifi.elf
 	cp $(AUTHD_ELF) $(ISO_DIR)/boot/authd.elf
 	
 	# Copy limine config
@@ -240,10 +182,14 @@ $(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN) $(USER_ELF) $(CALC_ELF
 #  Run in QEMU
 # ============================================================================
 
-run: $(KERNEL_ISO)
+run: $(KERNEL_ISO) $(DISK_IMG)
 	qemu-system-x86_64 \
 		-cdrom $(KERNEL_ISO) \
+		-drive file=$(DISK_IMG),format=raw,if=none,id=vd0 \
+		-device virtio-blk-pci,drive=vd0,disable-modern=on \
 		-serial stdio \
+		-netdev user,id=net0 \
+		-device e1000,netdev=net0 \
 		-m 256M \
 		-smp 2 \
 		-boot d \
@@ -251,10 +197,14 @@ run: $(KERNEL_ISO)
 		-no-shutdown
 
 # Run with GDB server enabled (listens on localhost:1234)
-debug: $(KERNEL_ISO)
+debug: $(KERNEL_ISO) $(DISK_IMG)
 	qemu-system-x86_64 \
 		-cdrom $(KERNEL_ISO) \
+		-drive file=$(DISK_IMG),format=raw,if=none,id=vd0 \
+		-device virtio-blk-pci,drive=vd0,disable-modern=on \
 		-serial stdio \
+		-netdev user,id=net0 \
+		-device e1000,netdev=net0 \
 		-m 256M \
 		-smp 2 \
 		-boot d \
@@ -263,11 +213,15 @@ debug: $(KERNEL_ISO)
 		-no-shutdown
 
 # Run with UEFI (requires OVMF)
-run-uefi: $(KERNEL_ISO)
+run-uefi: $(KERNEL_ISO) $(DISK_IMG)
 	qemu-system-x86_64 \
 		-cdrom $(KERNEL_ISO) \
+		-drive file=$(DISK_IMG),format=raw,if=none,id=vd0 \
+		-device virtio-blk-pci,drive=vd0,disable-modern=on \
 		-bios /usr/share/OVMF/OVMF_CODE.fd \
 		-serial stdio \
+		-netdev user,id=net0 \
+		-device e1000,netdev=net0 \
 		-m 256M \
 		-smp 2 \
 		-boot d \
@@ -275,12 +229,16 @@ run-uefi: $(KERNEL_ISO)
 		-no-shutdown
 
 # Run with serial output captured to a log file
-run-serial: $(KERNEL_ISO)
+run-serial: $(KERNEL_ISO) $(DISK_IMG)
 	@echo "[SERIAL] Starting QEMU with serial log -> build/serial.log"
 	@echo "[SERIAL] View log:  tail -f build/serial.log"
 	qemu-system-x86_64 \
 		-cdrom $(KERNEL_ISO) \
+		-drive file=$(DISK_IMG),format=raw,if=none,id=vd0 \
+		-device virtio-blk-pci,drive=vd0,disable-modern=on \
 		-serial file:build/serial.log \
+		-netdev user,id=net0 \
+		-device e1000,netdev=net0 \
 		-m 256M \
 		-smp 2 \
 		-boot d \
@@ -288,16 +246,41 @@ run-serial: $(KERNEL_ISO)
 		-no-shutdown
 
 # Run headless — serial only, no graphical window (fastest for CI/debug)
-run-serial-only: $(KERNEL_ISO)
+run-serial-only: $(KERNEL_ISO) $(DISK_IMG)
 	@echo "[SERIAL] Headless mode — all output on terminal"
 	qemu-system-x86_64 \
 		-cdrom $(KERNEL_ISO) \
+		-drive file=$(DISK_IMG),format=raw,if=none,id=vd0 \
+		-device virtio-blk-pci,drive=vd0,disable-modern=on \
 		-nographic \
+		-netdev user,id=net0 \
+		-device e1000,netdev=net0 \
 		-m 256M \
 		-smp 2 \
 		-boot d \
 		-no-reboot \
 		-no-shutdown
+
+# Bounded serial-log verification for development/CI. Prefer this over ad-hoc
+# QEMU commands when checking boot regressions.
+verify-log: $(KERNEL_ISO) $(DISK_IMG)
+	@echo "[VERIFY] Running bounded QEMU boot -> build/verify.log"
+	@rm -f build/verify.log
+	@timeout 55s qemu-system-x86_64 \
+		-cdrom $(KERNEL_ISO) \
+		-drive file=$(DISK_IMG),format=raw,if=none,id=vd0 \
+		-device virtio-blk-pci,drive=vd0,disable-modern=on \
+		-serial file:build/verify.log \
+		-display none \
+		-netdev user,id=net0 \
+		-device e1000,netdev=net0 \
+		-m 256M \
+		-smp 2 \
+		-boot d \
+		-no-reboot \
+		-no-shutdown >/dev/null 2>&1 || true
+	@echo "[VERIFY] Key boot evidence:"
+	@grep -E "\[PCI\]|\[DRIVER\]|\[BLOCK\]|\[VBLK\]|\[VFS\]|\[FAT32\]|\[e1000\]|\[DHCP\]|\[DNS\]|\[TCP\]|\[HTTP\]|PANIC|EXCEPTION|FAULT" build/verify.log | tail -n 220 || true
 
 # ============================================================================
 #  Setup (install dependencies on Debian/Ubuntu/WSL)

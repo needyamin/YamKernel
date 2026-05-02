@@ -44,6 +44,9 @@
 #include "os/services/compositor/compositor.h"
 #include "nexus/channel.h"
 #include "drivers/bus/pci.h"
+#include "drivers/core/driver_manager.h"
+#include "drivers/block/block.h"
+#include "drivers/block/virtio_blk.h"
 #include "drivers/input/keyboard.h"
 #include "drivers/input/mouse.h"
 #include "drivers/input/evdev.h"
@@ -57,6 +60,9 @@
 #include "drivers/ai/ai_accel.h"
 #include "drivers/input/touch.h"
 #include "drivers/input/gesture.h"
+#include "drivers/audio/audio.h"
+#include "os/services/installer/installer.h"
+#include "os/services/app_registry/app_registry.h"
 
 #define YAM_DEMO_TASKS 0
 #define YAM_PREEMPTIVE 1
@@ -114,24 +120,6 @@ static volatile struct limine_module_request module_request = {
 /* ============================================================================
  * Global module pointers
  * ============================================================================ */
-static void *g_elf_module = NULL;
-static usize g_elf_module_size = 0;
-void *g_calc_module = NULL;
-usize g_calc_module_size = 0;
-void *g_term_module = NULL;
-usize g_term_module_size = 0;
-void *g_browser_module = NULL;
-usize g_browser_module_size = 0;
-void *g_python_module = NULL;
-usize g_python_module_size = 0;
-void *g_net_module = NULL;
-usize g_net_module_size = 0;
-void *g_video_module = NULL;
-usize g_video_module_size = 0;
-void *g_audio_module = NULL;
-usize g_audio_module_size = 0;
-void *g_img_module = NULL;    usize g_img_module_size = 0;
-void *g_wifi_module = NULL;   usize g_wifi_module_size = 0;
 void *g_authd_module = NULL;  usize g_authd_module_size = 0;
 void *g_wallpaper_module = NULL;
 
@@ -222,29 +210,6 @@ void kernel_main(void) {
                 } else if (strstr(mod->path, "logo.bin")) {
                     logo_data = mod->address;
                     KINFO("MODULE", "    -> matched LOGO");
-                } else if (strstr(mod->path, "test_app.elf")) {
-                    g_elf_module = mod->address;
-                    g_elf_module_size = mod->size;
-                    KINFO("MODULE", "    -> matched ELF APP");
-                } else if (strstr(mod->path, "calculator.elf")) {
-                    g_calc_module = mod->address;
-                    g_calc_module_size = mod->size;
-                    KINFO("MODULE", "    -> matched CALC APP");
-                } else if (strstr(mod->path, "terminal.elf")) {
-                    g_term_module = mod->address;
-                    g_term_module_size = mod->size;
-                    KINFO("MODULE", "    -> matched TERM APP");
-                } else if (strstr(mod->path, "browser.elf")) {
-                    g_browser_module = mod->address;
-                    g_browser_module_size = mod->size;
-                    KINFO("MODULE", "    -> matched BROWSER APP");
-                } else if (strstr(mod->path, "python.elf")) {
-                    g_python_module = mod->address;
-                    g_python_module_size = mod->size;
-                    KINFO("MODULE", "    -> matched PYTHON APP");
-                } else if (strstr(mod->path, "net_service.elf")) {
-                    g_net_module = mod->address;
-                    g_net_module_size = mod->size;
                 } else if (strstr(mod->path, "authd.elf")) {
                     g_authd_module = mod->address;
                     g_authd_module_size = mod->size;
@@ -372,14 +337,22 @@ void kernel_main(void) {
     KINFO("INIT", "Phase 5: Drivers & Subsystems");
     pit_init(100);
     keyboard_init();
+    app_registry_init();
 
     if (!g_yamboot_safe) {
         pci_init();
+        driver_manager_init();
+        driver_bind_pci_inventory();
+        block_init();
+        virtio_blk_init_all();
+        block_dump();
         usb_init();
         i2c_init(); spi_init();
         vfs_init();
         ipc_init();
         net_init();
+        audio_init();
+        installer_init();
         evdev_init();
         mouse_init();
     }

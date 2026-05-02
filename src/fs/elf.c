@@ -16,7 +16,7 @@ extern void enter_user_mode(u64 rip, u64 rsp) NORETURN;
 /* User stack lives at the top of the lower-half canonical address space */
 #define USER_STACK_GUARD_LOW  0x00007FFEFFFFF000ULL
 #define USER_STACK_BASE       0x00007FFF00000000ULL
-#define USER_STACK_PAGES 4  /* 16 KB */
+#define USER_STACK_PAGES 256  /* 1 MB user stack for larger real-world ELF apps. */
 #define USER_STACK_SIZE  (USER_STACK_PAGES * PAGE_SIZE)
 #define USER_STACK_TOP   (USER_STACK_BASE + USER_STACK_SIZE)
 #define USER_STACK_GUARD_HIGH USER_STACK_TOP

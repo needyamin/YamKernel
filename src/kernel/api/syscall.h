@@ -32,6 +32,12 @@
 #define SYS_WL_MAP_BUFFER     21
 #define SYS_WL_COMMIT         22
 #define SYS_WL_POLL_EVENT     23
+#define SYS_LSEEK             24
+#define SYS_MKDIR             25
+#define SYS_UNLINK            26
+#define SYS_READDIR           27
+#define SYS_CHDIR             28
+#define SYS_GETCWD            29
 
 /* Privileged Driver Syscalls (OS Level) */
 #define SYS_IOPORT_READ       30
@@ -65,13 +71,77 @@
 
 #define SYS_CLIPBOARD_SET     63
 #define SYS_CLIPBOARD_GET     64
+#define SYS_INSTALLER_STATUS  65
+#define SYS_INSTALLER_REQUEST 66
+#define SYS_OS_INFO           67
+#define SYS_APP_REGISTER      68
+#define SYS_APP_QUERY         69
+#define SYS_SOCKET            70
+#define SYS_BIND              71
+#define SYS_CONNECT           72
+#define SYS_LISTEN            73
+#define SYS_ACCEPT            74
+#define SYS_SENDTO            75
+#define SYS_RECVFROM          76
 
 /* Touchscreen (new in v0.3.0) */
 #define SYS_TOUCH_CALIBRATE   56
 #define SYS_TOUCH_GET_SLOTS   57
 #define SYS_GESTURE_CONFIG    58
 
-#define SYS_MAX     65
+#define SYS_MAX     77
+
+#define YAM_ABI_VERSION 1
+#define YAM_OS_NAME "YamOS"
+#define YAM_KERNEL_NAME "YamKernel"
+
+#define YAM_OS_FLAG_PREEMPTIVE        (1u << 0)
+#define YAM_OS_FLAG_GRAPH_IPC         (1u << 1)
+#define YAM_OS_FLAG_GUI_COMPOSITOR    (1u << 2)
+#define YAM_OS_FLAG_DRIVER_SYSCALLS   (1u << 3)
+#define YAM_OS_FLAG_NETWORK_STACK     (1u << 4)
+#define YAM_OS_FLAG_INSTALLER_SERVICE (1u << 5)
+#define YAM_OS_FLAG_SOCKET_ABI        (1u << 6)
+
+#define YAM_APP_TYPE_PROCESS  1
+#define YAM_APP_TYPE_SERVICE  2
+#define YAM_APP_TYPE_GUI      3
+#define YAM_APP_TYPE_DRIVER   4
+#define YAM_APP_TYPE_RUNTIME  5
+
+#define YAM_APP_PERM_NONE     0
+#define YAM_APP_PERM_FS       (1u << 0)
+#define YAM_APP_PERM_NET      (1u << 1)
+#define YAM_APP_PERM_IPC      (1u << 2)
+#define YAM_APP_PERM_GUI      (1u << 3)
+#define YAM_APP_PERM_DEVICE   (1u << 4)
+#define YAM_APP_PERM_DRIVER   (1u << 5)
+#define YAM_APP_PERM_INSTALL  (1u << 6)
+#define YAM_APP_PERM_RUNTIME  (1u << 7)
+
+#define YAM_INSTALL_STATE_EMPTY             0
+#define YAM_INSTALL_STATE_AVAILABLE         1
+#define YAM_INSTALL_STATE_BLOCKED           2
+#define YAM_INSTALL_STATE_READY_TO_DOWNLOAD 3
+#define YAM_INSTALL_STATE_DOWNLOADING       4
+#define YAM_INSTALL_STATE_INSTALLING        5
+#define YAM_INSTALL_STATE_INSTALLED         6
+#define YAM_INSTALL_STATE_FAILED            7
+
+#define YAM_INSTALL_ERR_NONE               0
+#define YAM_INSTALL_ERR_UNKNOWN_PACKAGE    1
+#define YAM_INSTALL_ERR_MISSING_CAPABILITY 2
+
+#define YAM_INSTALL_CAP_PACKAGE_DB         (1u << 0)
+#define YAM_INSTALL_CAP_TEMP_STORAGE       (1u << 1)
+#define YAM_INSTALL_CAP_PERSISTENT_STORAGE (1u << 2)
+#define YAM_INSTALL_CAP_NET_IFACE          (1u << 3)
+#define YAM_INSTALL_CAP_DHCP               (1u << 4)
+#define YAM_INSTALL_CAP_DNS                (1u << 5)
+#define YAM_INSTALL_CAP_TCP_CONNECT        (1u << 6)
+#define YAM_INSTALL_CAP_HTTP_CLIENT        (1u << 7)
+#define YAM_INSTALL_CAP_HTTPS_TLS          (1u << 8)
+#define YAM_INSTALL_CAP_CERT_STORE         (1u << 9)
 
 typedef struct {
     u64 pid;
@@ -100,6 +170,60 @@ typedef struct {
     u64 rq_load[8];
     u32 rq_ready[8];
 } yam_sched_info_t;
+
+typedef struct {
+    u32 state;
+    u32 last_error;
+    u32 capabilities;
+    u32 missing;
+    u32 progress;
+    char package[32];
+    char display_name[64];
+    char official_url[160];
+    char install_path[128];
+    char message[160];
+} yam_installer_status_t;
+
+typedef struct {
+    u32 abi_version;
+    u32 syscall_max;
+    u32 page_size;
+    u32 pointer_bits;
+    u32 cpu_count;
+    u32 flags;
+    char os_name[32];
+    char kernel_name[32];
+} yam_os_info_t;
+
+typedef struct {
+    u32 abi_version;
+    u32 app_type;
+    u32 permissions;
+    u32 flags;
+    char name[32];
+    char publisher[32];
+    char version[16];
+    char description[96];
+} yam_app_manifest_t;
+
+typedef struct {
+    u64 pid;
+    u32 graph_node;
+    u32 app_type;
+    u32 permissions;
+    u32 flags;
+    char task_name[24];
+    char name[32];
+    char publisher[32];
+    char version[16];
+    char description[96];
+} yam_app_record_t;
+
+typedef struct {
+    char name[192];
+    u64 size;
+    u32 is_dir;
+} yam_dirent_t;
 
 void syscall_init(void);
 i64 syscall_dispatch(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5);

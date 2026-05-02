@@ -4,6 +4,31 @@ YamOS is an experimental x86_64 operating system built around **YamKernel**, a g
 
 Current tree: **v0.4.0 development line**.
 
+## Not Complete Yet
+
+YamOS cannot yet run arbitrary x86_64 Linux/Windows software or install large
+browser engines and language runtimes as-is. These are required foundations:
+
+- persistent root/system volume
+- full POSIX/Linux syscall compatibility
+- `execve` and a stronger process model
+- dynamic linker / shared libraries
+- threads and signals
+- real permissions/users/security
+- TLS/HTTPS + certificate store
+- nonblocking sockets, `select`/`epoll`
+- package manager/downloader
+- full browser engine support
+- language runtime porting layer
+- real hardware driver coverage beyond the current QEMU-focused path
+
+Missing compatibility details are tracked in `KERNEL_CAPABILITY_MATRIX.md`.
+Important missing surfaces include process execution (`execve`), dynamic
+linking, pthread/TLS, signals, file permissions, file-backed `mmap`,
+nonblocking sockets with `select`/`epoll`, PTYs/termios, TLS/certificates,
+package signatures, browser-engine storage/sandboxing, and broader hardware
+drivers.
+
 ## What Is In This Repo
 
 | Area | Status | Notes |
@@ -13,26 +38,36 @@ Current tree: **v0.4.0 development line**.
 | SMP | Partial | Limine starts AP cores; APs initialize and park. Local APIC IPI primitives exist; scheduler currently uses CPU 0 only. |
 | Memory | In-tree | Zone-aware PMM, VMM, heap, slab, CoW/fork support, `brk`, `mmap`, `mprotect`, kernel/user stack guards, TLB shootdown hooks. |
 | Scheduler | In-tree | CFS-style scheduler, wait queues, mutexes, futexes, cgroups, OOM, idle/power hooks. |
-| Syscalls | In-tree | File, process, memory, scheduler, Wayland, driver, AI, touch, and YamGraph IPC calls. |
-| Filesystems | In-tree | VFS with initrd root, devfs, procfs, and FAT32 read/write driver code. |
-| Networking | In-tree | e1000 path plus ARP, IPv4, ICMP, UDP, DHCP, DNS, and TCP state-machine code. |
+| Syscalls | In-tree | File, process, memory, scheduler, Wayland, driver, AI, touch, YamGraph IPC, OS info, app registry, TCP sockets, `unlink`, and `readdir` calls. |
+| Filesystems | In-tree | VFS with initrd root, writable ramfs mounts, devfs, procfs, per-process cwd, relative paths, directory listing, delete, truncate-on-open, FAT32 read/write/unlink driver code, block core with QEMU virtio-blk disk registration, MBR/GPT FAT32 discovery, and auto-mounted block FAT32 volumes under `/mnt`. |
+| Networking | In-tree | e1000 path plus ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP state-machine code, first fd-backed TCP socket ABI, plain HTTP, certificate-store bootstrap, and bounded TLS ClientHello probe. |
 | USB/Input | In-tree | XHCI controller path, USB core, HID, keyboard, mouse, evdev, touch, gestures. |
-| Desktop | In-tree | Wayland-style compositor, login screen, top menu, dock/taskbar, windows, VTTY mode. |
-| Userland | In-tree | ELF modules for terminal, calculator, browser, Python status app, authd, and drivers. |
+| PCI/Drivers | In-tree | Bridge-aware PCI scan, command/status helpers, safe BAR sizing, MSI/MSI-X capability discovery, and driver inventory binding. |
+| Desktop | In-tree | Wayland-style compositor, polished first-boot setup/login, File Manager, calendar/time/status bar, quick settings, top menu, dock/taskbar, standard window controls, maximize/restore, windows, VTTY mode. |
+| Userland | In-tree | Minimal user ELF service for authd, libc/libyam syscall support, native app manifests, and kernel app registry. Main desktop tools are compositor-native kernel services. |
 | AI/ML | In-tree | Tensor allocation and accelerator abstraction syscalls. |
 
 ## Current Desktop Behavior
 
-- First boot opens a setup overlay for computer name, username, and password.
+- First boot opens a full setup experience for computer name, username, and password.
+- Setup now persists to `/var/lib/yamos/system.pro` after account creation or bypass; later boots load the saved device/account profile and go to login instead of asking for computer name, username, and password again.
 - Press `Ctrl+Shift+Y` on the setup or login screen to auto-create default users and enter the desktop.
 - Bypass defaults:
   - `root / password`
   - `guest / guest`
 - Terminal, Browser, and Calculator currently launch as compositor-native apps for reliable drawing.
+- Browser now has a real plain-HTTP path through kernel DNS/TCP/HTTP, a modern toolbar/address bar, back/forward/reload controls, history, response status display, a scrollable static document paint layer, and first inline color/background style handling for headings, paragraphs, list items, links, pre/code blocks, buttons, form placeholders, and image placeholders. Full encrypted HTTPS page loading, JavaScript, full CSS layout, real image decoding, and Firefox-class multi-process rendering remain future work.
+- Calculator is a compositor-native desktop utility with standard/scientific modes, fixed-decimal arithmetic, memory register, history, keyboard input, and compositor clipboard copy/paste.
+- File Manager launches from the dock launcher or File menu and now has an Explorer-style shell with sidebar locations, back/forward/up navigation, editable address and search fields, sortable details view, item details pane, create file/folder actions, file delete, and an integrated text editor for VFS files.
+- The desktop bar shows BDT calendar/time, wired network status from the kernel network interface, Wi-Fi driver state, and audio mixer state; clicking time opens the calendar and clicking status chips opens quick settings.
+- Terminal file commands now use the same VFS: `ls`, `cat`, `mkdir`, `touch`, `rm`, and `write /home/root/file.txt text`.
+- Terminal supports `cd` and `pwd`; VFS paths now resolve relative to each task's current working directory.
+- App windows use right-side minimize, maximize/restore, and close controls; minimized apps restore from the dock.
 - The visible Terminal is `src/os/services/compositor/wl_terminal.c`.
-- Real Python work now targets python.org CPython: official CPython 3.14.4 source is vendored at `vendor/cpython/Python-3.14.4`, with YamOS port notes in `src/os/ports/python/cpython`.
-- In the main Terminal, `python`, `python3`, `py`, `pip`, and `pip3` are reserved for python.org CPython only. Until CPython is linked, they show CPython port status instead of running a fake interpreter.
-- The separate `python.elf` module is currently a CPython port-status app; normal workflow remains one Terminal only.
+- Language-specific runtime installers are not part of the current tree; the
+  project is focused on kernel, drivers, memory, storage, networking, and OS
+  services.
+- Terminal commands `installer status`, `install`, and `install kernel-net` inspect or request the generic OS capability probe.
 - Shifted characters such as `Shift+9 = (`, `Shift+0 = )`, and uppercase letters are routed through evdev to focused apps.
 
 ## Quick Start
@@ -61,17 +96,16 @@ Build outputs:
 
 - `build/yamkernel.elf`
 - `build/yamkernel.iso`
-- user modules under `build/*.elf`
+- `build/authd.elf`
 - raw splash assets under `build/logo.bin` and `build/wallpaper.bin`
 
 ## Architecture
 
 ```text
 +---------------------------- Ring 3 --------------------------------+
-| ELF apps: terminal, calculator, browser, Python, authd, drivers     |
-| libc + libgui + libyam syscall wrappers                             |
+| authd ELF service | libc + libyam syscall wrappers                  |
 +----------------------- SYSCALL / SYSRET ---------------------------+
-| File, process, memory, scheduler, Wayland, driver, AI, IPC syscalls |
+| File, process, memory, scheduler, Wayland, driver, AI, IPC, app ABI |
 +---------------------------- Ring 0 --------------------------------+
 | Scheduler | VFS | Net | USB | DRM/Compositor | cgroups | OOM | AI   |
 +-------------------------- YamGraph --------------------------------+
@@ -96,12 +130,22 @@ src/ipc/                  IPC scaffolding
 src/net/                  ARP/IP/ICMP/UDP/TCP/DHCP/DNS stack
 src/drivers/              PCI, USB, input, serial, timer, video, DRM, net
 src/nexus/                YamGraph, channels, capabilities
-src/os/apps/              user-mode apps compiled as ELF modules
-src/os/lib/               libc, libgui, libyam
+src/os/apps/              authd ELF service and user linker script
+src/os/lib/               libc and libyam
+src/os/README.md          OS-layer layout and app-facing structure rules
 src/os/dev/               devfs and virtual TTYs
 src/os/proc/              procfs
-src/os/services/          compositor service and demo clients
+src/os/services/          compositor and OS services
 ```
+
+## Application Architecture
+
+- `src/kernel/api/syscall.h` is the public ABI source of truth for kernel and userspace.
+- `src/os/lib/libyam/app.h` exposes the native app SDK: `yam_os_info()`, `yam_app_register()`, and `yam_app_query()`.
+- `src/os/services/app_registry/` records Ring 3 app/service manifests in the kernel with PID, YamGraph node, app type, requested permissions, name, publisher, version, and description.
+- `authd` now registers itself as a native YamOS service before using YamGraph IPC.
+- See `APP_ARCHITECTURE.md` for the app model and the next steps toward installable developer apps.
+- Userland now has first TCP socket ABI numbers and libc wrappers for `socket`, `bind`, `connect`, `listen`, `accept`, `send`, `recv`, `sendto`, and `recvfrom`; currently AF_INET/SOCK_STREAM TCP is implemented, while datagram UDP remains future work.
 
 ## Boot Flow
 
@@ -120,7 +164,11 @@ src/os/services/          compositor service and demo clients
 - `YAM_DEMO_TASKS` is disabled by default.
 - The desktop compositor starts with first-boot setup/login, can spawn apps, and includes a VTTY render mode.
 - `Ctrl+Shift+Y` bypasses setup/login by creating default accounts and logging into the desktop.
-- Terminal `python` and `pip` are integrated into the compositor-native Terminal as CPython-only commands. Real python.org CPython 3.14.4 source is present and the YamOS port notes are under `src/os/ports/python/cpython`.
+- Terminal installer commands now route to the generic OS installer/capability service. TLS/certificate capability is probed with an outbound TLS ClientHello and ServerHello check; persistent package installation still needs package signatures and downloader/install transactions.
+- Browser engines, language runtimes, and package tools should use the fd-backed socket ABI instead of private kernel-only network helpers as that ABI matures.
+- First missing-compatibility slice added: per-process current working directory, `SYS_CHDIR`, `SYS_GETCWD`, libc `chdir/getcwd`, and relative VFS path resolution.
+- File Manager writes through VFS. With the QEMU virtio FAT32 disk attached, `/home` and `/var` are persistent; without it they fall back to ramfs.
+- QEMU runs attach `build/yamos-fat32.disk` as `vd0`; YamOS auto-mounts FAT32-compatible virtio disks at `/mnt/vd0`, exposes mounted volumes in `/mnt`, and promotes `/home` and `/var` to the FAT32 disk when available.
 - AP cores are initialized and can receive kernel IPIs, but full multi-core task scheduling remains disabled until address-space switching and run-queue ownership are audited.
 - TSC-deadline is detected when the CPU exposes it. The current timer path still uses the calibrated periodic APIC timer unless a later platform-specific timer switch is added.
 - CPU exceptions print register state, and the panic path has a register-frame variant for fatal exception debugging.
@@ -128,6 +176,8 @@ src/os/services/          compositor service and demo clients
 ## Documentation
 
 - `developer.html` - current architecture and subsystem reference.
+- `APP_ARCHITECTURE.md` - native app/service ABI and developer model.
+- `BROWSER_FIREFOX_GAP.md` - blunt comparison of YamBrowser against Firefox-class browser requirements.
 - `DEBUGGING.md` - build, QEMU, serial, GDB, and triage guide.
 - `future_plan.txt` - updated roadmap from the v0.4 tree toward v1.0.
 - `implementation_plan.md` and `task.md` - implementation planning/history.

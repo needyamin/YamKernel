@@ -9,9 +9,10 @@
 #include "wl_draw.h"
 #include "../lib/kprintf.h"
 #include "../lib/string.h"
+#include "../net/net.h"
+#include "fs/vfs.h"
+#include "os/services/installer/installer.h"
 
-extern void *g_python_module;
-extern usize g_python_module_size;
 void wl_spawn_app_async(void *data, usize size, const char *name);
 
 /* Terminal dimensions in characters */
@@ -49,6 +50,9 @@ static int  cur_col = 0;
 static char input_buf[128];
 static int  input_len = 0;
 static bool shift_held = false;
+static char history[16][128];
+static int history_count = 0;
+static int history_pos = 0;
 
 static void term_scroll(void) {
     for (int r = 0; r < TERM_ROWS - 1; r++) {
@@ -95,6 +99,50 @@ static void term_newline(void) {
     term_putchar('\n', COL_FG);
 }
 
+static void copy_text(char *dst, const char *src, usize cap) {
+    if (cap == 0) return;
+    usize i = 0;
+    while (src[i] && i + 1 < cap) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = 0;
+}
+
+static void history_add(const char *cmd) {
+    if (!cmd || !*cmd) return;
+    if (history_count > 0 && strcmp(history[history_count - 1], cmd) == 0) {
+        history_pos = history_count;
+        return;
+    }
+    if (history_count < 16) {
+        copy_text(history[history_count++], cmd, sizeof(history[0]));
+    } else {
+        for (int i = 1; i < 16; i++) copy_text(history[i - 1], history[i], sizeof(history[0]));
+        copy_text(history[15], cmd, sizeof(history[0]));
+    }
+    history_pos = history_count;
+}
+
+static int text_len(const char *s) {
+    int n = 0;
+    while (s && s[n]) n++;
+    return n;
+}
+
+static void replace_input_line(const char *cmd) {
+    while (input_len > 0) {
+        input_len--;
+        term_putchar('\b', COL_FG);
+    }
+    int old_len = input_len;
+    (void)old_len;
+    for (int i = 0; i < 127; i++) input_buf[i] = 0;
+    copy_text(input_buf, cmd, sizeof(input_buf));
+    input_len = text_len(input_buf);
+    term_puts(input_buf, COL_FG);
+}
+
 /* ---- Built-in commands ---- */
 static void cmd_help(void) {
     term_puts("Available commands:", COL_PROMPT);
@@ -107,6 +155,14 @@ static void cmd_help(void) {
     term_newline();
     term_puts("  ps       - List running tasks", COL_FG);
     term_newline();
+    term_puts("  ls cd pwd cat mkdir touch rm write history - File tools", COL_FG);
+    term_newline();
+    term_puts("  ifconfig netstat - Network status", COL_FG);
+    term_newline();
+    term_puts("  curl git - Preinstalled command diagnostics", COL_FG);
+    term_newline();
+    term_puts("  installer status | install kernel-net", COL_FG);
+    term_newline();
     term_puts("  echo ... - Print text", COL_FG);
     term_newline();
     term_puts("  uptime   - Show tick count", COL_FG);
@@ -115,11 +171,7 @@ static void cmd_help(void) {
     term_newline();
     term_puts("  neofetch - System info", COL_FG);
     term_newline();
-    term_puts("  python   - CPython from python.org status", COL_FG);
-    term_newline();
-    term_puts("  python -c ... - Requires linked CPython runtime", COL_FG);
-    term_newline();
-    term_puts("  pip      - Requires linked CPython + pip", COL_FG);
+    term_puts("Use Up/Down arrows for command history.", COL_PROMPT);
     term_newline();
 }
 
@@ -168,29 +220,248 @@ static void cmd_echo(const char *args) {
     term_newline();
 }
 
-static void cmd_python_install(void) {
-    term_puts("Starting python.org CPython installer...", COL_PROMPT);
-    term_newline();
-    term_puts("[1/5] checking /boot/python.elf installer module", COL_FG);
-    term_newline();
-    if (!g_python_module || !g_python_module_size) {
-        term_puts("[error] python installer module is missing from boot image", COL_ERR);
+static void cmd_history(void) {
+    char line[160];
+    for (int i = 0; i < history_count; i++) {
+        ksnprintf(line, sizeof(line), "%4d  %s", i + 1, history[i]);
+        term_puts(line, COL_FG);
         term_newline();
-        kprintf("[PYTHON] installer missing: g_python_module=%p size=%lu\n", g_python_module, g_python_module_size);
+    }
+}
+
+static void cmd_ls(const char *path) {
+    const char *p = (path && *path) ? path : ".";
+    if (strcmp(p, "~") == 0) p = "/home/root";
+    vfs_dirent_t ent;
+    bool any = false;
+    for (u32 i = 0; i < 64; i++) {
+        if (sys_readdir(p, i, &ent) < 0) break;
+        term_puts(ent.is_dir ? "[d] " : "[f] ", ent.is_dir ? COL_PROMPT : COL_FG);
+        term_puts(ent.name, COL_FG);
+        term_newline();
+        any = true;
+    }
+    if (!any) term_puts("(empty or not listable)", COL_FG);
+    term_newline();
+}
+
+static void cmd_pwd(void) {
+    char cwd[256];
+    if (sys_getcwd(cwd, sizeof(cwd)) >= 0) term_puts(cwd, COL_FG);
+    else term_puts("pwd: failed", COL_ERR);
+    term_newline();
+}
+
+static void cmd_cd(const char *path) {
+    const char *p = (path && *path) ? path : "/home/root";
+    if (strcmp(p, "~") == 0) p = "/home/root";
+    if (sys_chdir(p) == 0) {
+        char cwd[256];
+        if (sys_getcwd(cwd, sizeof(cwd)) >= 0) {
+            term_puts("cwd: ", COL_PROMPT);
+            term_puts(cwd, COL_FG);
+        }
+    } else {
+        term_puts("cd: no such directory", COL_ERR);
+    }
+    term_newline();
+}
+
+static void cmd_cat(const char *path) {
+    if (!path || !*path) {
+        term_puts("cat: missing file operand", COL_ERR);
+    } else {
+        char buf[512];
+        int fd = sys_open(path, 0);
+        if (fd < 0) {
+            term_puts("cat: cannot open file", COL_ERR);
+        } else {
+            isize n = sys_read(fd, buf, sizeof(buf) - 1);
+            sys_close(fd);
+            if (n < 0) term_puts("cat: read failed", COL_ERR);
+            else {
+                buf[n] = 0;
+                term_puts(buf, COL_FG);
+            }
+        }
+    }
+    term_newline();
+}
+
+static void cmd_mkdir_term(const char *path) {
+    if (!path || !*path) {
+        term_puts("mkdir: missing operand", COL_ERR);
+    } else if (sys_mkdir(path, 0755) == 0) {
+        term_puts("directory created", COL_PROMPT);
+    } else {
+        term_puts("mkdir: failed", COL_ERR);
+    }
+    term_newline();
+}
+
+static void cmd_touch(const char *path) {
+    if (!path || !*path) {
+        term_puts("touch: missing file operand", COL_ERR);
+    } else {
+        int fd = sys_open(path, 0x40 | 0x2);
+        if (fd >= 0) {
+            sys_close(fd);
+            term_puts("file ready", COL_PROMPT);
+        } else {
+            term_puts("touch: failed", COL_ERR);
+        }
+    }
+    term_newline();
+}
+
+static void cmd_rm(const char *path) {
+    if (!path || !*path) {
+        term_puts("rm: missing operand", COL_ERR);
+    } else if (sys_unlink(path) == 0) {
+        term_puts("deleted", COL_PROMPT);
+    } else {
+        term_puts("rm: failed", COL_ERR);
+    }
+    term_newline();
+}
+
+static void cmd_write_file(char *args) {
+    if (!args || !*args) {
+        term_puts("write: usage write /home/root/file.txt text", COL_ERR);
+        term_newline();
         return;
     }
-    term_puts("[2/5] found python.org CPython source package", COL_FG);
+    char *space = args;
+    while (*space && *space != ' ') space++;
+    if (!*space) {
+        term_puts("write: missing text", COL_ERR);
+        term_newline();
+        return;
+    }
+    *space++ = 0;
+    int fd = sys_open(args, 0x40 | 0x200 | 0x2);
+    if (fd < 0) {
+        term_puts("write: open failed", COL_ERR);
+    } else {
+        sys_write(fd, space, strlen(space));
+        sys_close(fd);
+        term_puts("saved", COL_PROMPT);
+    }
     term_newline();
-    term_puts("[3/5] launching graphical installer/status app", COL_FG);
+}
+
+static void cmd_net_status(void) {
+    char line[128];
+    ksnprintf(line, sizeof(line), "eth0: %s  dhcp=%s  mac=%02x:%02x:%02x:%02x:%02x:%02x",
+              g_net_iface.is_up ? "up" : "down",
+              g_net_iface.dhcp_done ? "done" : "pending",
+              g_net_iface.mac_addr[0], g_net_iface.mac_addr[1], g_net_iface.mac_addr[2],
+              g_net_iface.mac_addr[3], g_net_iface.mac_addr[4], g_net_iface.mac_addr[5]);
+    term_puts(line, g_net_iface.is_up ? COL_PROMPT : COL_ERR);
     term_newline();
-    wl_spawn_app_async(g_python_module, g_python_module_size, "python-installer");
-    term_puts("[4/5] installer will verify OS requirements", COL_FG);
+    ksnprintf(line, sizeof(line), "ip=%lu.%lu.%lu.%lu gateway=%lu.%lu.%lu.%lu dns=%lu.%lu.%lu.%lu",
+              (g_net_iface.ip_addr >> 24) & 255, (g_net_iface.ip_addr >> 16) & 255,
+              (g_net_iface.ip_addr >> 8) & 255, g_net_iface.ip_addr & 255,
+              (g_net_iface.gateway >> 24) & 255, (g_net_iface.gateway >> 16) & 255,
+              (g_net_iface.gateway >> 8) & 255, g_net_iface.gateway & 255,
+              (g_net_iface.dns_server >> 24) & 255, (g_net_iface.dns_server >> 16) & 255,
+              (g_net_iface.dns_server >> 8) & 255, g_net_iface.dns_server & 255);
+    term_puts(line, COL_FG);
     term_newline();
-    term_puts("[5/5] CPython execution waits for linker + VFS + HTTPS work", COL_FG);
+    if (!g_net_iface.dhcp_done) {
+        term_puts("network blocker: DHCP has no lease yet", COL_ERR);
+        term_newline();
+    }
+}
+
+static void cmd_curl(const char *args) {
+    term_puts("curl: installed command stub, backend not ready", COL_ERR);
     term_newline();
-    term_puts("No fake interpreter is used. This starts the real CPython port path.", COL_PROMPT);
+    if (args && *args) {
+        term_puts("url: ", COL_FG);
+        term_puts(args, COL_FG);
+        term_newline();
+    }
+    cmd_net_status();
+    term_puts("missing: curl command ABI, encrypted HTTPS client, certificate validation", COL_ERR);
     term_newline();
-    kprintf("[PYTHON] installer launched from terminal: module=%p size=%lu\n", g_python_module, g_python_module_size);
+    kprintf("[CURL] blocked: args='%s' if_up=%d dhcp=%d ip=%lu\n",
+            args ? args : "", g_net_iface.is_up, g_net_iface.dhcp_done, g_net_iface.ip_addr);
+}
+
+static void cmd_git(const char *args) {
+    term_puts("git: installed command stub, backend not ready", COL_ERR);
+    term_newline();
+    term_puts("missing: exec/subprocess, encrypted HTTPS client, cert validation, packfile/storage support", COL_ERR);
+    term_newline();
+    kprintf("[GIT] blocked: args='%s' if_up=%d dhcp=%d\n",
+            args ? args : "", g_net_iface.is_up, g_net_iface.dhcp_done);
+}
+
+static void print_installer_status(const yam_installer_status_t *st) {
+    char line[192];
+    ksnprintf(line, sizeof(line), "%s: state=%u progress=%u%% missing=0x%x",
+              st->display_name, st->state, st->progress, st->missing);
+    term_puts(line, st->missing ? COL_ERR : COL_PROMPT);
+    term_newline();
+    term_puts("source: ", COL_FG);
+    term_puts(st->official_url, COL_FG);
+    term_newline();
+    term_puts("target: ", COL_FG);
+    term_puts(st->install_path, COL_FG);
+    term_newline();
+    term_puts(st->missing ? "blocked: " : "ready: ", st->missing ? COL_ERR : COL_PROMPT);
+    term_puts(st->message, st->missing ? COL_ERR : COL_PROMPT);
+    term_newline();
+}
+
+static void cmd_installer_status(void) {
+    yam_installer_status_t st;
+    int rc = installer_status("kernel-net", &st);
+    if (rc < 0) {
+        term_puts("installer: package database unavailable", COL_ERR);
+        term_newline();
+        return;
+    }
+    print_installer_status(&st);
+}
+
+static bool cmd_install_package(const char *package) {
+    if (!package || !*package) package = "kernel-net";
+    yam_installer_status_t st;
+    int rc = installer_request(package, &st);
+    print_installer_status(&st);
+    if (rc < 0 || st.missing) {
+        kprintf("[INSTALLER] terminal install request package='%s' blocked missing=0x%x msg='%s'\n",
+                package, st.missing, st.message);
+        return false;
+    }
+    kprintf("[INSTALLER] terminal install request package='%s' ready\n", package);
+    return true;
+}
+
+static bool cmd_kernel_probe(void) {
+    yam_installer_status_t st;
+    int rc = installer_request("kernel-net", &st);
+    term_puts("kernel-net: probing kernel network/cache capability", COL_PROMPT);
+    term_newline();
+    term_puts("probe: ", COL_FG);
+    term_puts(st.official_url, COL_FG);
+    term_newline();
+    if (rc < 0 || st.missing) {
+        term_puts("blocked: ", COL_ERR);
+        term_puts(st.message, COL_ERR);
+        term_newline();
+        term_puts("order: drivers -> network -> cache -> persistent storage", COL_FG);
+        term_newline();
+        kprintf("[KERNEL_PROBE] request blocked state=%u missing=0x%x msg='%s'\n",
+                st.state, st.missing, st.message);
+        return false;
+    }
+    term_puts("kernel capability probe ready", COL_PROMPT);
+    term_newline();
+    kprintf("[KERNEL_PROBE] request ready url='%s'\n", st.official_url);
+    return true;
 }
 
 static void process_command(void) {
@@ -200,6 +471,7 @@ static void process_command(void) {
     /* Skip leading spaces */
     char *cmd = input_buf;
     while (*cmd == ' ') cmd++;
+    history_add(cmd);
 
     if (*cmd == 0) {
         /* Empty command */
@@ -215,6 +487,31 @@ static void process_command(void) {
         cmd_neofetch();
     } else if (strcmp(cmd, "uptime") == 0) {
         cmd_uptime();
+    } else if (strcmp(cmd, "pwd") == 0) {
+        cmd_pwd();
+    } else if (strcmp(cmd, "cd") == 0) {
+        cmd_cd("/home/root");
+    } else if (strncmp(cmd, "cd ", 3) == 0) {
+        cmd_cd(cmd + 3);
+    } else if (strcmp(cmd, "history") == 0) {
+        cmd_history();
+    } else if (strcmp(cmd, "ls") == 0) {
+        cmd_ls(".");
+    } else if (strncmp(cmd, "ls ", 3) == 0) {
+        cmd_ls(cmd + 3);
+    } else if (strncmp(cmd, "cat ", 4) == 0) {
+        cmd_cat(cmd + 4);
+    } else if (strncmp(cmd, "mkdir ", 6) == 0) {
+        cmd_mkdir_term(cmd + 6);
+    } else if (strncmp(cmd, "touch ", 6) == 0) {
+        cmd_touch(cmd + 6);
+    } else if (strncmp(cmd, "rm ", 3) == 0) {
+        cmd_rm(cmd + 3);
+    } else if (strncmp(cmd, "write ", 6) == 0) {
+        cmd_write_file(cmd + 6);
+    } else if (strcmp(cmd, "ifconfig") == 0 || strcmp(cmd, "ip addr") == 0 ||
+               strcmp(cmd, "netstat") == 0 || strcmp(cmd, "network") == 0) {
+        cmd_net_status();
     } else if (strcmp(cmd, "ps") == 0) {
         term_puts("  PID  NAME         STATE", COL_PROMPT);
         term_newline();
@@ -230,20 +527,22 @@ static void process_command(void) {
         term_newline();
     } else if (strncmp(cmd, "echo ", 5) == 0) {
         cmd_echo(cmd + 5);
-    } else if (strcmp(cmd, "python") == 0 || strcmp(cmd, "python3") == 0 || strcmp(cmd, "py") == 0) {
-        cmd_python_install();
-    } else if (strcmp(cmd, "python --version") == 0 || strcmp(cmd, "python3 --version") == 0 || strcmp(cmd, "py --version") == 0) {
-        term_puts("Python 3.14.4 source vendored; CPython runtime not linked yet", COL_PROMPT);
-        term_newline();
-    } else if (strncmp(cmd, "python -c ", 10) == 0 || strncmp(cmd, "python3 -c ", 11) == 0 || strncmp(cmd, "py -c ", 6) == 0) {
-        cmd_python_install();
-        term_puts("Cannot execute Python code until CPython is ported.", COL_ERR);
-        term_newline();
-    } else if (strcmp(cmd, "pip") == 0 || strcmp(cmd, "pip3") == 0 ||
-               strncmp(cmd, "pip ", 4) == 0 || strncmp(cmd, "pip3 ", 5) == 0) {
-        cmd_python_install();
-        term_puts("pip install needs real CPython, HTTPS, writable storage, and package build support.", COL_ERR);
-        term_newline();
+    } else if (strcmp(cmd, "installer status") == 0 || strcmp(cmd, "install status") == 0) {
+        cmd_installer_status();
+    } else if (strcmp(cmd, "install") == 0) {
+        cmd_install_package("kernel-net");
+    } else if (strncmp(cmd, "install ", 8) == 0) {
+        cmd_install_package(cmd + 8);
+    } else if (strcmp(cmd, "kernel-net") == 0 || strcmp(cmd, "driver-probe") == 0) {
+        cmd_kernel_probe();
+    } else if (strcmp(cmd, "curl") == 0) {
+        cmd_curl("");
+    } else if (strncmp(cmd, "curl ", 5) == 0) {
+        cmd_curl(cmd + 5);
+    } else if (strcmp(cmd, "git") == 0) {
+        cmd_git("");
+    } else if (strncmp(cmd, "git ", 4) == 0) {
+        cmd_git(cmd + 4);
     } else {
         term_puts(cmd, COL_ERR);
         term_puts(": command not found", COL_ERR);
@@ -254,8 +553,16 @@ static void process_command(void) {
 }
 
 static void show_prompt(void) {
+    char cwd[256];
     term_puts("root@yam", COL_PROMPT);
-    term_puts(":~$ ", COL_FG);
+    if (sys_getcwd(cwd, sizeof(cwd)) >= 0) {
+        term_puts(":", COL_FG);
+        if (strcmp(cwd, "/home/root") == 0) term_puts("~", COL_FG);
+        else term_puts(cwd, COL_FG);
+    } else {
+        term_puts(":?", COL_FG);
+    }
+    term_puts("$ ", COL_FG);
 }
 
 static void draw_terminal(wl_surface_t *s) {
@@ -293,6 +600,7 @@ void wl_term_task(void *arg) {
     term_newline();
     term_puts("Type 'help' for available commands.", COL_FG);
     term_newline();
+    sys_chdir("/home/root");
     term_newline();
     show_prompt();
 
@@ -314,6 +622,22 @@ void wl_term_task(void *arg) {
                 }
 
                 if (ev.value != KEY_PRESSED) continue;
+
+                if (sc == 0x48 && history_count > 0) {
+                    if (history_pos > 0) history_pos--;
+                    replace_input_line(history[history_pos]);
+                    continue;
+                }
+                if (sc == 0x50 && history_count > 0) {
+                    if (history_pos + 1 < history_count) {
+                        history_pos++;
+                        replace_input_line(history[history_pos]);
+                    } else {
+                        history_pos = history_count;
+                        replace_input_line("");
+                    }
+                    continue;
+                }
 
                 /* Translate scancode to ASCII */
                 char c = 0;

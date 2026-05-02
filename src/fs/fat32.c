@@ -47,6 +47,13 @@ static u32 chain_extend(fat32_vol_t *v, u32 last) {
     if (c) fat_set_entry(v, last, c);
     return c;
 }
+static void free_chain(fat32_vol_t *v, u32 cluster) {
+    while (cluster < FAT32_EOC && cluster >= 2) {
+        u32 next = fat_entry(v, cluster);
+        fat_set_entry(v, cluster, FAT32_FREE);
+        cluster = next;
+    }
+}
 static void dirent_to_name(const fat32_dirent_t *de, char *out) {
     int j = 0;
     for (int i = 0; i < 8 && de->name[i] != ' '; i++) {
@@ -204,7 +211,7 @@ isize fat32_write_file(fat32_vol_t *vol, const char *path, const void *data, usi
     u32 first_cluster = 0;
     if (exists) {
         u32 c = ((u32)de.first_cluster_hi << 16) | de.first_cluster_lo;
-        while (c < FAT32_EOC && c >= 2) { u32 nx = fat_entry(vol, c); fat_set_entry(vol, c, FAT32_FREE); c = nx; }
+        free_chain(vol, c);
     }
     const u8 *src = (const u8 *)data; usize rem = size; u32 prev = 0;
     while (rem > 0) {
@@ -239,6 +246,45 @@ isize fat32_write_file(fat32_vol_t *vol, const char *path, const void *data, usi
         }
     }
     return (isize)size;
+}
+
+bool fat32_unlink(fat32_vol_t *vol, const char *path) {
+    if (!vol || !vol->mounted || !path || strcmp(path, "/") == 0) return false;
+
+    char parent_path[256] = "/";
+    char fname[128];
+    const char *last_slash = path;
+    for (const char *p = path; *p; p++) {
+        if (*p == '/') last_slash = p;
+    }
+    if (last_slash == path) {
+        strncpy(fname, path + 1, sizeof(fname) - 1);
+        fname[sizeof(fname) - 1] = 0;
+    } else {
+        usize pl = (usize)(last_slash - path);
+        if (pl >= sizeof(parent_path)) pl = sizeof(parent_path) - 1;
+        memcpy(parent_path, path, pl);
+        parent_path[pl] = 0;
+        strncpy(fname, last_slash + 1, sizeof(fname) - 1);
+        fname[sizeof(fname) - 1] = 0;
+    }
+    if (!fname[0]) return false;
+
+    fat32_dirent_t parent_de;
+    if (!resolve_path(vol, parent_path, &parent_de)) return false;
+    u32 parent_cluster = ((u32)parent_de.first_cluster_hi << 16) | parent_de.first_cluster_lo;
+
+    fat32_dirent_t de;
+    u32 dir_cl, dir_off;
+    if (!find_in_dir(vol, parent_cluster, fname, &de, &dir_cl, &dir_off)) return false;
+    if (de.attr & FAT_ATTR_DIRECTORY) return false;
+
+    u32 first_cluster = ((u32)de.first_cluster_hi << 16) | de.first_cluster_lo;
+    free_chain(vol, first_cluster);
+
+    fat32_dirent_t *slot = (fat32_dirent_t *)(cluster_ptr(vol, dir_cl) + dir_off);
+    slot->name[0] = 0xE5;
+    return true;
 }
 
 int fat32_readdir(fat32_vol_t *vol, const char *path, fat32_fileinfo_t *out, int max_entries) {

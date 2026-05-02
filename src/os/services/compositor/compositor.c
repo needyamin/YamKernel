@@ -24,23 +24,190 @@
 #include "wl_draw.h"
 #include <nexus/panic.h>
 #include "fs/elf.h"
+#include "fs/vfs.h"
 #include "../../dev/vtty.h"
 
 extern void *g_wallpaper_module;
-extern void *g_calc_module;
-extern usize g_calc_module_size;
-extern void *g_term_module;
-extern usize g_term_module_size;
-extern void *g_browser_module;
-extern usize g_browser_module_size;
-extern void *g_python_module;
-extern usize g_python_module_size;
 extern void wl_term_task(void *);
 extern void wl_browser_task(void *);
 extern void wl_calc_task(void *);
 
 wl_compositor_t g_compositor;
 static u32 g_next_surface_id = 1;
+static char g_wl_clipboard[1024];
+static usize g_wl_clipboard_len = 0;
+
+#define WL_PROFILE_PATH "/var/lib/yamos/system.pro"
+
+static void copy_text(char *dst, usize cap, const char *src) {
+    if (!dst || cap == 0) return;
+    if (!src) src = "";
+    usize i = 0;
+    while (src[i] && i + 1 < cap) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = 0;
+}
+
+void wl_password_hash(const char *password, char out[32]) {
+    u64 h = 1469598103934665603ULL;
+    const unsigned char *p = (const unsigned char *)(password ? password : "");
+    while (*p) {
+        h ^= (u64)*p++;
+        h *= 1099511628211ULL;
+    }
+    ksnprintf(out, 32, "fnv1a:%lx", h);
+}
+
+void wl_compositor_add_account_hash(const char *username, const char *password_hash,
+                                    const char *display_name, bool admin) {
+    if (!username || !*username || !password_hash || !*password_hash) return;
+    for (u32 i = 0; i < g_compositor.user_count; i++) {
+        if (g_compositor.users[i].active &&
+            strcmp(g_compositor.users[i].username, username) == 0) {
+            copy_text(g_compositor.users[i].password, sizeof(g_compositor.users[i].password), password_hash);
+            copy_text(g_compositor.users[i].display_name, sizeof(g_compositor.users[i].display_name), display_name);
+            g_compositor.users[i].admin = admin;
+            return;
+        }
+    }
+    if (g_compositor.user_count >= YAM_MAX_USERS) return;
+    yam_user_account_t *u = &g_compositor.users[g_compositor.user_count++];
+    memset(u, 0, sizeof(*u));
+    copy_text(u->username, sizeof(u->username), username);
+    copy_text(u->password, sizeof(u->password), password_hash);
+    copy_text(u->display_name, sizeof(u->display_name), display_name);
+    u->admin = admin;
+    u->active = true;
+}
+
+void wl_compositor_add_account(const char *username, const char *password,
+                               const char *display_name, bool admin) {
+    char hash[32];
+    wl_password_hash(password, hash);
+    wl_compositor_add_account_hash(username, hash, display_name, admin);
+}
+
+static const char *line_after(const char *line, const char *prefix) {
+    usize n = strlen(prefix);
+    return strncmp(line, prefix, n) == 0 ? line + n : NULL;
+}
+
+static void read_field(char **p, char *out, usize cap) {
+    if (!p || !*p) return;
+    char *s = *p;
+    usize i = 0;
+    while (*s && *s != '|' && *s != '\n' && *s != '\r') {
+        if (i + 1 < cap) out[i++] = *s;
+        s++;
+    }
+    out[i] = 0;
+    if (*s == '|') s++;
+    *p = s;
+}
+
+static void load_profile_line(char *line) {
+    const char *value = line_after(line, "computer=");
+    if (value) {
+        copy_text(g_compositor.computer_name, sizeof(g_compositor.computer_name), value);
+        copy_text(g_compositor.setup_computer, sizeof(g_compositor.setup_computer), value);
+        return;
+    }
+
+    value = line_after(line, "login=");
+    if (value) {
+        copy_text(g_compositor.login_user, sizeof(g_compositor.login_user), value);
+        return;
+    }
+
+    char *user = (char *)line_after(line, "user=");
+    if (user) {
+        char name[32], hash[32], display[32], admin_text[8];
+        read_field(&user, name, sizeof(name));
+        read_field(&user, hash, sizeof(hash));
+        read_field(&user, display, sizeof(display));
+        read_field(&user, admin_text, sizeof(admin_text));
+        wl_compositor_add_account_hash(name, hash, display[0] ? display : name,
+                                       strcmp(admin_text, "1") == 0);
+    }
+}
+
+bool wl_compositor_load_profile(void) {
+    int fd = sys_open(WL_PROFILE_PATH, 0);
+    if (fd < 0) return false;
+
+    char buf[2048];
+    isize n = sys_read(fd, buf, sizeof(buf) - 1);
+    sys_close(fd);
+    if (n <= 0) return false;
+    buf[n] = 0;
+
+    g_compositor.user_count = 0;
+    char line[256];
+    usize pos = 0;
+    for (isize i = 0; i <= n; i++) {
+        char c = buf[i];
+        if (c == '\n' || c == 0) {
+            line[pos] = 0;
+            if (pos > 0) load_profile_line(line);
+            pos = 0;
+        } else if (c != '\r' && pos + 1 < sizeof(line)) {
+            line[pos++] = c;
+        }
+    }
+
+    if (g_compositor.user_count == 0) return false;
+    g_compositor.setup_complete = true;
+    g_compositor.setup_persisted = true;
+    g_compositor.state = COMPOSITOR_STATE_LOGIN;
+    g_compositor.login_pass[0] = 0;
+    g_compositor.login_focus_pass = false;
+    g_compositor.login_failed = false;
+    g_compositor.current_user[0] = 0;
+    if (g_compositor.login_user[0] == 0) {
+        copy_text(g_compositor.login_user, sizeof(g_compositor.login_user),
+                  g_compositor.users[0].username);
+    }
+    kprintf("[SETUP] Loaded persisted profile: computer='%s' users=%u login='%s'\n",
+            g_compositor.computer_name, g_compositor.user_count, g_compositor.login_user);
+    return true;
+}
+
+bool wl_compositor_save_profile(void) {
+    sys_mkdir("/var/lib", 0755);
+    sys_mkdir("/var/lib/yamos", 0755);
+
+    int fd = sys_open(WL_PROFILE_PATH, 0x40 | 0x0200 | 0x0001);
+    if (fd < 0) {
+        kprintf("[SETUP] profile save failed: open %s\n", WL_PROFILE_PATH);
+        return false;
+    }
+
+    char buf[2048];
+    usize pos = 0;
+    pos += ksnprintf(buf + pos, sizeof(buf) - pos,
+                     "version=1\ncomputer=%s\nlogin=%s\n",
+                     g_compositor.computer_name,
+                     g_compositor.login_user[0] ? g_compositor.login_user : "root");
+    for (u32 i = 0; i < g_compositor.user_count && pos + 96 < sizeof(buf); i++) {
+        yam_user_account_t *u = &g_compositor.users[i];
+        if (!u->active) continue;
+        pos += ksnprintf(buf + pos, sizeof(buf) - pos, "user=%s|%s|%s|%u\n",
+                         u->username, u->password, u->display_name, u->admin ? 1 : 0);
+    }
+
+    isize written = sys_write(fd, buf, pos);
+    sys_close(fd);
+    if (written != (isize)pos) {
+        kprintf("[SETUP] profile save failed: wrote=%ld expected=%lu\n", written, pos);
+        return false;
+    }
+    g_compositor.setup_persisted = true;
+    kprintf("[SETUP] profile saved: %s users=%u bytes=%lu\n",
+            WL_PROFILE_PATH, g_compositor.user_count, pos);
+    return true;
+}
 
 static u32 wl_debug_checksum(const u32 *pixels, u32 total_pixels) {
     if (!pixels || total_pixels == 0) return 0;
@@ -74,8 +241,8 @@ void wl_compositor_init(void) {
     g_compositor.running = true;
     g_compositor.dragging = false;
     
-    /* First-boot setup and login state. This is in-memory until a writable
-     * system volume is mounted for /etc/passwd-style persistence. */
+    /* First-boot setup and login state. Load persistent profile if /var is
+     * backed by the system volume; otherwise fall back to setup mode. */
     g_compositor.state = COMPOSITOR_STATE_SETUP;
     strcpy(g_compositor.computer_name, "yamos-pc");
     strcpy(g_compositor.setup_computer, "yamos-pc");
@@ -84,6 +251,7 @@ void wl_compositor_init(void) {
     g_compositor.setup_focus = 0;
     g_compositor.setup_failed = false;
     g_compositor.setup_complete = false;
+    g_compositor.setup_persisted = false;
     g_compositor.user_count = 0;
     strcpy(g_compositor.login_user, "root");
     g_compositor.login_pass[0] = '\0';
@@ -92,12 +260,36 @@ void wl_compositor_init(void) {
     g_compositor.current_user[0] = '\0';
     strcpy(g_compositor.current_user, "setup");
 
-    kprintf_color(0xFF00DDFF, "[WAYLAND] Compositor initialized at %ux%u (Mode: FIRST-BOOT SETUP)\n",
-                  mode.width, mode.height);
+    if (wl_compositor_load_profile()) {
+        kprintf_color(0xFF00DDFF, "[WAYLAND] Compositor initialized at %ux%u (Mode: LOGIN, persisted setup)\n",
+                      mode.width, mode.height);
+    } else {
+        kprintf_color(0xFF00DDFF, "[WAYLAND] Compositor initialized at %ux%u (Mode: FIRST-BOOT SETUP)\n",
+                      mode.width, mode.height);
+    }
 }
 
 wl_compositor_t *wl_get_compositor(void) {
     return &g_compositor;
+}
+
+isize wl_clipboard_set_text(const char *text, usize len) {
+    if (!text) return -1;
+    if (len >= sizeof(g_wl_clipboard)) len = sizeof(g_wl_clipboard) - 1;
+    memcpy(g_wl_clipboard, text, len);
+    g_wl_clipboard[len] = 0;
+    g_wl_clipboard_len = len;
+    kprintf("[CLIPBOARD] compositor text set len=%lu\n", len);
+    return (isize)len;
+}
+
+isize wl_clipboard_get_text(char *out, usize cap) {
+    if (!out || cap == 0) return -1;
+    usize n = g_wl_clipboard_len;
+    if (n + 1 > cap) n = cap - 1;
+    memcpy(out, g_wl_clipboard, n);
+    out[n] = 0;
+    return (isize)n;
 }
 
 wl_surface_t *wl_surface_create(const char *title, i32 x, i32 y, u32 w, u32 h, u64 owner) {
@@ -129,6 +321,9 @@ wl_surface_t *wl_surface_create(const char *title, i32 x, i32 y, u32 w, u32 h, u
     s->title_bg     = 0xFF222233;
     s->title_fg     = 0xFFFFFFFF;
     s->focused      = false;
+    s->maximized    = false;
+    s->restore_x    = x;
+    s->restore_y    = y;
     
     /* Init animation state */
     s->anim_scale   = 50;  /* 50% */

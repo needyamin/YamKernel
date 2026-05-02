@@ -109,8 +109,10 @@ int dns_resolve(const char *hostname, u32 *ip_out) {
     udp_sendto(sock, buf, query_len, g_net_iface.dns_server, DNS_PORT);
 
     /* Wait for response (up to 3s) */
-    for (int i = 0; i < 3000000 && !g_dns_done; i++)
+    for (int i = 0; i < 3000000 && !g_dns_done; i++) {
+        if ((i % 1000) == 0) net_poll();
         __asm__ volatile("pause");
+    }
 
     if (!g_dns_done || !g_dns_result) return -1;
     *ip_out = g_dns_result;

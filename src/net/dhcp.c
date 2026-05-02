@@ -38,6 +38,7 @@ static u32  g_dhcp_xid     = 0xBEEF1234;
 static u32  g_dhcp_offered = 0;
 static u32  g_dhcp_server  = 0;
 static bool g_dhcp_done    = false;
+static bool g_dhcp_request_sent = false;
 
 static void dhcp_build_options(u8 *opts, u8 msg_type, u32 requested_ip, u32 server_ip) {
     int i = 0;
@@ -69,6 +70,11 @@ static void dhcp_build_options(u8 *opts, u8 msg_type, u32 requested_ip, u32 serv
 }
 
 static void dhcp_send(u8 msg_type, u32 requested_ip, u32 server_ip) {
+    if (!g_net_iface.is_up || !g_net_iface.send) {
+        kprintf_color(0xFFFF8800, "[DHCP] Cannot send: network interface is down\n");
+        return;
+    }
+
     dhcp_pkt_t pkt;
     memset(&pkt, 0, sizeof(pkt));
     pkt.op    = 1; /* BOOTREQUEST */
@@ -83,6 +89,7 @@ static void dhcp_send(u8 msg_type, u32 requested_ip, u32 server_ip) {
     int sock = udp_socket();
     udp_bind(sock, DHCP_CLIENT_PORT);
     udp_sendto(sock, &pkt, sizeof(pkt), 0xFFFFFFFF, DHCP_SERVER_PORT);
+    kprintf("[DHCP] TX message type=%u xid=0x%x\n", msg_type, g_dhcp_xid);
 }
 
 void dhcp_receive(u32 src_ip, u16 src_port, const void *data, usize len) {
@@ -111,6 +118,7 @@ void dhcp_receive(u32 src_ip, u16 src_port, const void *data, usize len) {
     u32 offered_ip = ntohl(pkt->yiaddr);
 
     if (msg_type == DHCP_OFFER) {
+        if (g_dhcp_request_sent) return;
         g_dhcp_offered = offered_ip;
         g_dhcp_server  = src_ip;
         kprintf_color(0xFF00DDFF, "[DHCP] OFFER: %u.%u.%u.%u from server %u.%u.%u.%u\n",
@@ -118,6 +126,7 @@ void dhcp_receive(u32 src_ip, u16 src_port, const void *data, usize len) {
                       (offered_ip>>8)&0xFF,   offered_ip&0xFF,
                       (src_ip>>24)&0xFF, (src_ip>>16)&0xFF, (src_ip>>8)&0xFF, src_ip&0xFF);
         /* Send REQUEST */
+        g_dhcp_request_sent = true;
         dhcp_send(DHCP_REQUEST, g_dhcp_offered, g_dhcp_server);
     } else if (msg_type == DHCP_ACK) {
         g_net_iface.ip_addr    = offered_ip;
@@ -141,11 +150,17 @@ void net_dhcp_init(void) {
 }
 
 void dhcp_start(void) {
+    g_dhcp_offered = 0;
+    g_dhcp_server = 0;
+    g_dhcp_done = false;
+    g_dhcp_request_sent = false;
     kprintf_color(0xFF00DDFF, "[DHCP] Sending DISCOVER...\n");
     dhcp_send(DHCP_DISCOVER, 0, 0);
     /* Wait up to 5 seconds */
-    for (int i = 0; i < 5000000 && !g_dhcp_done; i++)
+    for (int i = 0; i < 5000000 && !g_dhcp_done; i++) {
+        if ((i % 1000) == 0) net_poll();
         __asm__ volatile("pause");
+    }
     if (!g_dhcp_done)
         kprintf_color(0xFFFF8800, "[DHCP] Timeout — no server responded\n");
 }

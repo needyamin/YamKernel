@@ -6,6 +6,7 @@
 #include "../../lib/kprintf.h"
 #include "../../lib/string.h"
 #include "../../fs/vfs.h"
+#include "../services/installer/installer.h"
 
 extern void dhcp_start(void);
 extern void vtty_init(void);
@@ -37,6 +38,11 @@ static void init_net_task(void *arg) {
     kprintf_color(0xFF00DDFF, "[INIT] Starting network...\n");
     dhcp_start();
     kprintf_color(0xFF00FF88, "[INIT] Network ready\n");
+    yam_installer_status_t st;
+    if (installer_request("kernel-net", &st) < 0) {
+        kprintf("[INIT] kernel capability refresh: missing=0x%x blocker='%s'\n",
+                st.missing, st.message);
+    }
     /* Task exits after setup */
 }
 

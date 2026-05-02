@@ -45,6 +45,8 @@ typedef struct wl_surface {
     u32                 title_bg;
     u32                 title_fg;
     bool                focused;
+    bool                maximized;
+    i32                 restore_x, restore_y;
     
     /* Owner task ID */
     u64                 owner_task_id;
@@ -102,6 +104,7 @@ typedef struct wl_compositor {
     u8              setup_focus;       /* 0 computer, 1 user, 2 password */
     bool            setup_failed;
     bool            setup_complete;
+    bool            setup_persisted;
     char            current_user[32];
     char            computer_name[32];
     yam_user_account_t users[YAM_MAX_USERS];
@@ -130,6 +133,8 @@ typedef struct wl_compositor {
     bool            show_power_menu;
     bool            show_debug_overlay;
     u8              desktop_menu_open;  /* 0 none, 1 File, 2 View, 3 Window */
+    bool            calendar_open;
+    bool            quick_settings_open;
     bool            context_menu_open;
     i32             context_x, context_y;
     u32             context_surface_id;
@@ -137,6 +142,13 @@ typedef struct wl_compositor {
 
 /* Initialize the Wayland compositor */
 void wl_compositor_init(void);
+void wl_compositor_add_account(const char *username, const char *password,
+                               const char *display_name, bool admin);
+void wl_compositor_add_account_hash(const char *username, const char *password_hash,
+                                    const char *display_name, bool admin);
+bool wl_compositor_save_profile(void);
+bool wl_compositor_load_profile(void);
+void wl_password_hash(const char *password, char out[32]);
 
 /* Create a new surface for a client */
 wl_surface_t *wl_surface_create(const char *title, i32 x, i32 y, u32 w, u32 h, u64 owner);
@@ -156,6 +168,8 @@ void wl_surface_focus(wl_surface_t *surface);
 
 /* The compositor render loop (runs as a kernel task) */
 void wl_compositor_task(void *arg);
+isize wl_clipboard_set_text(const char *text, usize len);
+isize wl_clipboard_get_text(char *out, usize cap);
 
 /* Get a surface's pixel buffer for client rendering */
 u32 *wl_surface_get_pixels(wl_surface_t *surface);

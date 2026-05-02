@@ -82,6 +82,7 @@ typedef struct task {
     u8           *stack;
     u8           *fpu_state;
     struct file  *fd_table[128];
+    char          cwd[256];
     struct vma   *vma_head;
     u64          *pml4;
 

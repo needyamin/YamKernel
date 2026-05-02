@@ -5,6 +5,8 @@
 #include "drivers/input/evdev.h"
 #include "drivers/video/framebuffer.h"
 #include "drivers/timer/rtc.h"
+#include "drivers/audio/audio.h"
+#include "net/net.h"
 #include "sched/sched.h"
 #include "sched/wait.h"
 #include "mem/heap.h"

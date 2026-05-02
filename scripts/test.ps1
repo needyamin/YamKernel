@@ -5,6 +5,7 @@
 #   .\scripts\test.ps1              Build + run with graphical QEMU window
 #   .\scripts\test.ps1 serial       Build + run with serial log
 #   .\scripts\test.ps1 headless     Build + run headless (serial on terminal)
+#   .\scripts\test.ps1 verify       Build + bounded boot, then print debug log evidence
 #   .\scripts\test.ps1 debug        Build + run with GDB server on :1234
 # ============================================================================
 
@@ -33,6 +34,10 @@ switch ($Mode) {
     "headless" {
         Write-Host "[HEADLESS] Serial output on this terminal. Ctrl+A X to quit." -ForegroundColor Yellow
         wsl -d Ubuntu -- bash -c "cd '$WslRepoPath' && make run-serial-only"
+    }
+    "verify" {
+        Write-Host "[VERIFY] Running bounded boot with serial debug log -> build/verify.log" -ForegroundColor Yellow
+        wsl -d Ubuntu -- bash -c "cd '$WslRepoPath' && make verify-log"
     }
     "debug" {
         Write-Host "[DEBUG] QEMU frozen, waiting for GDB on localhost:1234" -ForegroundColor Yellow

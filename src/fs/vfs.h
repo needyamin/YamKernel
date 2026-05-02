@@ -50,6 +50,12 @@ typedef struct file {
     void              *private_data; /* pipe/socket specific data */
 } file_t;
 
+typedef struct {
+    char name[192];
+    usize size;
+    bool is_dir;
+} vfs_dirent_t;
+
 void vfs_init(void);
 
 void vfs_mount(const char *device, const char *mount_point, const char *fs_type);
@@ -64,6 +70,11 @@ int    sys_open(const char *pathname, u32 flags);
 int    sys_close(int fd);
 int    sys_dup(int fd);
 int    sys_dup2(int oldfd, int newfd);
+int    sys_mkdir(const char *pathname, u32 mode);
+int    sys_unlink(const char *pathname);
+int    sys_readdir(const char *pathname, u32 index, vfs_dirent_t *out);
+int    sys_chdir(const char *pathname);
+isize  sys_getcwd(char *buf, usize size);
 isize  sys_read(int fd, void *buf, usize count);
 isize  sys_write(int fd, const void *buf, usize count);
 isize  sys_lseek(int fd, isize offset, int whence);

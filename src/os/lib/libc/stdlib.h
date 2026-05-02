@@ -2,6 +2,7 @@
 #define _LIBC_STDLIB_H
 
 #include <nexus/types.h>
+#include "wchar.h"
 
 void  *malloc(usize size);
 void   free(void *ptr);
@@ -15,10 +16,15 @@ unsigned long strtoul(const char *s, char **end, int base);
 long long strtoll(const char *s, char **end, int base);
 unsigned long long strtoull(const char *s, char **end, int base);
 double strtod(const char *s, char **end);
+usize mbstowcs(wchar_t *dest, const char *src, usize n);
+usize wcstombs(char *dest, const wchar_t *src, usize n);
 
 char  *getenv(const char *name);
 int    setenv(const char *name, const char *value, int overwrite);
 int    unsetenv(const char *name);
+char  *realpath(const char *path, char *resolved_path);
+int    atexit(void (*func)(void));
+int    system(const char *command);
 
 void   qsort(void *base, usize nmemb, usize size,
              int (*compar)(const void *, const void *));

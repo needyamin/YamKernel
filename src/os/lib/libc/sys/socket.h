@@ -7,6 +7,8 @@
 #define AF_INET  2
 #define SOCK_STREAM 1
 #define SOCK_DGRAM  2
+#define IPPROTO_TCP 6
+#define IPPROTO_UDP 17
 
 typedef unsigned int  socklen_t;
 typedef unsigned short sa_family_t;
@@ -53,9 +55,19 @@ static inline int accept(int fd, struct sockaddr *addr, socklen_t *len) {
 }
 static inline long send(int fd, const void *buf, unsigned long len, int flags) {
     (void)flags;
-    return (long)syscall3(SYS_WRITE, (u64)fd, (u64)buf, (u64)len);
+    return (long)syscall3(SYS_WRITE_FD, (u64)fd, (u64)buf, (u64)len);
 }
 static inline long recv(int fd, void *buf, unsigned long len, int flags) {
     (void)flags;
     return (long)syscall3(SYS_READ, (u64)fd, (u64)buf, (u64)len);
+}
+static inline long sendto(int fd, const void *buf, unsigned long len, int flags,
+                          const struct sockaddr *addr, socklen_t addrlen) {
+    return (long)syscall6(SYS_SENDTO, (u64)fd, (u64)buf, (u64)len,
+                          (u64)flags, (u64)addr, (u64)addrlen);
+}
+static inline long recvfrom(int fd, void *buf, unsigned long len, int flags,
+                            struct sockaddr *addr, socklen_t *addrlen) {
+    return (long)syscall6(SYS_RECVFROM, (u64)fd, (u64)buf, (u64)len,
+                          (u64)flags, (u64)addr, (u64)addrlen);
 }

@@ -247,6 +247,8 @@ u32 yamgraph_edge_count(void) { return active_edges; }
 
 void yamgraph_self_test(void) {
     kprintf_color(0xFFFFDD00, "\n[YAMGRAPH] === Resource Graph Self-Test ===\n");
+    u32 base_nodes = yamgraph_node_count();
+    u32 base_edges = yamgraph_edge_count();
 
     /* Test 1: Create nodes */
     yam_node_id_t task1 = yamgraph_node_create(YAM_NODE_TASK,    "init",    NULL);
@@ -255,7 +257,9 @@ void yamgraph_self_test(void) {
     yam_node_id_t chan1 = yamgraph_node_create(YAM_NODE_CHANNEL, "ipc0",    NULL);
 
     kprintf("[YAMGRAPH] Test 1 - Create 4 nodes: %s (nodes=%u)\n",
-            (task1 != (yam_node_id_t)-1 && yamgraph_node_count() == 5) ? "PASS" : "FAIL",
+            (task1 != (yam_node_id_t)-1 && mem1 != (yam_node_id_t)-1 &&
+             dev1 != (yam_node_id_t)-1 && chan1 != (yam_node_id_t)-1 &&
+             yamgraph_node_count() == base_nodes + 4) ? "PASS" : "FAIL",
             yamgraph_node_count());
 
     /* Test 2: Link edges with capabilities */
@@ -266,7 +270,8 @@ void yamgraph_self_test(void) {
                                            YAM_PERM_READ | YAM_PERM_WRITE);
 
     kprintf("[YAMGRAPH] Test 2 - Link 3 edges: %s (edges=%u)\n",
-            (e1 != (yam_edge_id_t)-1 && e3 != (yam_edge_id_t)-1 && yamgraph_edge_count() == 3) ? "PASS" : "FAIL",
+            (e1 != (yam_edge_id_t)-1 && e2 != (yam_edge_id_t)-1 &&
+             e3 != (yam_edge_id_t)-1 && yamgraph_edge_count() == base_edges + 3) ? "PASS" : "FAIL",
             yamgraph_edge_count());
 
     /* Test 3: Permission check */

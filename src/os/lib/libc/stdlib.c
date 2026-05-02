@@ -4,6 +4,7 @@
  * ============================================================================ */
 #include "stdlib.h"
 #include "string.h"
+#include "wchar.h"
 #include "errno.h"
 #include "../libyam/syscall.h"
 
@@ -202,6 +203,30 @@ double strtod(const char *s, char **end) {
     return sign * value;
 }
 
+usize mbstowcs(wchar_t *dest, const char *src, usize n) {
+    usize i = 0;
+    if (!src) return 0;
+    if (!dest) {
+        while (src[i]) i++;
+        return i;
+    }
+    for (; i < n && src[i]; i++) dest[i] = (unsigned char)src[i];
+    if (i < n) dest[i] = 0;
+    return i;
+}
+
+usize wcstombs(char *dest, const wchar_t *src, usize n) {
+    usize i = 0;
+    if (!src) return 0;
+    if (!dest) {
+        while (src[i]) i++;
+        return i;
+    }
+    for (; i < n && src[i]; i++) dest[i] = (char)(src[i] & 0xff);
+    if (i < n) dest[i] = 0;
+    return i;
+}
+
 typedef struct {
     const char *name;
     char value[128];
@@ -211,8 +236,6 @@ typedef struct {
 static env_slot_t g_env[16] = {
     { "PATH", "/bin:/usr/bin", true },
     { "HOME", "/home/root", true },
-    { "PYTHONHOME", "/usr", true },
-    { "PYTHONPATH", "/usr/lib/python3.14", true },
 };
 
 static bool env_name_eq(const char *a, const char *b) {
@@ -269,6 +292,34 @@ int unsetenv(const char *name) {
         }
     }
     return 0;
+}
+
+char *realpath(const char *path, char *resolved_path) {
+    if (!path) {
+        errno = EINVAL;
+        return NULL;
+    }
+    if (!resolved_path) {
+        usize len = strlen(path) + 1;
+        resolved_path = (char *)malloc(len);
+        if (!resolved_path) {
+            errno = ENOMEM;
+            return NULL;
+        }
+    }
+    strcpy(resolved_path, path);
+    return resolved_path;
+}
+
+int atexit(void (*func)(void)) {
+    (void)func;
+    return 0;
+}
+
+int system(const char *command) {
+    (void)command;
+    errno = ENOSYS;
+    return -1;
 }
 
 /* ---- qsort (non-recursive introsort simplified as insertion sort for small N) ---- */
