@@ -2,6 +2,8 @@
  * YamKernel — Networking Stack Framework
  * ============================================================================ */
 #include "net.h"
+#include "../drivers/bluetooth/hci_usb.h"
+#include "../drivers/net/iwlwifi.h"
 #include "../lib/kprintf.h"
 #include "../nexus/graph.h"
 
@@ -9,8 +11,6 @@ static net_interface_t loopback_if;
 
 void e1000_init(void);
 void e1000_poll(void);
-void iwlwifi_init(void);
-void hci_init(void);
 
 void net_init(void) {
     kprintf_color(0xFF00DDFF, "[NET] Initializing Network Protocol Stack...\n");

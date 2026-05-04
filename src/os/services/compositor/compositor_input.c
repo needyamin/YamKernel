@@ -8,6 +8,11 @@ extern void wl_term_task(void *);
 extern void wl_browser_task(void *);
 extern void wl_calc_task(void *);
 extern void wl_file_manager_task(void *);
+extern void wl_wifi_settings_task(void *);
+extern void wl_bluetooth_settings_task(void *);
+extern void wl_network_settings_task(void *);
+extern void wl_sound_settings_task(void *);
+extern void wl_display_settings_task(void *);
 
 static wl_surface_t *focused_surface(void) {
     for (int i = 0; i < WL_MAX_SURFACES; i++) {
@@ -34,7 +39,42 @@ static void surface_frame_rect(wl_surface_t *s, i32 *x, i32 *y, i32 *w, i32 *h) 
     }
 }
 
-static void desktop_bar_regions(i32 *status_x, i32 *clock_x) {
+static bool focus_existing_window(const char *title) {
+    for (int i = 0; i < WL_MAX_SURFACES; i++) {
+        wl_surface_t *s = &g_compositor.surfaces[i];
+        if ((s->state == WL_SURFACE_ACTIVE || s->state == WL_SURFACE_MINIMIZED) &&
+            strcmp(s->title, title) == 0) {
+            if (s->state == WL_SURFACE_MINIMIZED) {
+                s->state = WL_SURFACE_ACTIVE;
+            }
+            wl_surface_focus(s);
+            kprintf("[WAYLAND] focused existing '%s' window\n", title);
+            return true;
+        }
+    }
+    return false;
+}
+
+static void open_or_focus_window(const char *title, const char *task_name,
+                                 void (*entry)(void *)) {
+    if (focus_existing_window(title)) return;
+    sched_spawn(task_name, entry, NULL, 2);
+}
+
+typedef struct {
+    i32 sound_x, sound_w;
+    i32 net_x, net_w;
+    i32 wifi_x, wifi_w;
+    i32 bt_x, bt_w;
+    i32 clock_x;
+    bool show_wifi;
+    bool show_bt;
+} tray_regions_t;
+
+static tray_regions_t desktop_tray_regions(void) {
+    tray_regions_t r;
+    memset(&r, 0, sizeof(r));
+
     i32 dw = (i32)g_compositor.display_w;
     i32 tray_right = dw - 12;
     i32 left_limit = 372;
@@ -42,34 +82,49 @@ static void desktop_bar_regions(i32 *status_x, i32 *clock_x) {
     i32 sound_w = 70;
     i32 net_w = 94;
     i32 wifi_w = 78;
+    i32 bt_w = 58;
     i32 clock_w = 150;
     bool show_wifi = true;
+    bool show_bt = true;
 
-    i32 tray_w = sound_w + net_w + wifi_w + clock_w + gap * 3;
+    i32 tray_w = sound_w + net_w + wifi_w + bt_w + clock_w + gap * 4;
     if (tray_w > tray_right - left_limit) {
         sound_w = 54;
         net_w = 68;
         wifi_w = 58;
+        bt_w = 42;
         clock_w = 126;
+        tray_w = sound_w + net_w + wifi_w + bt_w + clock_w + gap * 4;
+    }
+    if (tray_w > tray_right - left_limit) {
+        show_bt = false;
+        sound_w = 46;
+        net_w = 58;
+        wifi_w = 52;
+        clock_w = 116;
         tray_w = sound_w + net_w + wifi_w + clock_w + gap * 3;
     }
     if (tray_w > tray_right - left_limit) {
         show_wifi = false;
-        sound_w = 46;
-        net_w = 58;
-        clock_w = 116;
         tray_w = sound_w + net_w + clock_w + gap * 2;
     }
 
     i32 tray_x = tray_right - tray_w;
     if (tray_x < left_limit) tray_x = left_limit;
-    if (status_x) *status_x = tray_x;
-    if (clock_x) {
-        i32 net_x = tray_x + sound_w + gap;
-        i32 wifi_x = net_x + net_w + gap;
-        *clock_x = show_wifi ? (wifi_x + wifi_w + gap) : (net_x + net_w + gap);
-    }
-    (void)clock_w;
+
+    r.sound_x = tray_x;
+    r.sound_w = sound_w;
+    r.net_x = r.sound_x + sound_w + gap;
+    r.net_w = net_w;
+    r.wifi_x = r.net_x + net_w + gap;
+    r.wifi_w = wifi_w;
+    r.bt_x = r.wifi_x + wifi_w + gap;
+    r.bt_w = bt_w;
+    r.clock_x = show_wifi ? (show_bt ? (r.bt_x + bt_w + gap) : (r.wifi_x + wifi_w + gap))
+                          : (r.net_x + net_w + gap);
+    r.show_wifi = show_wifi;
+    r.show_bt = show_bt;
+    return r;
 }
 
 static void toggle_surface_maximize(wl_surface_t *s) {
@@ -464,7 +519,6 @@ void wl_compositor_process_input(void) {
                         g_compositor.desktop_menu_open = 0;
                         g_compositor.show_power_menu = false;
                         g_compositor.calendar_open = false;
-                        g_compositor.quick_settings_open = false;
                         kprintf("[CLIPBOARD] context menu open at %d,%d\n",
                                 g_compositor.context_x, g_compositor.context_y);
                         continue;
@@ -493,43 +547,65 @@ void wl_compositor_process_input(void) {
                     }
 
                     if (is_left_btn && ev.value == KEY_PRESSED && g_compositor.cursor_y >= 0 && g_compositor.cursor_y < 34) {
-                        i32 status_x = 0;
-                        i32 clock_x = 0;
-                        desktop_bar_regions(&status_x, &clock_x);
-                        if (g_compositor.cursor_x >= clock_x) {
+                        tray_regions_t tray = desktop_tray_regions();
+                        if (g_compositor.cursor_x >= tray.clock_x) {
                             g_compositor.calendar_open = !g_compositor.calendar_open;
-                            g_compositor.quick_settings_open = false;
                             g_compositor.desktop_menu_open = 0;
                             g_compositor.show_power_menu = false;
                             kprintf("[DESKTOP] calendar %s\n", g_compositor.calendar_open ? "open" : "closed");
                             continue;
                         }
-                        if (g_compositor.cursor_x >= status_x && g_compositor.cursor_x < clock_x) {
-                            g_compositor.quick_settings_open = !g_compositor.quick_settings_open;
+                        if (g_compositor.cursor_x >= tray.sound_x &&
+                            g_compositor.cursor_x < tray.sound_x + tray.sound_w) {
+                            open_or_focus_window("Sound Settings", "wl-sound-settings", wl_sound_settings_task);
                             g_compositor.calendar_open = false;
                             g_compositor.desktop_menu_open = 0;
                             g_compositor.show_power_menu = false;
-                            kprintf("[DESKTOP] quick settings %s\n", g_compositor.quick_settings_open ? "open" : "closed");
+                            kprintf("[DESKTOP] opening Sound Settings from tray\n");
+                            continue;
+                        }
+                        if (g_compositor.cursor_x >= tray.net_x &&
+                            g_compositor.cursor_x < tray.net_x + tray.net_w) {
+                            open_or_focus_window("Ethernet Settings", "wl-net-settings", wl_network_settings_task);
+                            g_compositor.calendar_open = false;
+                            g_compositor.desktop_menu_open = 0;
+                            g_compositor.show_power_menu = false;
+                            kprintf("[DESKTOP] opening Ethernet Settings from tray\n");
+                            continue;
+                        }
+                        if (tray.show_wifi && g_compositor.cursor_x >= tray.wifi_x &&
+                            g_compositor.cursor_x < tray.wifi_x + tray.wifi_w) {
+                            open_or_focus_window("Wi-Fi Settings", "wl-wifi-settings", wl_wifi_settings_task);
+                            g_compositor.calendar_open = false;
+                            g_compositor.desktop_menu_open = 0;
+                            g_compositor.show_power_menu = false;
+                            kprintf("[DESKTOP] opening Wi-Fi Settings from tray\n");
+                            continue;
+                        }
+                        if (tray.show_bt && g_compositor.cursor_x >= tray.bt_x &&
+                            g_compositor.cursor_x < tray.bt_x + tray.bt_w) {
+                            open_or_focus_window("Bluetooth Settings", "wl-bt-settings", wl_bluetooth_settings_task);
+                            g_compositor.calendar_open = false;
+                            g_compositor.desktop_menu_open = 0;
+                            g_compositor.show_power_menu = false;
+                            kprintf("[DESKTOP] opening Bluetooth Settings from tray\n");
                             continue;
                         }
                         if (g_compositor.cursor_x >= 182 && g_compositor.cursor_x < 230) {
                             g_compositor.desktop_menu_open = (g_compositor.desktop_menu_open == 1) ? 0 : 1;
                             g_compositor.calendar_open = false;
-                            g_compositor.quick_settings_open = false;
                             kprintf("[WL_DBG] desktop menu File %s\n", g_compositor.desktop_menu_open ? "open" : "closed");
                             continue;
                         }
                         if (g_compositor.cursor_x >= 234 && g_compositor.cursor_x < 284) {
                             g_compositor.desktop_menu_open = (g_compositor.desktop_menu_open == 2) ? 0 : 2;
                             g_compositor.calendar_open = false;
-                            g_compositor.quick_settings_open = false;
                             kprintf("[WL_DBG] desktop menu View %s\n", g_compositor.desktop_menu_open ? "open" : "closed");
                             continue;
                         }
                         if (g_compositor.cursor_x >= 288 && g_compositor.cursor_x < 360) {
                             g_compositor.desktop_menu_open = (g_compositor.desktop_menu_open == 3) ? 0 : 3;
                             g_compositor.calendar_open = false;
-                            g_compositor.quick_settings_open = false;
                             kprintf("[WL_DBG] desktop menu Window %s\n", g_compositor.desktop_menu_open ? "open" : "closed");
                             continue;
                         }
@@ -540,8 +616,9 @@ void wl_compositor_process_input(void) {
                         i32 mx = 182;
                         if (g_compositor.desktop_menu_open == 2) mx = 234;
                         if (g_compositor.desktop_menu_open == 3) mx = 288;
+                        i32 menu_h = g_compositor.desktop_menu_open == 1 ? 342 : 222;
                         if (g_compositor.cursor_x >= mx && g_compositor.cursor_x < mx + 204 &&
-                            g_compositor.cursor_y >= 34 && g_compositor.cursor_y < 222) {
+                            g_compositor.cursor_y >= 34 && g_compositor.cursor_y < menu_h) {
                             i32 row = (g_compositor.cursor_y - 42) / 30;
                             if (row < 0) row = 0;
                             if (g_compositor.desktop_menu_open == 1) {
@@ -557,6 +634,18 @@ void wl_compositor_process_input(void) {
                                 } else if (row == 3) {
                                     kprintf("[WAYLAND] Menu launching File Manager...\n");
                                     sched_spawn("wl-files-k", wl_file_manager_task, NULL, 2);
+                                } else if (row == 4) {
+                                    kprintf("[WAYLAND] Menu opening Ethernet Settings...\n");
+                                    open_or_focus_window("Ethernet Settings", "wl-net-settings", wl_network_settings_task);
+                                } else if (row == 5) {
+                                    kprintf("[WAYLAND] Menu opening Wi-Fi Settings...\n");
+                                    open_or_focus_window("Wi-Fi Settings", "wl-wifi-settings", wl_wifi_settings_task);
+                                } else if (row == 6) {
+                                    kprintf("[WAYLAND] Menu opening Bluetooth Settings...\n");
+                                    open_or_focus_window("Bluetooth Settings", "wl-bt-settings", wl_bluetooth_settings_task);
+                                } else if (row == 7) {
+                                    kprintf("[WAYLAND] Menu opening Sound Settings...\n");
+                                    open_or_focus_window("Sound Settings", "wl-sound-settings", wl_sound_settings_task);
                                 } else {
                                     kprintf("[WAYLAND] Menu launching driver probe terminal...\n");
                                     sched_spawn("wl-term-k", wl_term_task, NULL, 2);
@@ -568,6 +657,9 @@ void wl_compositor_process_input(void) {
                                 } else if (row == 1) {
                                     fb_clear(0xFF111827);
                                     kprintf("[WL_DBG] refresh from View menu\n");
+                                } else if (row == 2) {
+                                    kprintf("[WAYLAND] Menu opening Display Settings...\n");
+                                    open_or_focus_window("Display Settings", "wl-display-settings", wl_display_settings_task);
                                 }
                             } else {
                                 wl_surface_t *focused = NULL;
@@ -604,38 +696,61 @@ void wl_compositor_process_input(void) {
 
                     /* Check Power/App Menu Clicks */
                     if (is_left_btn && g_compositor.show_power_menu && ev.value == KEY_PRESSED) {
-                        i32 mw = 300, mh = 392;
+                        i32 mw = 520, mh = 440;
                         i32 mx = dock_x;
+                        if (mx + mw > (i32)g_compositor.display_w - 12) mx = (i32)g_compositor.display_w - mw - 12;
+                        if (mx < 12) mx = 12;
                         if (g_compositor.cursor_x >= mx && g_compositor.cursor_x <= mx + mw) {
                             if (g_compositor.cursor_y >= dock_y - mh - 10 && g_compositor.cursor_y < dock_y - 10) {
                                 i32 rel_y = g_compositor.cursor_y - (dock_y - mh - 10);
-                                if (rel_y >= 68 && rel_y < 110) {
-                                    kprintf("[WAYLAND] Launching Terminal (kernel compositor app)...\n");
-                                    sched_spawn("wl-term-k", wl_term_task, NULL, 2);
-                                } else if (rel_y >= 116 && rel_y < 158) {
-                                    kprintf("[WAYLAND] Launching Browser (kernel compositor app)...\n");
-                                    sched_spawn("wl-browser-k", wl_browser_task, NULL, 2);
-                                } else if (rel_y >= 164 && rel_y < 206) {
-                                    kprintf("[WAYLAND] Launching Calculator (kernel compositor app)...\n");
-                                    sched_spawn("wl-calc-k", wl_calc_task, NULL, 2);
-                                } else if (rel_y >= 212 && rel_y < 254) {
-                                    kprintf("[WAYLAND] Launching File Manager...\n");
-                                    sched_spawn("wl-files-k", wl_file_manager_task, NULL, 2);
-                                } else if (rel_y >= 260 && rel_y < 302) {
-                                    kprintf("[WAYLAND] Opening Terminal for driver probe...\n");
-                                    sched_spawn("wl-term-k", wl_term_task, NULL, 2);
-                                } else if (rel_y >= 316 && rel_y < 350) {
+                                i32 rel_x = g_compositor.cursor_x - mx;
+                                if (rel_x >= 18 && rel_x < 248) {
+                                    if (rel_y >= 68 && rel_y < 110) {
+                                        kprintf("[WAYLAND] Launching Terminal (kernel compositor app)...\n");
+                                        sched_spawn("wl-term-k", wl_term_task, NULL, 2);
+                                    } else if (rel_y >= 116 && rel_y < 158) {
+                                        kprintf("[WAYLAND] Launching Browser (kernel compositor app)...\n");
+                                        sched_spawn("wl-browser-k", wl_browser_task, NULL, 2);
+                                    } else if (rel_y >= 164 && rel_y < 206) {
+                                        kprintf("[WAYLAND] Launching Calculator (kernel compositor app)...\n");
+                                        sched_spawn("wl-calc-k", wl_calc_task, NULL, 2);
+                                    } else if (rel_y >= 212 && rel_y < 254) {
+                                        kprintf("[WAYLAND] Launching File Manager...\n");
+                                        sched_spawn("wl-files-k", wl_file_manager_task, NULL, 2);
+                                    } else if (rel_y >= 260 && rel_y < 302) {
+                                        kprintf("[WAYLAND] Opening Terminal for driver probe...\n");
+                                        sched_spawn("wl-term-k", wl_term_task, NULL, 2);
+                                    }
+                                } else if (rel_x >= 272 && rel_x < 502) {
+                                    if (rel_y >= 68 && rel_y < 110) {
+                                        kprintf("[WAYLAND] Launcher opening Ethernet Settings...\n");
+                                        open_or_focus_window("Ethernet Settings", "wl-net-settings", wl_network_settings_task);
+                                    } else if (rel_y >= 116 && rel_y < 158) {
+                                        kprintf("[WAYLAND] Launcher opening Wi-Fi Settings...\n");
+                                        open_or_focus_window("Wi-Fi Settings", "wl-wifi-settings", wl_wifi_settings_task);
+                                    } else if (rel_y >= 164 && rel_y < 206) {
+                                        kprintf("[WAYLAND] Launcher opening Bluetooth Settings...\n");
+                                        open_or_focus_window("Bluetooth Settings", "wl-bt-settings", wl_bluetooth_settings_task);
+                                    } else if (rel_y >= 212 && rel_y < 254) {
+                                        kprintf("[WAYLAND] Launcher opening Sound Settings...\n");
+                                        open_or_focus_window("Sound Settings", "wl-sound-settings", wl_sound_settings_task);
+                                    } else if (rel_y >= 260 && rel_y < 302) {
+                                        kprintf("[WAYLAND] Launcher opening Display Settings...\n");
+                                        open_or_focus_window("Display Settings", "wl-display-settings", wl_display_settings_task);
+                                    }
+                                }
+                                if (rel_y >= 326 && rel_y < 360) {
                                     kprintf("[AUTH] Locking desktop for switch-user login\n");
                                     g_compositor.state = COMPOSITOR_STATE_LOGIN;
                                     g_compositor.login_pass[0] = '\0';
                                     g_compositor.login_failed = false;
                                     g_compositor.login_focus_pass = false;
                                     g_compositor.current_user[0] = '\0';
-                                } else if (rel_y >= 356 && rel_y < 384 && g_compositor.cursor_x < mx + 146) {
+                                } else if (rel_y >= 380 && rel_y < 412 && rel_x >= 18 && rel_x < 248) {
                                     /* RESTART */
                                     kprintf("[POWER] Restarting system...\n");
                                     outb(0x64, 0xFE);
-                                } else if (rel_y >= 356 && rel_y < 384 && g_compositor.cursor_x >= mx + 146) {
+                                } else if (rel_y >= 380 && rel_y < 412 && rel_x >= 272 && rel_x < 502) {
                                     /* SHUTDOWN */
                                     kprintf("[POWER] Shutting down...\n");
                                     outw(0x604, 0x2000);
@@ -652,7 +767,6 @@ void wl_compositor_process_input(void) {
                         if (g_compositor.cursor_x >= dock_x + 10 && g_compositor.cursor_x <= dock_x + 58) {
                             g_compositor.show_power_menu = !g_compositor.show_power_menu;
                             g_compositor.calendar_open = false;
-                            g_compositor.quick_settings_open = false;
                         } else {
                             /* Check Dock App Icons */
                             i32 abx = dock_x + 76;
@@ -671,10 +785,9 @@ void wl_compositor_process_input(void) {
                         continue;
                     } else if (is_left_btn) {
                         if (ev.value == KEY_PRESSED &&
-                            (g_compositor.calendar_open || g_compositor.quick_settings_open) &&
+                            g_compositor.calendar_open &&
                             g_compositor.cursor_y >= 34) {
                             g_compositor.calendar_open = false;
-                            g_compositor.quick_settings_open = false;
                         }
                         /* Mouse button */
                         if (ev.value == KEY_RELEASED) {

@@ -48,6 +48,7 @@ developers without copying any one system blindly.
 - Apps can rely on `O_APPEND` for regular VFS files, including libc append
   modes such as `fopen(path, "a")`.
 - Apps can use `lseek(..., SEEK_END)` on VFS files backed by kernel metadata.
+- Apps can use `O_CREAT | O_EXCL` for basic exclusive-create behavior.
 - The kernel records registrations in `src/os/services/app_registry/`.
 - Records include PID, YamGraph node id, app type, requested permissions, name,
   publisher, version, and description.
@@ -56,6 +57,9 @@ developers without copying any one system blindly.
 - OS services must expose public ABI through syscalls, libyam, VFS nodes, or
   YamGraph IPC. Applications should not link against compositor internals,
   driver internals, or kernel-private helpers.
+- User-level application-development work is parked until the owner asks to
+  resume it. Current active work is OS/GUI/driver foundation work, including
+  compositor quick settings and radio status surfaces.
 
 ## App Types
 

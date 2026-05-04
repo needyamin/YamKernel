@@ -15,6 +15,8 @@
 #include "cpu/percpu.h"
 #include "drivers/timer/pit.h"
 #include "drivers/timer/rtc.h"
+#include "drivers/net/iwlwifi.h"
+#include "drivers/bluetooth/hci_usb.h"
 #include "net/net.h"
 #include "ipc/ipc.h"
 #include "fs/vfs.h"
@@ -308,7 +310,15 @@ static void cmd_top(void) {
     kprintf_color(C_TEXT,    "eth0: "); kprintf_color(C_OK, "UP\n");
 
     kprintf_color(C_DIM,     "      ├─ IPv4    : "); kprintf_color(C_TEXT, "DHCP Pending   ");
-    kprintf_color(C_DIM,     "├─ wlan0   : "); kprintf_color(C_OK, "Service Ready\n");
+    const iwlwifi_status_t *wifi = iwlwifi_get_status();
+    kprintf_color(C_DIM,     "├─ wlan0   : ");
+    if (wifi->connection == IWLWIFI_CONN_CONNECTED) {
+        kprintf_color(C_OK, "Connected\n");
+    } else if (!wifi->present || !wifi->firmware_loaded) {
+        kprintf_color(C_WARN, "Blocked\n");
+    } else {
+        kprintf_color(C_TEXT, "Ready\n");
+    }
     kprintf_color(C_DIM,     "      └─ Driver  : "); kprintf_color(C_TEXT, "OS Net Service ");
     kprintf_color(C_DIM,     "└─ FPS     : "); kprintf_color(C_ACCENT, "120 (Fluid)\n\n");
 
@@ -473,6 +483,9 @@ static void cmd_cpu(void) {
  * COMMAND: net
  * ============================================================================ */
 static void cmd_net(void) {
+    const iwlwifi_status_t *wifi = iwlwifi_get_status();
+    const hci_status_t *bt = hci_get_status();
+
     kprintf("\n");
     kprintf_color(C_TITLE,   "   Network Interfaces & Stack\n");
     kprintf_color(C_DIM,     "  --------------------------------------------------\n");
@@ -487,12 +500,30 @@ static void cmd_net(void) {
     kprintf_color(C_DIM,     "    └─ IP:  "); kprintf_color(C_TEXT, "0.0.0.0 (DHCP Pending)\n\n");
 
     kprintf_color(C_HEADER,  "  Interface: "); kprintf_color(C_VALUE, "wlan0 ");
-    kprintf_color(C_DIM, "(iwlwifi) "); kprintf_color(C_ERROR, "[FW PENDING]\n");
-    kprintf_color(C_DIM,     "    └─ BSSID: "); kprintf_color(C_TEXT, "Not Associated\n\n");
+    kprintf_color(C_DIM, "(iwlwifi) ");
+    if (wifi->connection == IWLWIFI_CONN_CONNECTED) {
+        kprintf_color(C_OK, "[CONNECTED]\n");
+    } else if (!wifi->radio_enabled) {
+        kprintf_color(C_DIM, "[RADIO OFF]\n");
+    } else {
+        kprintf_color(C_WARN, "[BLOCKED]\n");
+    }
+    kprintf_color(C_DIM,     "    ├─ Device: "); kprintf_color(C_TEXT, "%s\n", wifi->device_name);
+    kprintf_color(C_DIM,     "    ├─ Radio : "); kprintf_color(C_TEXT, "%s\n", wifi->radio_enabled ? "on" : "off");
+    kprintf_color(C_DIM,     "    └─ Reason: "); kprintf_color(wifi->connection == IWLWIFI_CONN_CONNECTED ? C_OK : C_WARN, "%s\n\n", wifi->last_error);
 
     kprintf_color(C_HEADER,  "  Interface: "); kprintf_color(C_VALUE, "hci0 ");
-    kprintf_color(C_DIM, "(Bluetooth) "); kprintf_color(C_ERROR, "[USB PENDING]\n");
-    kprintf_color(C_DIM,     "    └─ L2CAP: "); kprintf_color(C_TEXT, "Down\n\n");
+    kprintf_color(C_DIM, "(Bluetooth) ");
+    if (bt->connection == HCI_BT_CONNECTED) {
+        kprintf_color(C_OK, "[CONNECTED]\n");
+    } else if (!bt->radio_enabled) {
+        kprintf_color(C_DIM, "[RADIO OFF]\n");
+    } else {
+        kprintf_color(C_WARN, "[BLOCKED]\n");
+    }
+    kprintf_color(C_DIM,     "    ├─ Device: "); kprintf_color(C_TEXT, "%s\n", bt->device_name);
+    kprintf_color(C_DIM,     "    ├─ Radio : "); kprintf_color(C_TEXT, "%s\n", bt->radio_enabled ? "on" : "off");
+    kprintf_color(C_DIM,     "    └─ Reason: "); kprintf_color(bt->connection == HCI_BT_CONNECTED ? C_OK : C_WARN, "%s\n\n", bt->last_error);
 
     kprintf_color(C_HEADER,  "  Protocols: ");
     kprintf_color(C_TEXT,    "TCP, UDP, ICMP, ARP, DHCP, DNS (Layer Skeletons Active)\n");

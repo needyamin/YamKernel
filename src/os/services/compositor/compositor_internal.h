@@ -6,6 +6,8 @@
 #include "drivers/video/framebuffer.h"
 #include "drivers/timer/rtc.h"
 #include "drivers/audio/audio.h"
+#include "drivers/bluetooth/hci_usb.h"
+#include "drivers/net/iwlwifi.h"
 #include "net/net.h"
 #include "sched/sched.h"
 #include "sched/wait.h"

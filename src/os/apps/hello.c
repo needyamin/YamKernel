@@ -107,6 +107,17 @@ int main(int argc, char **argv, char **envp) {
             printf("[HELLO] append /tmp/hello-append.txt size=%ld\n", (long)st.st_size);
         }
     }
+    unlink("/tmp/hello-excl.txt");
+    int xfd = open("/tmp/hello-excl.txt", O_CREAT | O_EXCL | O_RDWR);
+    if (xfd >= 0) {
+        close(xfd);
+        int xfd2 = open("/tmp/hello-excl.txt", O_CREAT | O_EXCL | O_RDWR);
+        if (xfd2 < 0) {
+            printf("[HELLO] o_excl /tmp/hello-excl.txt second_open_failed\n");
+        } else {
+            close(xfd2);
+        }
+    }
     if (argc > 1 && argv && argv[1] && strcmp(argv[1], "--spawn-probe") == 0) {
         char *child_argv[] = { "hello", "--child", NULL };
         char *child_envp[] = { "YAMOS_PARENT=hello", "YAMOS_WAIT_PROBE=1", NULL };

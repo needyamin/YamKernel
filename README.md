@@ -43,7 +43,7 @@ drivers.
 | Networking | In-tree | e1000 path plus ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP state-machine code, first fd-backed TCP socket ABI, plain HTTP, certificate-store bootstrap, and bounded TLS ClientHello probe. |
 | USB/Input | In-tree | XHCI controller path, USB core, HID, keyboard, mouse, evdev, touch, gestures. |
 | PCI/Drivers | In-tree | Bridge-aware PCI scan, command/status helpers, safe BAR sizing, MSI/MSI-X capability discovery, and driver inventory binding. |
-| Desktop | In-tree | Wayland-style compositor, polished first-boot setup/login, File Manager, calendar/time/status bar, quick settings, top menu, dock/taskbar, standard window controls, maximize/restore, windows, VTTY mode. |
+| Desktop | In-tree | Wayland-style compositor, polished first-boot setup/login, File Manager, calendar/time/status bar, direct status-chip settings windows, separate Ethernet/Wi-Fi/Bluetooth/Sound/Display settings windows, top menu, dock/taskbar, standard window controls, maximize/restore, windows, VTTY mode. |
 | Userland | In-tree | Static Ring 3 ELF apps/services for `authd` and `/bin/hello`, libc/libyam syscall support, native app manifests, argv/envp-aware VFS-backed app spawn, and kernel app registry. Main desktop tools are compositor-native kernel services. |
 | AI/ML | In-tree | Tensor allocation and accelerator abstraction syscalls. |
 
@@ -59,7 +59,11 @@ drivers.
 - Browser now has a real plain-HTTP path through kernel DNS/TCP/HTTP, a modern toolbar/address bar, back/forward/reload controls, history, response status display, a scrollable static document paint layer, and first inline color/background style handling for headings, paragraphs, list items, links, pre/code blocks, buttons, form placeholders, and image placeholders. Full encrypted HTTPS page loading, JavaScript, full CSS layout, real image decoding, and Firefox-class multi-process rendering remain future work.
 - Calculator is a compositor-native desktop utility with standard/scientific modes, fixed-decimal arithmetic, memory register, history, keyboard input, and compositor clipboard copy/paste.
 - File Manager launches from the dock launcher or File menu and now has an Explorer-style shell with sidebar locations, back/forward/up navigation, editable address and search fields, sortable details view, item details pane, create file/folder actions, file delete, and an integrated text editor for VFS files.
-- The desktop bar shows BDT calendar/time, wired network status from the kernel network interface, Wi-Fi driver state, and audio mixer state; clicking time opens the calendar and clicking status chips opens quick settings.
+- The desktop bar shows BDT calendar/time, wired network status from the kernel network interface, Wi-Fi radio state, Bluetooth radio state, and audio mixer state.
+- Top-bar status chips open their own settings directly: Ethernet opens Ethernet Settings, Wi-Fi opens Wi-Fi Settings, Bluetooth opens Bluetooth Settings, Sound opens Sound Settings, and the clock opens Calendar. Re-clicking an already-open settings chip focuses/restores that same window instead of spawning duplicates. The old shared Quick Settings popover path has been removed from the compositor. The detailed settings windows use standalone layouts instead of one shared/sidebar shell, and expose DHCP renewal, scan/connect or scan/pair actions, and sound mixer controls while reporting honest blockers: QEMU currently has wired e1000 networking, real Wi-Fi needs firmware/MAC work, Bluetooth needs a USB HCI backend, and audio output needs a real device driver.
+- Wi-Fi and Bluetooth scan/connect/pair controls now consume explicit kernel driver operation results. If the radio is off, no supported adapter/controller is present, firmware is missing, or USB HCI transport is pending, the settings window and `net` shell command report the exact blocker instead of implying the connection attempt succeeded.
+- The dock launcher now uses a two-column layout with applications on the left and standalone settings shortcuts on the right for Ethernet, Wi-Fi, Bluetooth, Sound, and Display.
+- Display Settings opens from the View menu and shows compositor/framebuffer resolution, stride, active surface count, focused window, plus refresh and debug-overlay controls.
 - Terminal file commands now use the same VFS: `ls`, `cat`, `mkdir`, `touch`, `rm`, and `write /home/root/file.txt text`.
 - Terminal can launch the sample static ELF app with `run /bin/hello arg...` or direct `hello arg...`.
 - Terminal supports `cd` and `pwd`; VFS paths now resolve relative to each task's current working directory.
@@ -178,6 +182,7 @@ src/os/services/          compositor and OS services
 - First libc `*at` wrappers now route to kernel dirfd-aware syscalls: `openat`, `fstatat`, `mkdirat`, `unlinkat`, and `renameat`.
 - VFS honors `O_APPEND` before each regular file write, so libc append modes such as `fopen(path, "a")` append instead of overwriting from offset zero.
 - `lseek(fd, 0, SEEK_END)` now uses VFS metadata through `fstat`, so EOF seeking works for initrd, RAMFS, FAT32, and other stat-backed files.
+- `open(path, O_CREAT | O_EXCL, ...)` now fails if the path already exists, enabling basic lock-file and exclusive-create patterns.
 - QEMU runs attach `build/yamos-fat32.disk` as `vd0`; YamOS auto-mounts FAT32-compatible virtio disks at `/mnt/vd0`, exposes mounted volumes in `/mnt`, and promotes `/home`, `/var`, and `/usr/local` to the FAT32 disk when available.
 - The `/bin/hello` boot probe now validates the public app process path by spawning another `hello` from Ring 3 and reaping it through libc `waitpid()`.
 - AP cores are initialized and can receive kernel IPIs, but full multi-core task scheduling remains disabled until address-space switching and run-queue ownership are audited.

@@ -417,11 +417,6 @@ static void rtc_read_local_bdt(rtc_time_t *out) {
     }
 }
 
-static void ip_to_string(u32 ip, char *out, usize cap) {
-    ksnprintf(out, cap, "%u.%u.%u.%u",
-              (ip >> 24) & 255, (ip >> 16) & 255, (ip >> 8) & 255, ip & 255);
-}
-
 static void draw_signal_bars(wl_surface_t *ds, i32 x, i32 y, bool strong, u32 color) {
     for (int i = 0; i < 4; i++) {
         i32 h = 4 + i * 4;
@@ -436,6 +431,9 @@ static void draw_status_chip(wl_surface_t *ds, i32 x, i32 y, i32 w, const char *
     wl_draw_rect(ds, x, y, w, 1, accent);
     wl_draw_text(ds, x + 8, y + 5, label, fg, 0);
 }
+
+static void draw_text_fit(wl_surface_t *ds, i32 x, i32 y, const char *text,
+                          i32 max_w, u32 color);
 
 static void draw_text_fit(wl_surface_t *ds, i32 x, i32 y, const char *text,
                           i32 max_w, u32 color) {
@@ -510,48 +508,6 @@ static void composite_calendar_popover(rtc_time_t t) {
     }
 }
 
-static void composite_quick_settings_popover(void) {
-    if (!g_compositor.quick_settings_open) return;
-
-    u32 dw = g_compositor.scanout->width;
-    u32 dh = g_compositor.scanout->height;
-    wl_surface_t ds = { .buffer = g_compositor.scanout, .width = dw, .height = dh };
-    const audio_status_t *audio = audio_get_status();
-
-    i32 w = 360;
-    i32 h = 218;
-    i32 x = (i32)dw - w - 176;
-    if (x < 12) x = 12;
-    i32 y = 40;
-    wl_draw_rounded_rect(&ds, x + 6, y + 8, w, h, 10, 0xAA05070A);
-    wl_draw_rounded_rect(&ds, x, y, w, h, 10, 0xF0111827);
-    wl_draw_rect(&ds, x, y, w, 2, 0xFF60A5FA);
-
-    wl_draw_text(&ds, x + 18, y + 18, "Quick Settings", 0xFFFFFFFF, 0);
-    wl_draw_text(&ds, x + 18, y + 44, "System hardware status", 0xFF9AA8BA, 0);
-
-    char ip[32];
-    ip_to_string(g_net_iface.ip_addr, ip, sizeof(ip));
-    char net_line[96];
-    ksnprintf(net_line, sizeof(net_line), "Network: %s  DHCP: %s",
-              g_net_iface.is_up ? "up" : "down",
-              g_net_iface.dhcp_done ? "ready" : "pending");
-    wl_draw_rect(&ds, x + 18, y + 76, w - 36, 34, 0xFF1F2937);
-    wl_draw_text(&ds, x + 30, y + 86, net_line, g_net_iface.is_up ? 0xFFBBF7D0 : 0xFFFFD166, 0);
-    wl_draw_text(&ds, x + 210, y + 86, g_net_iface.dhcp_done ? ip : "no address", 0xFF9AA8BA, 0);
-
-    wl_draw_rect(&ds, x + 18, y + 118, w - 36, 34, 0xFF1F2937);
-    wl_draw_text(&ds, x + 30, y + 128, "WiFi: driver stub, firmware pending", 0xFFFFD166, 0);
-
-    char audio_line[96];
-    ksnprintf(audio_line, sizeof(audio_line), "Sound: %s  Volume: %u%%",
-              audio->output_available ? audio->device_name : "no output device",
-              audio->volume_percent);
-    wl_draw_rect(&ds, x + 18, y + 160, w - 36, 34, 0xFF1F2937);
-    wl_draw_text(&ds, x + 30, y + 170, audio_line,
-                 audio->output_available ? 0xFFBBF7D0 : 0xFFCBD5E1, 0);
-}
-
 static void composite_menubar(void) {
     u32 *dst = g_compositor.scanout->pixels;
     u32 dw = g_compositor.scanout->width;
@@ -602,6 +558,8 @@ static void composite_menubar(void) {
     rtc_read_local_bdt(&t);
 
     const audio_status_t *audio = audio_get_status();
+    const iwlwifi_status_t *wifi = iwlwifi_get_status();
+    const hci_status_t *bt = hci_get_status();
     bool net_ready = g_net_iface.is_up && g_net_iface.dhcp_done;
 
     i32 tray_right = (i32)dw - 12;
@@ -610,24 +568,32 @@ static void composite_menubar(void) {
     i32 sound_w = 70;
     i32 net_w = 94;
     i32 wifi_w = 78;
+    i32 bt_w = 58;
     i32 clock_w = 150;
     bool show_wifi = true;
+    bool show_bt = true;
     bool compact_labels = false;
 
-    i32 tray_w = sound_w + net_w + wifi_w + clock_w + gap * 3;
+    i32 tray_w = sound_w + net_w + wifi_w + bt_w + clock_w + gap * 4;
     if (tray_w > tray_right - left_limit) {
         compact_labels = true;
         sound_w = 54;
         net_w = 68;
         wifi_w = 58;
+        bt_w = 42;
         clock_w = 126;
+        tray_w = sound_w + net_w + wifi_w + bt_w + clock_w + gap * 4;
+    }
+    if (tray_w > tray_right - left_limit) {
+        show_bt = false;
+        sound_w = 46;
+        net_w = 58;
+        wifi_w = 52;
+        clock_w = 116;
         tray_w = sound_w + net_w + wifi_w + clock_w + gap * 3;
     }
     if (tray_w > tray_right - left_limit) {
         show_wifi = false;
-        sound_w = 46;
-        net_w = 58;
-        clock_w = 116;
         tray_w = sound_w + net_w + clock_w + gap * 2;
     }
 
@@ -643,7 +609,9 @@ static void composite_menubar(void) {
     i32 sound_x = tray_x;
     i32 net_x = sound_x + sound_w + gap;
     i32 wifi_x = net_x + net_w + gap;
-    i32 clock_x = show_wifi ? (wifi_x + wifi_w + gap) : (net_x + net_w + gap);
+    i32 bt_x = wifi_x + wifi_w + gap;
+    i32 clock_x = show_wifi ? (show_bt ? (bt_x + bt_w + gap) : (wifi_x + wifi_w + gap))
+                             : (net_x + net_w + gap);
 
     char sound_str[16];
     if (audio->output_available) {
@@ -665,9 +633,27 @@ static void composite_menubar(void) {
     if (net_w >= 82) draw_signal_bars(&ds, net_x + net_w - 32, 9, net_ready, net_ready ? 0xFF34D399 : 0xFFFFD166);
 
     if (show_wifi) {
-        draw_status_chip(&ds, wifi_x, 6, wifi_w, compact_labels ? "Wi" : "WiFi --",
-                         0xFF273244, 0xFF94A3B8, 0xFF64748B);
-        if (wifi_w >= 70) draw_signal_bars(&ds, wifi_x + wifi_w - 30, 9, false, 0xFF64748B);
+        bool wifi_ready = wifi->radio_enabled && wifi->present && wifi->firmware_loaded;
+        draw_status_chip(&ds, wifi_x, 6, wifi_w,
+                         wifi_ready ? (compact_labels ? "Wi" : "WiFi ON") :
+                                      (wifi->radio_enabled ? (compact_labels ? "Wi!" : "WiFi !") :
+                                                             (compact_labels ? "Wi" : "WiFi --")),
+                         wifi_ready ? 0xFF123024 : 0xFF273244,
+                         wifi_ready ? 0xFFBBF7D0 : (wifi->radio_enabled ? 0xFFFFD166 : 0xFF94A3B8),
+                         wifi_ready ? 0xFF34D399 : (wifi->radio_enabled ? 0xFFFFD166 : 0xFF64748B));
+        if (wifi_w >= 70) draw_signal_bars(&ds, wifi_x + wifi_w - 30, 9, wifi_ready,
+                                           wifi_ready ? 0xFF34D399 : 0xFF64748B);
+    }
+
+    if (show_bt) {
+        bool bt_ready = bt->radio_enabled && bt->controller_present && bt->usb_backend_ready;
+        draw_status_chip(&ds, bt_x, 6, bt_w,
+                         bt_ready ? (compact_labels ? "BT" : "BT ON") :
+                                    (bt->radio_enabled ? (compact_labels ? "B!" : "BT !") :
+                                                         (compact_labels ? "BT" : "BT --")),
+                         bt_ready ? 0xFF123024 : 0xFF273244,
+                         bt_ready ? 0xFFBBF7D0 : (bt->radio_enabled ? 0xFFFFD166 : 0xFF94A3B8),
+                         bt_ready ? 0xFF34D399 : (bt->radio_enabled ? 0xFFFFD166 : 0xFF64748B));
     }
 
     char time_str[16];
@@ -687,21 +673,27 @@ static void composite_menubar(void) {
     if (g_compositor.desktop_menu_open) {
         i32 mx = 182;
         i32 mw = 204;
+        i32 mh = g_compositor.desktop_menu_open == 1 ? 308 : 188;
         if (g_compositor.desktop_menu_open == 2) mx = 234;
         if (g_compositor.desktop_menu_open == 3) mx = 288;
-        wl_draw_rect(&ds, mx, 34, mw, 188, 0xF0141C2B);
+        wl_draw_rect(&ds, mx, 34, mw, mh, 0xF0141C2B);
         wl_draw_rect(&ds, mx, 34, mw, 1, 0xFF60A5FA);
-        wl_draw_rect(&ds, mx, 221, mw, 1, 0x553B4658);
+        wl_draw_rect(&ds, mx, 34 + mh - 1, mw, 1, 0x553B4658);
         if (g_compositor.desktop_menu_open == 1) {
             wl_draw_text(&ds, mx + 14, 50, "New Terminal", 0xFFE8EEF7, 0);
             wl_draw_text(&ds, mx + 14, 80, "New Browser", 0xFFE8EEF7, 0);
             wl_draw_text(&ds, mx + 14, 110, "New Calculator", 0xFFE8EEF7, 0);
             wl_draw_text(&ds, mx + 14, 140, "File Manager", 0xFFE8EEF7, 0);
-            wl_draw_text(&ds, mx + 14, 170, "Driver Probe", 0xFFE8EEF7, 0);
+            wl_draw_text(&ds, mx + 14, 170, "Ethernet Settings", 0xFFE8EEF7, 0);
+            wl_draw_text(&ds, mx + 14, 200, "Wi-Fi Settings", 0xFFE8EEF7, 0);
+            wl_draw_text(&ds, mx + 14, 230, "Bluetooth Settings", 0xFFE8EEF7, 0);
+            wl_draw_text(&ds, mx + 14, 260, "Sound Settings", 0xFFE8EEF7, 0);
+            wl_draw_text(&ds, mx + 14, 290, "Driver Probe", 0xFFE8EEF7, 0);
         } else if (g_compositor.desktop_menu_open == 2) {
             wl_draw_text(&ds, mx + 14, 50, "Toggle Debug", 0xFFE8EEF7, 0);
             wl_draw_text(&ds, mx + 14, 80, "Refresh Screen", 0xFFE8EEF7, 0);
-            wl_draw_text(&ds, mx + 14, 110, "Hide Menu", 0xFFE8EEF7, 0);
+            wl_draw_text(&ds, mx + 14, 110, "Display Settings", 0xFFE8EEF7, 0);
+            wl_draw_text(&ds, mx + 14, 140, "Hide Menu", 0xFFE8EEF7, 0);
         } else {
             wl_draw_text(&ds, mx + 14, 50, "Close Focused", 0xFFE8EEF7, 0);
             wl_draw_text(&ds, mx + 14, 80, "Minimize Focused", 0xFFE8EEF7, 0);
@@ -710,7 +702,6 @@ static void composite_menubar(void) {
         }
     }
 
-    composite_quick_settings_popover();
     composite_calendar_popover(t);
 }
 
@@ -769,9 +760,11 @@ static void composite_taskbar(void) {
     
     /* Draw Power Menu if active */
     if (g_compositor.show_power_menu) {
-        i32 mw = 300;
-        i32 mh = 392;
+        i32 mw = 520;
+        i32 mh = 440;
         i32 mx = dock_x;
+        if (mx + mw > (i32)dw - 12) mx = (i32)dw - mw - 12;
+        if (mx < 12) mx = 12;
         i32 my = dock_y - mh - 10;
         
         /* Glass Menu Background */
@@ -795,34 +788,55 @@ static void composite_taskbar(void) {
         
         wl_draw_text(&ds, mx + 20, my + 18, "YamOS Launcher", 0xFFE8EEF7, 0);
         wl_draw_text(&ds, mx + 20, my + 42, "Applications", 0xFF9AA8BA, 0);
+        wl_draw_text(&ds, mx + 274, my + 42, "Settings", 0xFF9AA8BA, 0);
 
-        wl_draw_rect(&ds, mx + 18, my + 68, mw - 36, 42, 0xFF1F2937);
+        wl_draw_rect(&ds, mx + 18, my + 68, 230, 42, 0xFF1F2937);
         wl_draw_text(&ds, mx + 34, my + 81, "Terminal", 0xFFBD93F9, 0);
         wl_draw_text(&ds, mx + 176, my + 81, "Shell", 0xFF9AA8BA, 0);
 
-        wl_draw_rect(&ds, mx + 18, my + 116, mw - 36, 42, 0xFF1F2937);
+        wl_draw_rect(&ds, mx + 18, my + 116, 230, 42, 0xFF1F2937);
         wl_draw_text(&ds, mx + 34, my + 129, "Browser", 0xFF8BE9FD, 0);
         wl_draw_text(&ds, mx + 176, my + 129, "Web", 0xFF9AA8BA, 0);
 
-        wl_draw_rect(&ds, mx + 18, my + 164, mw - 36, 42, 0xFF1F2937);
+        wl_draw_rect(&ds, mx + 18, my + 164, 230, 42, 0xFF1F2937);
         wl_draw_text(&ds, mx + 34, my + 177, "Calculator", 0xFF50FA7B, 0);
         wl_draw_text(&ds, mx + 176, my + 177, "Tools", 0xFF9AA8BA, 0);
 
-        wl_draw_rect(&ds, mx + 18, my + 212, mw - 36, 42, 0xFF1F2937);
+        wl_draw_rect(&ds, mx + 18, my + 212, 230, 42, 0xFF1F2937);
         wl_draw_text(&ds, mx + 34, my + 225, "File Manager", 0xFFFFD166, 0);
         wl_draw_text(&ds, mx + 176, my + 225, "Files", 0xFF9AA8BA, 0);
 
-        wl_draw_rect(&ds, mx + 18, my + 260, mw - 36, 42, 0xFF1F2937);
+        wl_draw_rect(&ds, mx + 18, my + 260, 230, 42, 0xFF1F2937);
         wl_draw_text(&ds, mx + 34, my + 273, "Driver Probe", 0xFFFFD166, 0);
         wl_draw_text(&ds, mx + 176, my + 273, "Kernel", 0xFF9AA8BA, 0);
 
-        wl_draw_rect(&ds, mx + 18, my + 316, mw - 36, 34, 0xFF293447);
-        wl_draw_text(&ds, mx + 34, my + 325, "Lock / Switch User", 0xFFE8EEF7, 0);
+        wl_draw_rect(&ds, mx + 272, my + 68, 230, 42, 0xFF1F2937);
+        wl_draw_text(&ds, mx + 288, my + 81, "Ethernet", 0xFF86EFAC, 0);
+        wl_draw_text(&ds, mx + 430, my + 81, "Wired", 0xFF9AA8BA, 0);
 
-        wl_draw_rect(&ds, mx + 18, my + 356, 120, 28, 0xFF374151);
-        wl_draw_text(&ds, mx + 42, my + 362, "Restart", 0xFFE8EEF7, 0);
-        wl_draw_rect(&ds, mx + 156, my + 356, 120, 28, 0xFF7F1D1D);
-        wl_draw_text(&ds, mx + 176, my + 362, "Shutdown", 0xFFFFCACA, 0);
+        wl_draw_rect(&ds, mx + 272, my + 116, 230, 42, 0xFF1F2937);
+        wl_draw_text(&ds, mx + 288, my + 129, "Wi-Fi", 0xFF93C5FD, 0);
+        wl_draw_text(&ds, mx + 430, my + 129, "Radio", 0xFF9AA8BA, 0);
+
+        wl_draw_rect(&ds, mx + 272, my + 164, 230, 42, 0xFF1F2937);
+        wl_draw_text(&ds, mx + 288, my + 177, "Bluetooth", 0xFFC4B5FD, 0);
+        wl_draw_text(&ds, mx + 430, my + 177, "Pair", 0xFF9AA8BA, 0);
+
+        wl_draw_rect(&ds, mx + 272, my + 212, 230, 42, 0xFF1F2937);
+        wl_draw_text(&ds, mx + 288, my + 225, "Sound", 0xFF5EEAD4, 0);
+        wl_draw_text(&ds, mx + 430, my + 225, "Mixer", 0xFF9AA8BA, 0);
+
+        wl_draw_rect(&ds, mx + 272, my + 260, 230, 42, 0xFF1F2937);
+        wl_draw_text(&ds, mx + 288, my + 273, "Display", 0xFFFDE68A, 0);
+        wl_draw_text(&ds, mx + 430, my + 273, "Screen", 0xFF9AA8BA, 0);
+
+        wl_draw_rect(&ds, mx + 18, my + 326, mw - 36, 34, 0xFF293447);
+        wl_draw_text(&ds, mx + 34, my + 335, "Lock / Switch User", 0xFFE8EEF7, 0);
+
+        wl_draw_rect(&ds, mx + 18, my + 380, 230, 32, 0xFF374151);
+        wl_draw_text(&ds, mx + 104, my + 390, "Restart", 0xFFE8EEF7, 0);
+        wl_draw_rect(&ds, mx + 272, my + 380, 230, 32, 0xFF7F1D1D);
+        wl_draw_text(&ds, mx + 354, my + 390, "Shutdown", 0xFFFFCACA, 0);
     }
     
     /* Draw running apps */

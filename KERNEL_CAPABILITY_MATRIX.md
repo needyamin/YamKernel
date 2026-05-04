@@ -27,7 +27,7 @@ x86_64 operating-system workloads.
 | Package manager/downloader | MISSING | depends on signatures, manifests, install database, downloader transactions |
 | Full browser engine support | MISSING | HTML5 parser, DOM, CSS, JS, images, fonts, storage, sandboxing |
 | Language runtime porting layer | MISSING | POSIX/libc coverage, filesystem, threads, signals, sockets, dynamic linking |
-| Real hardware driver coverage beyond current QEMU-focused path | MISSING | QEMU virtio-blk exists; still needs AHCI/NVMe, GPU, USB classes, Wi-Fi, audio, power, broader NICs |
+| Real hardware driver coverage beyond current QEMU-focused path | MISSING | QEMU virtio-blk exists; still needs AHCI/NVMe, GPU, USB classes, Wi-Fi firmware/MAC support, Bluetooth USB HCI transport, audio output, power, broader NICs |
 
 ## Missing Compatibility Checklist
 
@@ -40,7 +40,7 @@ Linux/POSIX-style ports.
 | Dynamic linking | ELF `PT_INTERP`, shared library loader, relocations, PLT/GOT, `dlopen`, `dlsym`, `dlclose`, library search paths |
 | Threads | kernel threads for user processes, pthread ABI, TLS, thread-local errno, robust futex behavior, thread join/detach |
 | Signals | signal delivery, masks, handlers, default actions, `sigaction`, `sigprocmask`, timers and interruption semantics |
-| File API | PARTIAL: `open` now fails missing paths unless `O_CREAT` is supplied; `O_APPEND` write semantics work; `lseek(..., SEEK_END)` uses VFS metadata; kernel-backed `stat`/`fstat` ABI exists for file size/type metadata; `ftruncate` works for RAMFS/FAT32 files; `rename` works for RAMFS and FAT32 regular files; disk-backed FAT32 create/write/truncate/unlink works for regular files; missing `link`, `symlink`, `readlink`, fuller timestamp/device accuracy, `fcntl`, file locks, permissions |
+| File API | PARTIAL: `open` now fails missing paths unless `O_CREAT` is supplied; `O_CREAT|O_EXCL` fails when the target exists; `O_APPEND` write semantics work; `lseek(..., SEEK_END)` uses VFS metadata; kernel-backed `stat`/`fstat` ABI exists for file size/type metadata; `ftruncate` works for RAMFS/FAT32 files; `rename` works for RAMFS and FAT32 regular files; disk-backed FAT32 create/write/truncate/unlink works for regular files; missing `link`, `symlink`, `readlink`, fuller timestamp/device accuracy, `fcntl`, file locks, permissions |
 | Directories/path APIs | PARTIAL: per-process cwd, `chdir`, `getcwd`, relative VFS paths, and first `openat`/`fstatat`/`mkdirat`/`unlinkat`/`renameat` support exist; missing mount namespaces and fuller `*at` flag semantics |
 | Memory API | file-backed `mmap`, shared mappings, `msync`, `mremap`, guard/protection auditing, overcommit policy |
 | Sockets/network | nonblocking mode, `select`, `poll` hardening, `epoll`, `getsockopt/setsockopt`, `getsockname/getpeername`, UDP sockets, IPv6 |
@@ -49,7 +49,7 @@ Linux/POSIX-style ports.
 | Terminal/PTY | PTY master/slave, termios, line discipline, job control, shell process groups |
 | Package/runtime support | HTTPS downloader, certificate validation, signatures, package database, install/remove/upgrade transactions |
 | Browser engine support | TLS, DOM, CSS layout, JS runtime hosting, image/font codecs, cache/cookies/storage, sandboxing |
-| Hardware compatibility | virtio-blk/AHCI/NVMe, GPU modesetting/acceleration, USB storage/HID classes, audio, Wi-Fi, power management |
+| Hardware compatibility | virtio-blk/AHCI/NVMe, GPU modesetting/acceleration, USB storage/HID classes, audio, Wi-Fi firmware/MAC, Bluetooth USB HCI, power management |
 
 ## Boot And Platform
 
@@ -83,6 +83,8 @@ Linux/POSIX-style ports.
 | PCI command helpers | DONE | generic driver probe/start hooks |
 | Driver manager inventory | PARTIAL | lifecycle: probe, bind, start, stop, suspend, resume |
 | e1000 network driver | PARTIAL | interrupt-driven RX/TX, link state events |
+| Wi-Fi radio state | PARTIAL | Intel iwlwifi inventory/status and desktop on/off/scan/connect control hooks exist; firmware loading, MAC/802.11 management, authentication, association, and packet datapath remain |
+| Bluetooth radio state | PARTIAL | HCI service status and desktop on/off/scan/pair control hooks exist; USB HCI transport, controller reset, inquiry, pairing, L2CAP, and HID/audio profiles remain |
 | USB/xHCI | PARTIAL | real device enumeration and class drivers |
 | PS/2 keyboard/mouse | PARTIAL | layout tables, hotplug error handling |
 | GPU/display | PARTIAL | modesetting, accelerated drivers |

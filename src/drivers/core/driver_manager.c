@@ -68,6 +68,13 @@ void driver_manager_init(void) {
         .match_vendor_device = true,
     });
     driver_register_pci((kernel_driver_t){
+        .name = "iwlwifi",
+        .subsystem = "net",
+        .class_id = 0x02,
+        .subclass_id = 0x80,
+        .match_class = true,
+    });
+    driver_register_pci((kernel_driver_t){
         .name = "xhci",
         .subsystem = "usb",
         .class_id = 0x0C,

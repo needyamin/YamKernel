@@ -19,6 +19,7 @@ typedef enum { FS_NONE=0, FS_INITRD, FS_FAT32, FS_DEVFS, FS_PROCFS, FS_RAMFS } f
 
 #define VFS_BLOCK_FAT32_MAX_BYTES (64 * 1024 * 1024)
 #define VFS_O_CREAT 0x0040
+#define VFS_O_EXCL 0x0080
 #define VFS_O_TRUNC 0x0200
 #define VFS_O_APPEND 0x0400
 
@@ -1006,9 +1007,11 @@ int sys_open(const char *pathname, u32 flags) {
     if (midx < 0) return -1;
     bool exists = vfs_path_exists_for_open(midx, rel);
     bool create = (flags & VFS_O_CREAT) != 0;
+    bool excl = (flags & VFS_O_EXCL) != 0;
     bool trunc = (flags & VFS_O_TRUNC) != 0;
 
     if (!exists && !create) return -1;
+    if (exists && create && excl) return -1;
 
     if (g_mounts[midx].type == FS_RAMFS && create) {
         if (!ramfs_create((ramfs_t *)g_mounts[midx].priv, rel, false)) return -1;

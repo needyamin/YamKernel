@@ -23,6 +23,10 @@ Owner Direction
   networking, filesystems, process model, and hardware support.
 - Do not add fake language runtimes, package-manager theater, or language-
   specific installer behavior.
+- User-level/application-level software creation work is parked for later.
+  When the owner says to resume user/application-level work, return to the
+  app ABI, developer SDK, packaging/install, and userspace process foundations.
+  Until then, prioritize OS/GUI/driver/kernel foundations.
 - Any installer/capability work should be generic OS infrastructure only.
 - YamOS is not complete enough to run arbitrary x86_64 OS software yet. Standing
   required foundations:
@@ -515,9 +519,27 @@ Current Application Architecture State
       - `[HELLO] seek_end /usr/local/bin/hello-local offset=117472`
       - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
       - `[HTTP] GET http://example.com/ -> 798 bytes`
+- Added VFS `O_CREAT | O_EXCL` exclusive-create semantics:
+  - `sys_open()` now rejects open when the target already exists and both
+    `O_CREAT` and `O_EXCL` are present.
+  - This supports basic lock-file and exclusive temporary-file creation
+    patterns expected by build tools and package managers.
+  - `src/os/apps/hello.c` now probes `/tmp/hello-excl.txt` by creating it once
+    with `O_CREAT | O_EXCL`, then confirming a second exclusive create fails.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed.
+    - `build/verify.log` showed the probe in all three `hello` runs:
+      - `[HELLO] o_excl /tmp/hello-excl.txt second_open_failed`
+      - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
+      - `[HTTP] GET http://example.com/ -> 798 bytes`
 
 Current Desktop/GUI State
 -------------------------
+- Current owner direction: pause user-level application tooling work and focus
+  on GUI improvement plus OS-level Wi-Fi/Bluetooth/audio/status foundations.
 - Polished the compositor-level first-boot setup UI:
   - Dedicated full-screen setup state, no dock/menubar behind it.
   - Wider two-column setup panel with YamOS identity/sidebar.
@@ -748,6 +770,211 @@ Current Desktop/GUI State
     - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
       passed and showed e1000, DHCP, DNS, TCP, and
       `[HTTP] GET http://example.com/ -> 797 bytes`.
+- GUI radio/quick-settings pass:
+  - Added kernel status/control headers for Wi-Fi and Bluetooth:
+    - `src/drivers/net/iwlwifi.h`
+    - `src/drivers/bluetooth/hci_usb.h`
+  - `iwlwifi.c` now maintains adapter/radio/firmware/scan/connection state and
+    exposes `iwlwifi_get_status()`, `iwlwifi_set_radio_enabled()`,
+    `iwlwifi_scan()`, and `iwlwifi_connect_default()`.
+  - `hci_usb.c` now maintains Bluetooth controller/radio/backend/scan/pairing
+    state and exposes `hci_get_status()`, `hci_set_radio_enabled()`,
+    `hci_scan()`, and `hci_connect_default()`.
+  - Driver manager inventory now includes an `iwlwifi` PCI wireless-network
+    class driver record.
+  - Desktop menubar now includes Wi-Fi and Bluetooth status chips when space
+    allows, with warning colors when the radio is on but hardware/firmware
+    transport is missing.
+  - Quick Settings is expanded into a desktop-style network/radio/sound sheet:
+    wired DHCP status, Wi-Fi tile, Bluetooth tile, Scan/Connect/Pair buttons,
+    and sound volume/mute controls.
+  - Click handling updates real kernel driver state. This is honest state, not
+    fake connectivity: QEMU still uses e1000 wired networking; real Wi-Fi needs
+    firmware/MAC/802.11 work, and Bluetooth needs USB HCI transport/pairing.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed.
+    - `build/verify.log` showed:
+      - `[DRIVER] manager initialized: 7 built-in driver records`
+      - `[wlan0] No Intel wireless NIC present (firmware blob required)`
+      - `[hci0] Bluetooth HCI service initialized; USB transport/backend pending`
+      - `[WAYLAND] Compositor initialized at 1280x800`
+      - `[HTTP] GET http://example.com/ -> 798 bytes`
+- Split radio settings GUI pass:
+  - Owner corrected that radio controls should not all live in one crowded
+    panel. Direction: use multiple GUI surfaces when the feature deserves it.
+  - Added `src/os/services/compositor/wl_radio_settings.c`.
+  - Added separate compositor-native windows:
+    - `wl_wifi_settings_task()` / "Wi-Fi Settings"
+    - `wl_bluetooth_settings_task()` / "Bluetooth Settings"
+  - Quick Settings is compact again: Ethernet summary, Wi-Fi/Bluetooth fast
+    toggles, Wi-Fi Settings and BT Settings launch buttons, and audio mute/
+    volume controls.
+  - The File menu can launch Wi-Fi Settings and Bluetooth Settings directly.
+  - Wi-Fi Settings shows radio status, adapter/firmware blocker, known network
+    placeholder, Scan, Connect, and Turn on/off controls.
+  - Bluetooth Settings shows radio status, controller/USB-HCI blocker, nearby
+    device placeholder, Scan, Pair, and Turn on/off controls.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed and still showed driver inventory, e1000/DHCP/DNS/TCP/HTTP, and
+      compositor boot evidence.
+- Split Network/Sound settings GUI pass:
+  - Continued the "separate surfaces for real settings" direction.
+  - Expanded `src/os/services/compositor/wl_radio_settings.c` into a small
+    device-settings surface family:
+    - `wl_network_settings_task()` / "Ethernet Settings"
+    - `wl_wifi_settings_task()` / "Wi-Fi Settings"
+    - `wl_bluetooth_settings_task()` / "Bluetooth Settings"
+    - `wl_sound_settings_task()` / "Sound Settings"
+  - Settings sidebar now has Ethernet, Wi-Fi, Bluetooth, and Sound sections.
+  - Ethernet Settings shows e1000 link/DHCP state, IPv4, gateway, DNS, MAC,
+    driver mode, and a DHCP Renew button wired to `dhcp_start()`.
+  - Sound Settings shows output-device status, volume bar, volume +/- buttons,
+    and mute/unmute controls wired to the kernel audio mixer state.
+  - This pass originally kept Quick Settings compact, but that path was later
+    superseded by the Obsolete Quick Settings removal below.
+  - File menu now launches Ethernet Settings and Sound Settings too.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed and showed driver inventory, virtio/FAT32, e1000, DHCP, DNS, TCP,
+      HTTP, and compositor boot evidence.
+- Standalone device settings correction:
+  - Owner clarified separate should mean separate windows, not one shared
+    settings window with a sidebar/tabs for Bluetooth, Wi-Fi, Ethernet, etc.
+  - `wl_radio_settings.c` still hosts the implementation file, but the UX now
+    treats Ethernet, Wi-Fi, Bluetooth, and Sound as standalone windows.
+  - Removed in-window cross-device navigation from the settings sidebar.
+  - Each window now shows a simple standalone identity panel and only controls
+    its own device category.
+  - Cross-device launching remains outside the windows via the top-bar chips
+    and menus, not via any shared Quick Settings panel.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed and showed driver inventory, virtio/FAT32, e1000, DHCP, DNS, TCP,
+      HTTP, and compositor boot evidence.
+- Tray chip direct settings correction:
+  - Owner clarified that the top-bar "quick settings" behavior was still
+    wrong because clicking a chip should open that chip's own options directly.
+  - Top-bar status chips now launch separate windows directly:
+    - Sound chip -> `wl_sound_settings_task()`
+    - Ethernet chip -> `wl_network_settings_task()` / "Ethernet Settings"
+    - Wi-Fi chip -> `wl_wifi_settings_task()`
+    - Bluetooth chip -> `wl_bluetooth_settings_task()`
+    - Clock remains Calendar.
+  - Removed the old generic tray click path that opened one shared quick
+    settings surface for all device categories.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed and showed driver inventory, virtio/FAT32, e1000, DHCP, DNS, TCP,
+      HTTP, and compositor boot evidence.
+- Obsolete Quick Settings removal:
+  - Removed the dead shared Quick Settings popover renderer and input handler.
+  - Top-bar chips no longer have any shared settings panel path in the
+    compositor; they only launch their own standalone settings windows.
+  - Removed obsolete quick-settings-only helpers from compositor render/input.
+  - Removed the stale `quick_settings_open` compositor state field.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed and showed driver inventory, virtio/FAT32, e1000, DHCP, DNS, TCP,
+      HTTP, and compositor boot evidence.
+- Display Settings GUI pass:
+  - Added `src/os/services/compositor/wl_display_settings.c`.
+  - Added `wl_display_settings_task()` / "Display Settings".
+  - Opens from the View menu.
+  - Shows compositor resolution, framebuffer stride, scale mode, focused
+    surface title, and active/minimized surface count.
+  - Provides buttons for debug-overlay toggle and framebuffer refresh.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed and showed driver inventory, virtio/FAT32, e1000, DHCP, DNS, TCP,
+      HTTP, and compositor boot evidence.
+- Settings single-instance/focus pass:
+  - User-facing wired network window was renamed from Network Settings to
+    Ethernet Settings so it no longer reads like a shared network bucket.
+  - `src/os/services/compositor/compositor_input.c` now uses a small
+    open-or-focus helper for Ethernet, Wi-Fi, Bluetooth, Sound, and Display
+    settings launches.
+  - Clicking a top-bar chip or menu item for an already-open settings window
+    now focuses that existing window instead of spawning duplicate copies.
+  - If that settings window was minimized, it is restored before focus.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed and showed driver inventory, virtio/FAT32, e1000, DHCP, DNS, TCP,
+      HTTP, and boot evidence.
+- Standalone settings layout polish:
+  - `src/os/services/compositor/wl_radio_settings.c` no longer draws a shared
+    left sidebar/identity strip for Ethernet, Wi-Fi, Bluetooth, and Sound.
+  - Each settings window now uses a direct standalone layout: title header,
+    device-specific status card, details card, and controls in that same
+    category only.
+  - Updated input hit regions for the moved controls:
+    - Ethernet DHCP Renew
+    - Wi-Fi toggle/scan/connect
+    - Bluetooth toggle/scan/pair
+    - Sound volume down/up/mute
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed and showed driver inventory, virtio/FAT32, e1000, DHCP, DNS, TCP,
+      HTTP, and boot evidence.
+- Launcher settings integration:
+  - `src/os/services/compositor/compositor_render.c` now draws the dock
+    launcher as a wider two-column panel:
+    - left column: Terminal, Browser, Calculator, File Manager, Driver Probe
+    - right column: Ethernet, Wi-Fi, Bluetooth, Sound, Display settings
+  - `src/os/services/compositor/compositor_input.c` routes launcher settings
+    clicks through the same open-or-focus helper used by tray/menu launches, so
+    settings shortcuts focus existing windows instead of creating duplicates.
+  - Lock, Restart, and Shutdown controls were moved to the bottom of the wider
+    launcher and their input hit regions were updated.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed and showed driver inventory, virtio/FAT32, e1000, DHCP, DNS, TCP,
+      HTTP, and boot evidence.
+- Wi-Fi/Bluetooth connection blocker pass:
+  - Owner reported Wi-Fi/Bluetooth connection issues.
+  - `src/drivers/net/iwlwifi.h/.c` now return explicit operation results from
+    radio toggle, scan, and connect:
+    - OK
+    - radio off
+    - no supported adapter
+    - firmware / 802.11 MAC pending
+  - `src/drivers/bluetooth/hci_usb.h/.c` now return explicit operation results
+    from radio toggle, scan, and pair/connect:
+    - OK
+    - radio off
+    - no controller
+    - USB HCI transport/backend pending
+  - Both driver status structs now carry `last_error`.
+  - Wi-Fi/Bluetooth settings disable impossible scan/connect/pair buttons and
+    show the exact blocker after a click instead of making the action look like
+    it silently failed.
+  - Kernel shell `top`/`net` reporting now uses the same driver state instead
+    of saying wlan0 is generically "Service Ready".
+  - Verification:
+    - `git diff --check` passed with only CRLF warnings.
+    - Full `make iso` / boot verify was not run in this turn because the WSL
+      build escalation was rejected by the environment usage limit.
 
 Best Next Kernel/Driver Work
 ----------------------------

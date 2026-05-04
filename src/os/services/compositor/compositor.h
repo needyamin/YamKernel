@@ -134,7 +134,6 @@ typedef struct wl_compositor {
     bool            show_debug_overlay;
     u8              desktop_menu_open;  /* 0 none, 1 File, 2 View, 3 Window */
     bool            calendar_open;
-    bool            quick_settings_open;
     bool            context_menu_open;
     i32             context_x, context_y;
     u32             context_surface_id;
