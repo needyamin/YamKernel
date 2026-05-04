@@ -6,6 +6,8 @@
 #include "../../lib/kprintf.h"
 #include "../../lib/string.h"
 #include "../../fs/vfs.h"
+#include "../../fs/elf.h"
+#include "../../fs/initrd.h"
 #include "../services/installer/installer.h"
 
 extern void dhcp_start(void);
@@ -60,9 +62,18 @@ static void init_shell_task(void *arg) {
 
 /* ---- Init Main (runs as PID 1) ---- */
 
-extern bool elf_load(const void *data, usize size, const char *name);
 extern void *g_authd_module;
 extern usize g_authd_module_size;
+extern void *g_hello_module;
+extern usize g_hello_module_size;
+
+static bool init_write_file(const char *path, const void *data, usize size) {
+    int fd = sys_open(path, 0x40 | 0x200 | 0x2);
+    if (fd < 0) return false;
+    isize n = sys_write(fd, data, size);
+    sys_close(fd);
+    return n == (isize)size;
+}
 
 void init_task(void *arg) {
     (void)arg;
@@ -76,6 +87,43 @@ void init_task(void *arg) {
     if (g_authd_module) {
         kprintf_color(0xFF00FF88, "[INIT] Spawning authd...\n");
         elf_load(g_authd_module, g_authd_module_size, "authd");
+    }
+    if (g_hello_module) {
+        initrd_register("/bin/hello", g_hello_module, g_hello_module_size, false);
+        kprintf_color(0xFF00FF88, "[INIT] Registered /bin/hello from boot module (%lu bytes)\n",
+                      (u64)g_hello_module_size);
+        const char *argv[] = { "/bin/hello", "--spawn-probe", NULL };
+        const char *envp[] = { "YAMOS_BOOT=1", "YAMOS_USER=root", NULL };
+        i64 pid = elf_spawn_resolved_argv_envp("hello", 2, argv, envp);
+        kprintf_color(pid >= 0 ? 0xFF00FF88 : 0xFFFF3333,
+                      "[INIT] VFS spawn hello -> pid=%ld\n", pid);
+        if (pid > 0) {
+            i32 status = 0;
+            i64 waited = sched_waitpid(pid, &status, 0);
+            kprintf_color(waited == pid ? 0xFF00FF88 : 0xFFFF3333,
+                          "[INIT] waitpid hello -> pid=%ld status=0x%x exit=%d\n",
+                          waited, status, (status >> 8) & 0xFF);
+        }
+        if (init_write_file("/usr/local/bin/hello-local", g_hello_module, g_hello_module_size)) {
+            kprintf_color(0xFF00FF88,
+                          "[INIT] Installed persistent sample app /usr/local/bin/hello-local (%lu bytes)\n",
+                          (u64)g_hello_module_size);
+            const char *local_argv[] = { "hello-local", "--local-bin", NULL };
+            const char *local_envp[] = { "YAMOS_BOOT=1", "YAMOS_APP_SOURCE=/usr/local/bin", NULL };
+            i64 local_pid = elf_spawn_resolved_argv_envp("hello-local", 2, local_argv, local_envp);
+            kprintf_color(local_pid >= 0 ? 0xFF00FF88 : 0xFFFF3333,
+                          "[INIT] VFS spawn hello-local -> pid=%ld\n", local_pid);
+            if (local_pid > 0) {
+                i32 status = 0;
+                i64 waited = sched_waitpid(local_pid, &status, 0);
+                kprintf_color(waited == local_pid ? 0xFF00FF88 : 0xFFFF3333,
+                              "[INIT] waitpid hello-local -> pid=%ld status=0x%x exit=%d\n",
+                              waited, status, (status >> 8) & 0xFF);
+            }
+        } else {
+            kprintf_color(0xFFFF3333,
+                          "[INIT] Could not install /usr/local/bin/hello-local\n");
+        }
     }
 
     /* Mount default filesystems */

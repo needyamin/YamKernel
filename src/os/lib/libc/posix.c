@@ -45,28 +45,40 @@ int isatty(int fd) {
     return fd >= 0 && fd <= 2;
 }
 
-static int fill_stat_for_path(const char *path, struct stat *st) {
+static void copy_yam_stat(struct stat *st, const yam_stat_t *yst) {
+    memset(st, 0, sizeof(*st));
+    st->st_dev = yst->dev;
+    st->st_ino = yst->ino;
+    st->st_mode = yst->mode;
+    st->st_nlink = yst->nlink;
+    st->st_uid = yst->uid;
+    st->st_gid = yst->gid;
+    st->st_rdev = yst->rdev;
+    st->st_size = yst->size;
+    st->st_blksize = yst->blksize;
+    st->st_blocks = yst->blocks;
+    st->st_atime = yst->atime;
+    st->st_mtime = yst->mtime;
+    st->st_ctime = yst->ctime;
+}
+
+int stat(const char *path, struct stat *st) {
     if (!path || !st) {
         errno = EINVAL;
         return -1;
     }
-    memset(st, 0, sizeof(*st));
-    st->st_mode = S_IFREG | S_IRUSR | S_IWUSR;
-    st->st_blksize = 512;
-    st->st_nlink = 1;
-    if (strcmp(path, "/") == 0 || strcmp(path, "/usr") == 0 ||
-        strcmp(path, "/usr/lib") == 0 || strcmp(path, "/tmp") == 0) {
-        st->st_mode = S_IFDIR | S_IRUSR | S_IWUSR | S_IXUSR;
+    yam_stat_t yst;
+    int rc = (int)syscall2(SYS_STAT, (u64)path, (u64)&yst);
+    if (rc < 0) {
+        errno = ENOENT;
+        return -1;
     }
+    copy_yam_stat(st, &yst);
     return 0;
 }
 
-int stat(const char *path, struct stat *st) {
-    return fill_stat_for_path(path, st);
-}
-
 int lstat(const char *path, struct stat *st) {
-    return fill_stat_for_path(path, st);
+    return stat(path, st);
 }
 
 int fstat(int fd, struct stat *st) {
@@ -74,9 +86,12 @@ int fstat(int fd, struct stat *st) {
         errno = EBADF;
         return -1;
     }
-    memset(st, 0, sizeof(*st));
-    st->st_mode = (fd <= 2) ? (S_IFREG | S_IRUSR | S_IWUSR) : (S_IFREG | S_IRUSR);
-    st->st_blksize = 512;
-    st->st_nlink = 1;
+    yam_stat_t yst;
+    int rc = (int)syscall2(SYS_FSTAT, (u64)fd, (u64)&yst);
+    if (rc < 0) {
+        errno = EBADF;
+        return -1;
+    }
+    copy_yam_stat(st, &yst);
     return 0;
 }

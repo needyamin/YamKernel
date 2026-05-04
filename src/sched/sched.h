@@ -137,8 +137,9 @@ void    sched_start(void) NORETURN;
 
 /* Process management */
 i64     sys_fork(void);
-i64     sys_waitpid(i64 pid, i32 *status, u32 options);
+i64     sched_waitpid(i64 pid, i32 *status, u32 options);
 void    task_exit(void);
+void    sched_exit_current(i32 code);
 i64     sys_kill(u64 pid, u32 sig);
 void    sched_kill_task(u64 id);
 

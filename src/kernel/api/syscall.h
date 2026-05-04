@@ -83,13 +83,23 @@
 #define SYS_ACCEPT            74
 #define SYS_SENDTO            75
 #define SYS_RECVFROM          76
+#define SYS_SPAWN             77
+#define SYS_STAT              78
+#define SYS_FSTAT             79
+#define SYS_FTRUNCATE         80
+#define SYS_RENAME            81
+#define SYS_OPENAT            82
+#define SYS_FSTATAT           83
+#define SYS_MKDIRAT           84
+#define SYS_UNLINKAT          85
+#define SYS_RENAMEAT          86
 
 /* Touchscreen (new in v0.3.0) */
 #define SYS_TOUCH_CALIBRATE   56
 #define SYS_TOUCH_GET_SLOTS   57
 #define SYS_GESTURE_CONFIG    58
 
-#define SYS_MAX     77
+#define SYS_MAX     87
 
 #define YAM_ABI_VERSION 1
 #define YAM_OS_NAME "YamOS"
@@ -102,6 +112,7 @@
 #define YAM_OS_FLAG_NETWORK_STACK     (1u << 4)
 #define YAM_OS_FLAG_INSTALLER_SERVICE (1u << 5)
 #define YAM_OS_FLAG_SOCKET_ABI        (1u << 6)
+#define YAM_OS_FLAG_VFS_SPAWN         (1u << 7)
 
 #define YAM_APP_TYPE_PROCESS  1
 #define YAM_APP_TYPE_SERVICE  2
@@ -224,6 +235,33 @@ typedef struct {
     u64 size;
     u32 is_dir;
 } yam_dirent_t;
+
+#define YAM_S_IFMT  0170000
+#define YAM_S_IFDIR 0040000
+#define YAM_S_IFCHR 0020000
+#define YAM_S_IFREG 0100000
+#define YAM_S_IRUSR 0400
+#define YAM_S_IWUSR 0200
+#define YAM_S_IXUSR 0100
+
+#ifndef YAM_STAT_T_DEFINED
+#define YAM_STAT_T_DEFINED
+typedef struct {
+    u64 dev;
+    u64 ino;
+    u32 mode;
+    u32 nlink;
+    u32 uid;
+    u32 gid;
+    u64 rdev;
+    i64 size;
+    i64 blksize;
+    i64 blocks;
+    i64 atime;
+    i64 mtime;
+    i64 ctime;
+} yam_stat_t;
+#endif
 
 void syscall_init(void);
 i64 syscall_dispatch(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5);

@@ -36,4 +36,16 @@ static inline void yam_sleep_ms(u64 ms) {
     syscall1(SYS_SLEEPMS, ms);
 }
 
+static inline i64 yam_spawn(const char *path) {
+    return (i64)syscall3(SYS_SPAWN, (u64)path, 0, 0);
+}
+
+static inline i64 yam_spawn_args(const char *path, char *const argv[]) {
+    return (i64)syscall3(SYS_SPAWN, (u64)path, (u64)argv, 0);
+}
+
+static inline i64 yam_spawn_env(const char *path, char *const argv[], char *const envp[]) {
+    return (i64)syscall3(SYS_SPAWN, (u64)path, (u64)argv, (u64)envp);
+}
+
 #endif

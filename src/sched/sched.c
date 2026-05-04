@@ -209,12 +209,17 @@ task_t *sched_spawn(const char *name, void (*entry)(void *), void *arg, u8 prio)
 
 void task_exit(void) {
     cli();
-    task_t *cur = sched_current();
-    cur->state = TASK_ZOMBIE;
-    cur->exit_code = 0;
-    total_tasks--;
+    sched_exit_current(0);
     sched_yield();
     for(;;) hlt();
+}
+
+void sched_exit_current(i32 code) {
+    task_t *cur = sched_current();
+    if (!cur) return;
+    cur->exit_code = code;
+    cur->state = cur->parent ? TASK_ZOMBIE : TASK_DEAD;
+    if (!cur->parent && total_tasks > 0) total_tasks--;
 }
 
 task_t *active_tasks[MAX_CPUS];
@@ -510,8 +515,7 @@ i64 sys_fork(void) {
     return (i64)child->id;  /* Parent gets child PID; child would get 0 in real impl */
 }
 
-i64 sys_waitpid(i64 pid, i32 *status, u32 options) {
-    (void)options;
+i64 sched_waitpid(i64 pid, i32 *status, u32 options) {
     task_t *cur = sched_current();
     if (!cur) return -1;
 
@@ -521,16 +525,22 @@ i64 sys_waitpid(i64 pid, i32 *status, u32 options) {
             if (!child) continue;
             if (pid > 0 && (i64)child->id != pid) continue;
             if (child->state == TASK_ZOMBIE || child->state == TASK_DEAD) {
-                if (status) *status = child->exit_code;
+                i32 wait_status = (child->exit_code & 0xFF) << 8;
+                if (status) *status = wait_status;
                 i64 ret = (i64)child->id;
+                if (child->state == TASK_ZOMBIE && total_tasks > 0) total_tasks--;
+                child->state = TASK_DEAD;
                 /* Remove from children list */
                 cur->children[i] = cur->children[cur->child_count - 1];
                 cur->children[cur->child_count - 1] = NULL;
                 cur->child_count--;
+                kprintf("[SCHED] reaped child pid=%ld status=0x%x parent=%lu\n",
+                        ret, wait_status, cur->id);
                 return ret;
             }
         }
         /* No zombie child found — sleep and try again */
+        if (options & 1) return 0; /* WNOHANG-compatible first slice */
         task_sleep_ms(10);
     }
 }

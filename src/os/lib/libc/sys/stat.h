@@ -46,9 +46,26 @@ int stat(const char *path, struct stat *st);
 int fstat(int fd, struct stat *st);
 int lstat(const char *path, struct stat *st);
 static inline int fstatat(int dirfd, const char *path, struct stat *st, int flags) {
-    (void)dirfd;
-    (void)flags;
-    return stat(path, st);
+    yam_stat_t yst;
+    int rc = (int)syscall4(SYS_FSTATAT, (u64)dirfd, (u64)path, (u64)&yst, (u64)flags);
+    if (rc < 0 || !st) {
+        errno = ENOENT;
+        return -1;
+    }
+    st->st_dev = yst.dev;
+    st->st_ino = yst.ino;
+    st->st_mode = yst.mode;
+    st->st_nlink = yst.nlink;
+    st->st_uid = yst.uid;
+    st->st_gid = yst.gid;
+    st->st_rdev = yst.rdev;
+    st->st_size = yst.size;
+    st->st_blksize = yst.blksize;
+    st->st_blocks = yst.blocks;
+    st->st_atime = yst.atime;
+    st->st_mtime = yst.mtime;
+    st->st_ctime = yst.ctime;
+    return 0;
 }
 static inline int faccessat(int dirfd, const char *path, int mode, int flags) {
     (void)dirfd;
@@ -61,9 +78,4 @@ static inline int lchmod(const char *path, mode_t mode) { (void)path; (void)mode
 static inline int fchmodat(int dirfd, const char *path, mode_t mode, int flags) {
     (void)dirfd; (void)path; (void)mode; (void)flags; return 0;
 }
-static inline int mkdirat(int dirfd, const char *path, mode_t mode) {
-    (void)dirfd;
-    return mkdir(path, mode);
-}
-
 #endif

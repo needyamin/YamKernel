@@ -253,7 +253,7 @@ Current Application Architecture State
   permission before listening on `auth_channel`.
 - Added `APP_ARCHITECTURE.md` explaining the hybrid app model, ABI contract,
   app types, permissions, current authd example, and next production work.
-- Updated README and developer.html to document native app manifests, app
+- Updated README to document native app manifests, app
   registry, app ABI syscalls, and the new SDK header.
 - Verification after this change:
   - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
@@ -268,6 +268,253 @@ Current Application Architecture State
     verification evidence still appears.
   - Ran `make clean` after verification, so `build/` may be absent until the
     next `make iso`.
+- Added first real VFS-backed static app launch slice:
+  - Public ABI now includes `SYS_SPAWN` 77 and `SYS_MAX` 78.
+  - `yam_os_info_t.flags` now advertises `YAM_OS_FLAG_VFS_SPAWN`.
+  - `elf_spawn()` returns the spawned PID, while existing `elf_load()` remains
+    as a bool compatibility wrapper.
+  - `elf_spawn_path(path)` reads a static ELF through VFS file descriptors,
+    loads it into a user address space, and returns the new PID.
+  - Added argument-aware launch:
+    - `elf_spawn_argv()`
+    - `elf_spawn_path_argv()`
+    - `elf_spawn_argv_envp()`
+    - `elf_spawn_path_argv_envp()`
+    - user stack setup with `argc` and `argv[]`
+    - user stack setup with `envp[]`
+    - `enter_user_mode()` now preserves `argc` in RDI, `argv` in RSI, and
+      `envp` in RDX.
+  - `libyam` exposes `yam_spawn(path)`, `yam_spawn_args(path, argv)`, and
+    `yam_spawn_env(path, argv, envp)`.
+  - libc exposes non-POSIX `spawn(path)`, `spawnv(path, argv)`, and
+    `spawnve(path, argv, envp)` wrappers while `execve()` remains `ENOSYS`
+    until true process replacement exists.
+  - Added `src/os/apps/hello.c` as a static Ring 3 sample app.
+  - Makefile builds `build/hello.elf`; limine packages it as a boot module.
+  - PID 1 registers the hello module into initrd as `/bin/hello` and launches
+    it by bare name via `elf_spawn_resolved_argv_envp("hello", ...)`.
+  - Added executable name resolution for bare spawn names:
+    - `/bin`
+    - `/usr/local/bin`
+    - `/opt/yamos/packages`
+    - `/home/root/bin`
+  - `SYS_SPAWN` uses the same resolver, so userspace can call
+    `yam_spawn("hello")` without hard-coding `/bin/hello`.
+  - Terminal exposes `run /bin/hello arg...` and direct `hello arg...`, both
+    using the same resolver and passing a small shell environment.
+  - Fixed VFS root mount relative-path handling so initrd reads receive
+    `/bin/hello` instead of `bin/hello`.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed.
+    - `build/verify.log` showed:
+      - `[INIT] Registered /bin/hello from boot module`
+      - `[ELF] spawn path='/bin/hello' -> pid=4`
+      - `[APP] register pid=4 task='hello' app='hello' type=1 perms=0x1`
+      - `[HELLO] Hello from /bin/hello on YamOS ABI=1 pid=4 argc=2`
+      - `[HELLO] argv[0]=/bin/hello`
+      - `[HELLO] argv[1]=--boot-probe`
+      - `[HELLO] envp[0]=YAMOS_BOOT=1`
+      - `[HELLO] envp[1]=YAMOS_USER=root`
+      - `[INIT] VFS spawn hello -> pid=4`
+- Added first exit/wait lifecycle hardening:
+  - `sys_exit()` now routes through scheduler-owned `sched_exit_current()`.
+  - User tasks with parents become `TASK_ZOMBIE` instead of immediately
+    becoming `TASK_DEAD`.
+  - `sched_waitpid()` reaps zombie children, removes them from the parent child
+    table, decrements task accounting for reaped zombies, and returns encoded
+    Unix-style exit status `(exit_code & 0xff) << 8`.
+  - `SYS_WAITPID` now uses a syscall-layer wrapper that copies the encoded
+    status back to user memory through the SMAP-aware `copy_to_user()` helper
+    instead of letting scheduler code dereference a user pointer.
+  - `waitpid(..., WNOHANG)` first slice returns 0 when no child is ready.
+  - libc now exposes `wait()`, `WNOHANG`, `WEXITSTATUS(status)`, and
+    `WIFEXITED(status)`.
+  - PID 1 now waits for the `/bin/hello` boot probe and logs the exit status.
+  - `src/os/apps/hello.c` now verifies the public process ABI by spawning a
+    child `hello` from Ring 3 with `spawnve()` and reaping it with `waitpid()`.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed.
+    - `build/verify.log` showed:
+      - `[HELLO] spawn child -> pid=5`
+      - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
+      - `[SYS] task 'hello' exit(0)`
+      - `[SCHED] reaped child pid=4 status=0x0 parent=1`
+      - `[INIT] waitpid hello -> pid=4 status=0x0 exit=0`
+- Added first persistent app storage/install slice:
+  - VFS now promotes `/usr/local` to the primary writable FAT32 volume when a
+    block-backed FAT32 disk is available.
+  - FAT32-backed `sys_write()` now preserves file offset by rewriting the full
+    file image when writing beyond offset 0; this fixes chunked writes
+    overwriting earlier bytes.
+  - Executable resolver now requires readable ELF magic before accepting a
+    candidate path, preventing false positives from open-only descriptors.
+  - PID 1 installs the sample app to `/usr/local/bin/hello-local` and launches
+    it by bare name through the executable resolver.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed.
+    - `build/verify.log` showed:
+      - `[VFS] Promoted /usr/local to persistent FAT32 volume vd0`
+      - `[INIT] Installed persistent sample app /usr/local/bin/hello-local`
+      - `[ELF] spawn path='/usr/local/bin/hello-local' -> pid=5`
+      - `[HELLO] argv[0]=/usr/local/bin/hello-local`
+      - `[HELLO] envp[1]=YAMOS_APP_SOURCE=/usr/local/bin`
+      - `[INIT] waitpid hello-local -> pid=5 status=0x0 exit=0`
+- Hardened VFS `open()` existence semantics:
+  - `sys_open()` now checks path existence before allocating a file descriptor.
+  - Missing paths fail unless `O_CREAT` is supplied.
+  - RAMFS and FAT32 still create regular files with `O_CREAT`; `O_TRUNC`
+    truncates only after existence/create checks.
+  - Initrd remains read-only and cannot create missing files.
+  - `/dev` opens only entries accepted by `devfs_exists()`.
+  - `/proc` opens only known pseudo-files: `cpuinfo`, `meminfo`, `version`,
+    `uptime`, and `loadavg`.
+  - This removes the earlier generic false-positive fd behavior that forced
+    executable resolution to defend against non-existent candidate paths.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed.
+    - `build/verify.log` still showed VFS spawn, user-space spawn/wait, FAT32
+      `/usr/local/bin/hello-local`, DHCP/DNS/TCP, and HTTP evidence.
+- Added kernel-backed file metadata ABI slice:
+  - Public ABI now reserves `SYS_STAT` 78 and `SYS_FSTAT` 79; `SYS_MAX` is 80.
+  - Added `yam_stat_t` to the kernel public syscall header and the user SDK
+    syscall mirror. The typedef is guarded with `YAM_STAT_T_DEFINED` because
+    user apps can include both `libyam/syscall.h` and `kernel/api/syscall.h`.
+  - VFS implements `sys_stat(path, out)` and `sys_fstat(fd, out)`.
+  - Metadata currently reports file type, user read/write/execute bits, size,
+    block size, and block count for initrd, RAMFS, FAT32, `/dev`, `/proc`,
+    mount points, and synthetic mount-parent directories like `/usr`.
+  - libc `stat()`, `lstat()`, and `fstat()` now call the kernel metadata ABI
+    instead of guessing in user space.
+  - `src/os/apps/hello.c` now probes `stat()` and `fstat()` for `/bin/hello`
+    and `/usr/local/bin/hello-local` from Ring 3.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed.
+    - `build/verify.log` showed:
+      - `[HELLO] stat /bin/hello mode=0100400 size=103504`
+      - `[HELLO] fstat /bin/hello mode=0100400 size=103504`
+      - `[HELLO] stat /usr/local/bin/hello-local mode=0100600 size=103504`
+      - `[HELLO] fstat /usr/local/bin/hello-local mode=0100600 size=103504`
+      - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
+      - `[HTTP] GET http://example.com/ -> 797 bytes`
+- Added kernel-backed `ftruncate()` file resizing slice:
+  - Public ABI now includes `SYS_FTRUNCATE` 80; `SYS_MAX` is 81.
+  - VFS implements `sys_ftruncate(fd, length)` for RAMFS and FAT32 regular
+    files.
+  - RAMFS uses `ramfs_resize()` to shrink or zero-extend existing file data.
+  - FAT32 uses the existing full-file image write path to shrink or zero-extend
+    file contents and flush block-backed volumes.
+  - libc `ftruncate()` now calls `SYS_FTRUNCATE` instead of returning ENOSYS.
+  - `src/os/apps/hello.c` now probes `/tmp/hello-truncate.txt` by writing six
+    bytes, checking `fstat()`, truncating to two bytes, and checking `fstat()`
+    again from Ring 3.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed.
+    - `build/verify.log` showed:
+      - `[HELLO] fstat /tmp/hello-truncate.txt before=6`
+      - `[HELLO] ftruncate /tmp/hello-truncate.txt size=2`
+      - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
+      - `[HTTP] GET http://example.com/ -> 797 bytes`
+- Added kernel-backed `rename()` VFS slice:
+  - Public ABI now includes `SYS_RENAME` 81; `SYS_MAX` is 82.
+  - VFS implements `sys_rename(oldpath, newpath)` for same-mount paths.
+  - RAMFS renames nodes in place and updates directory subtree names.
+  - FAT32 regular-file rename currently uses copy-to-new-path then unlink-old;
+    FAT32 directory rename and atomic replace semantics remain future work.
+  - libc `rename()` now calls `SYS_RENAME` instead of returning ENOSYS.
+  - `src/os/apps/hello.c` now probes `/tmp/hello-rename.tmp` ->
+    `/tmp/hello-rename.txt` from Ring 3 and checks the renamed file size.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed.
+    - `build/verify.log` showed the rename probe in all three `hello` runs:
+      - `[HELLO] rename /tmp/hello-rename.txt size=6`
+      - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
+      - `[INIT] waitpid hello-local -> pid=6 status=0x0 exit=0`
+      - `[HTTP] GET http://example.com/ -> 797 bytes`
+- Added first dirfd-aware `*at` path syscall slice:
+  - Public ABI now includes:
+    - `SYS_OPENAT` 82
+    - `SYS_FSTATAT` 83
+    - `SYS_MKDIRAT` 84
+    - `SYS_UNLINKAT` 85
+    - `SYS_RENAMEAT` 86
+    - `SYS_MAX` is 87.
+  - `src/cpu/syscall.c` resolves relative paths against the supplied directory
+    file descriptor when the fd points to a VFS directory, or against cwd when
+    `dirfd == AT_FDCWD`.
+  - libc wrappers now route `openat`, `fstatat`, `mkdirat`, `unlinkat`, and
+    `renameat` through the kernel. Fuller flag semantics remain future work;
+    `unlinkat(..., AT_REMOVEDIR)` still returns failure because directory
+    removal is not yet separated from recursive ramfs unlink semantics.
+  - `src/os/apps/hello.c` probes the feature by opening `/tmp` as a directory
+    fd, creating `hello-at.tmp` with `openat`, checking it with `fstatat`,
+    renaming it to `hello-at.txt` with `renameat`, and checking again.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed.
+    - `build/verify.log` showed the probe in all three `hello` runs:
+      - `[HELLO] openat/fstatat /tmp/hello-at.tmp size=2`
+      - `[HELLO] renameat /tmp/hello-at.txt size=2`
+      - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
+      - `[HTTP] GET http://example.com/ -> 797 bytes`
+- Added VFS `O_APPEND` write semantics:
+  - `sys_write()` now checks `file_t.flags & O_APPEND` before regular VFS
+    writes and moves the file offset to current EOF using `sys_stat()`.
+  - This applies to RAMFS and FAT32-backed regular file writes, including libc
+    append modes such as `fopen(path, "a")`.
+  - `src/os/apps/hello.c` now probes `/tmp/hello-append.txt` by writing one
+    byte normally, reopening with `O_APPEND`, writing another byte, and checking
+    the final size from Ring 3.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed.
+    - `build/verify.log` showed the append probe in all three `hello` runs:
+      - `[HELLO] append /tmp/hello-append.txt size=2`
+      - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
+      - `[HTTP] GET http://example.com/ -> 797 bytes`
+- Fixed `lseek(..., SEEK_END)` to use VFS metadata:
+  - `sys_lseek()` now calls `sys_fstat()` for `SEEK_END` instead of only
+    knowing RAMFS sizes and falling back to the current offset for other
+    filesystems.
+  - This makes EOF seeking work for initrd, RAMFS, FAT32, `/proc`, and other
+    paths covered by the metadata ABI.
+  - `src/os/apps/hello.c` now logs `lseek(fd, 0, SEEK_END)` for its own
+    executable.
+  - Verification:
+    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
+      passed.
+    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
+      passed.
+    - `build/verify.log` showed:
+      - `[HELLO] stat /bin/hello mode=0100400 size=117472`
+      - `[HELLO] seek_end /bin/hello offset=117472`
+      - `[HELLO] seek_end /usr/local/bin/hello-local offset=117472`
+      - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
+      - `[HTTP] GET http://example.com/ -> 798 bytes`
 
 Current Desktop/GUI State
 -------------------------
@@ -494,7 +741,7 @@ Current Desktop/GUI State
     `send()` through `SYS_WRITE_FD` and `recv()` through `SYS_READ`.
   - `sendto/recvfrom` ABI numbers are reserved and currently return `-1` until
     fd-backed UDP datagram sockets are implemented.
-  - Updated `KERNEL_CAPABILITY_MATRIX.md`, README, and developer.html.
+  - Updated `KERNEL_CAPABILITY_MATRIX.md`, README.
   - Verification:
     - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
       passed.

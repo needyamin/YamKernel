@@ -11,6 +11,7 @@
 #include "../lib/string.h"
 #include "../net/net.h"
 #include "fs/vfs.h"
+#include "fs/elf.h"
 #include "os/services/installer/installer.h"
 
 void wl_spawn_app_async(void *data, usize size, const char *name);
@@ -156,6 +157,8 @@ static void cmd_help(void) {
     term_puts("  ps       - List running tasks", COL_FG);
     term_newline();
     term_puts("  ls cd pwd cat mkdir touch rm write history - File tools", COL_FG);
+    term_newline();
+    term_puts("  run /bin/hello - Launch a VFS ELF app", COL_FG);
     term_newline();
     term_puts("  ifconfig netstat - Network status", COL_FG);
     term_newline();
@@ -350,6 +353,46 @@ static void cmd_write_file(char *args) {
     term_newline();
 }
 
+static void cmd_run_app(char *args) {
+    if (!args || !*args) {
+        term_puts("run: usage run /bin/hello", COL_ERR);
+        term_newline();
+        return;
+    }
+    char *argv[16];
+    int argc = 0;
+    char *p = args;
+    while (*p && argc < 15) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        argv[argc++] = p;
+        while (*p && *p != ' ') p++;
+        if (*p) *p++ = 0;
+    }
+    argv[argc] = NULL;
+    if (argc == 0) {
+        term_puts("run: usage run /bin/hello", COL_ERR);
+        term_newline();
+        return;
+    }
+    const char *envp[] = {
+        "YAMOS_SHELL=terminal",
+        "YAMOS_USER=root",
+        "PATH=/bin:/usr/local/bin:/opt/yamos/packages:/home/root/bin",
+        NULL
+    };
+    i64 pid = elf_spawn_resolved_argv_envp(argv[0], argc,
+                                           (const char *const *)argv, envp);
+    if (pid < 0) {
+        term_puts("run: spawn failed", COL_ERR);
+    } else {
+        char line[96];
+        ksnprintf(line, sizeof(line), "spawned pid=%ld", pid);
+        term_puts(line, COL_PROMPT);
+    }
+    term_newline();
+}
+
 static void cmd_net_status(void) {
     char line[128];
     ksnprintf(line, sizeof(line), "eth0: %s  dhcp=%s  mac=%02x:%02x:%02x:%02x:%02x:%02x",
@@ -509,6 +552,8 @@ static void process_command(void) {
         cmd_rm(cmd + 3);
     } else if (strncmp(cmd, "write ", 6) == 0) {
         cmd_write_file(cmd + 6);
+    } else if (strncmp(cmd, "run ", 4) == 0) {
+        cmd_run_app(cmd + 4);
     } else if (strcmp(cmd, "ifconfig") == 0 || strcmp(cmd, "ip addr") == 0 ||
                strcmp(cmd, "netstat") == 0 || strcmp(cmd, "network") == 0) {
         cmd_net_status();
@@ -544,6 +589,38 @@ static void process_command(void) {
     } else if (strncmp(cmd, "git ", 4) == 0) {
         cmd_git(cmd + 4);
     } else {
+        char direct_cmd[128];
+        copy_text(direct_cmd, cmd, sizeof(direct_cmd));
+        char *argv[16];
+        int argc = 0;
+        char *p = direct_cmd;
+        while (*p && argc < 15) {
+            while (*p == ' ') p++;
+            if (!*p) break;
+            argv[argc++] = p;
+            while (*p && *p != ' ') p++;
+            if (*p) *p++ = 0;
+        }
+        argv[argc] = NULL;
+        if (argc > 0) {
+            const char *envp[] = {
+                "YAMOS_SHELL=terminal",
+                "YAMOS_USER=root",
+                "PATH=/bin:/usr/local/bin:/opt/yamos/packages:/home/root/bin",
+                NULL
+            };
+            i64 pid = elf_spawn_resolved_argv_envp(argv[0], argc,
+                                                   (const char *const *)argv,
+                                                   envp);
+            if (pid >= 0) {
+                char line[96];
+                ksnprintf(line, sizeof(line), "spawned pid=%ld", pid);
+                term_puts(line, COL_PROMPT);
+                term_newline();
+                input_len = 0;
+                return;
+            }
+        }
         term_puts(cmd, COL_ERR);
         term_puts(": command not found", COL_ERR);
         term_newline();

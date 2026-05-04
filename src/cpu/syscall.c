@@ -7,6 +7,7 @@
 #include "lib/string.h"
 #include "drivers/serial/serial.h"
 #include "fs/vfs.h"
+#include "fs/elf.h"
 #include "fs/poll.h"
 #include "mem/pmm.h"
 #include "mem/vmm.h"
@@ -27,6 +28,9 @@
 extern void syscall_entry(void);   /* in syscall.asm */
 
 static u8 syscall_stack[16384] ALIGNED(16);
+
+#define YAM_AT_FDCWD (-100)
+#define YAM_AT_REMOVEDIR 0x200
 
 static u64 *syscall_current_pml4(void) {
     task_t *t = this_cpu()->current;
@@ -73,9 +77,8 @@ static i64 copy_to_user(u64 uout, const void *src, usize len);
 
 static i64 sys_exit(u64 code) {
     task_t *t = this_cpu()->current;
-    t->state = TASK_DEAD;
-    t->exit_code = (i32)code;
     kprintf_color(0xFFFF8833, "[SYS] task '%s' exit(%lu)\n", t->name, code);
+    sched_exit_current((i32)code);
     sched_yield();
     for (;;) hlt();
     return 0;
@@ -247,11 +250,91 @@ static i64 sys_readdir_user(u64 upath, u32 index, u64 uout) {
     return copy_to_user(uout, &out, sizeof(out));
 }
 
+static i64 sys_stat_user(u64 upath, u64 uout) {
+    char path[256];
+    yam_stat_t st;
+    copy_user_string(path, sizeof(path), upath);
+    if (!path[0] || !uout) return -1;
+    if (sys_stat(path, &st) < 0) return -1;
+    return copy_to_user(uout, &st, sizeof(st));
+}
+
+static i64 sys_fstat_user(int fd, u64 uout) {
+    yam_stat_t st;
+    if (!uout) return -1;
+    if (sys_fstat(fd, &st) < 0) return -1;
+    return copy_to_user(uout, &st, sizeof(st));
+}
+
 static i64 sys_unlink_user(u64 upath) {
     char path[256];
     copy_user_string(path, sizeof(path), upath);
     if (!path[0]) return -1;
     return sys_unlink(path);
+}
+
+static i64 sys_rename_user(u64 uold, u64 unew) {
+    char oldpath[256];
+    char newpath[256];
+    copy_user_string(oldpath, sizeof(oldpath), uold);
+    copy_user_string(newpath, sizeof(newpath), unew);
+    if (!oldpath[0] || !newpath[0]) return -1;
+    return sys_rename(oldpath, newpath);
+}
+
+static i64 resolve_at_path(int dirfd, u64 upath, char *out, usize cap) {
+    char path[256];
+    copy_user_string(path, sizeof(path), upath);
+    if (!path[0] || !out || cap == 0) return -1;
+    if (path[0] == '/' || dirfd == YAM_AT_FDCWD) {
+        strncpy(out, path, cap - 1);
+        out[cap - 1] = 0;
+        return 0;
+    }
+
+    file_t *dir = fd_get(dirfd);
+    if (!dir || dir->mount_idx < 0) return -1;
+    yam_stat_t st;
+    if (sys_stat(dir->path, &st) < 0 || (st.mode & YAM_S_IFMT) != YAM_S_IFDIR) return -1;
+    if (strcmp(dir->path, "/") == 0) ksnprintf(out, cap, "/%s", path);
+    else ksnprintf(out, cap, "%s/%s", dir->path, path);
+    return 0;
+}
+
+static i64 sys_openat_user(int dirfd, u64 upath, u32 flags) {
+    char path[256];
+    if (resolve_at_path(dirfd, upath, path, sizeof(path)) < 0) return -1;
+    return sys_open(path, flags);
+}
+
+static i64 sys_fstatat_user(int dirfd, u64 upath, u64 uout, int flags) {
+    (void)flags;
+    char path[256];
+    yam_stat_t st;
+    if (!uout || resolve_at_path(dirfd, upath, path, sizeof(path)) < 0) return -1;
+    if (sys_stat(path, &st) < 0) return -1;
+    return copy_to_user(uout, &st, sizeof(st));
+}
+
+static i64 sys_mkdirat_user(int dirfd, u64 upath, u32 mode) {
+    char path[256];
+    if (resolve_at_path(dirfd, upath, path, sizeof(path)) < 0) return -1;
+    return sys_mkdir(path, mode);
+}
+
+static i64 sys_unlinkat_user(int dirfd, u64 upath, int flags) {
+    if (flags & YAM_AT_REMOVEDIR) return -1;
+    char path[256];
+    if (resolve_at_path(dirfd, upath, path, sizeof(path)) < 0) return -1;
+    return sys_unlink(path);
+}
+
+static i64 sys_renameat_user(int olddirfd, u64 uold, int newdirfd, u64 unew) {
+    char oldpath[256];
+    char newpath[256];
+    if (resolve_at_path(olddirfd, uold, oldpath, sizeof(oldpath)) < 0) return -1;
+    if (resolve_at_path(newdirfd, unew, newpath, sizeof(newpath)) < 0) return -1;
+    return sys_rename(oldpath, newpath);
 }
 
 static i64 sys_open_user(u64 upath, u32 flags) {
@@ -283,6 +366,71 @@ static i64 sys_getcwd_user(u64 uout, usize size) {
     return copy_to_user(uout, cwd, (usize)n + 1) == 0 ? n : -1;
 }
 
+static void free_user_string_vector(char **argv, int argc) {
+    if (!argv) return;
+    for (int i = 0; i < argc; i++) {
+        if (argv[i]) kfree(argv[i]);
+    }
+}
+
+static int copy_user_string_vector(u64 uargv, const char *fallback,
+                                   char **argv, int max_argc) {
+    int argc = 0;
+    if (!argv || max_argc <= 0) return 0;
+    memset(argv, 0, (usize)max_argc * sizeof(char *));
+    if (!uargv) {
+        argv[0] = (char *)kmalloc(256);
+        if (!argv[0]) return 0;
+        strncpy(argv[0], fallback ? fallback : "app", 255);
+        argv[0][255] = 0;
+        return 1;
+    }
+
+    bool smap = (read_cr4() & CR4_SMAP) != 0;
+    for (; argc < max_argc; argc++) {
+        u64 uptr = 0;
+        if (smap) __asm__ volatile ("stac");
+        uptr = ((const u64 *)uargv)[argc];
+        if (smap) __asm__ volatile ("clac");
+        if (!uptr) break;
+        argv[argc] = (char *)kmalloc(256);
+        if (!argv[argc]) break;
+        copy_user_string(argv[argc], 256, uptr);
+    }
+    if (argc == 0) {
+        argv[0] = (char *)kmalloc(256);
+        if (!argv[0]) return 0;
+        strncpy(argv[0], fallback ? fallback : "app", 255);
+        argv[0][255] = 0;
+        argc = 1;
+    }
+    return argc;
+}
+
+static i64 sys_spawn_user(u64 upath, u64 uargv, u64 uenvp) {
+    char path[256];
+    char *argv[16];
+    char *envp[16];
+    copy_user_string(path, sizeof(path), upath);
+    if (!path[0]) return -1;
+    int argc = copy_user_string_vector(uargv, path, argv, 16);
+    int envc = copy_user_string_vector(uenvp, NULL, envp, 16);
+    i64 pid = elf_spawn_resolved_argv_envp(path, argc,
+                                           (const char *const *)argv,
+                                           envc > 0 ? (const char *const *)envp : NULL);
+    free_user_string_vector(argv, argc);
+    free_user_string_vector(envp, envc);
+    return pid;
+}
+
+static i64 sys_waitpid_user(i64 pid, u64 ustatus, u32 options) {
+    i32 kstatus = 0;
+    i64 waited = sched_waitpid(pid, ustatus ? &kstatus : NULL, options);
+    if (waited <= 0) return waited;
+    if (ustatus && copy_to_user(ustatus, &kstatus, sizeof(kstatus)) < 0) return -1;
+    return waited;
+}
+
 static i64 copy_to_user(u64 uout, const void *src, usize len) {
     if (!uout || !src || len == 0) return -1;
     bool smap = (read_cr4() & CR4_SMAP) != 0;
@@ -306,7 +454,8 @@ static i64 sys_os_info(u64 uout) {
                  YAM_OS_FLAG_DRIVER_SYSCALLS |
                  YAM_OS_FLAG_NETWORK_STACK |
                  YAM_OS_FLAG_INSTALLER_SERVICE |
-                 YAM_OS_FLAG_SOCKET_ABI;
+                 YAM_OS_FLAG_SOCKET_ABI |
+                 YAM_OS_FLAG_VFS_SPAWN;
     strncpy(info.os_name, YAM_OS_NAME, sizeof(info.os_name) - 1);
     strncpy(info.kernel_name, YAM_KERNEL_NAME, sizeof(info.kernel_name) - 1);
     return copy_to_user(uout, &info, sizeof(info));
@@ -745,7 +894,7 @@ i64 syscall_dispatch(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5) {
 
     /* v0.3.0 process management */
     case SYS_FORK:          SYSCALL_RETURN(sys_fork());
-    case SYS_WAITPID:       SYSCALL_RETURN(sys_waitpid((i64)a1, (i32 *)a2, (u32)a3));
+    case SYS_WAITPID:       SYSCALL_RETURN(sys_waitpid_user((i64)a1, a2, (u32)a3));
     case SYS_BRK:           SYSCALL_RETURN(sys_brk(a1));
     case SYS_MPROTECT:      SYSCALL_RETURN(sys_mprotect((void *)a1, (usize)a2, (u32)a3));
     case SYS_CLOCK_GETTIME: SYSCALL_RETURN(sys_clock_gettime());
@@ -772,6 +921,16 @@ i64 syscall_dispatch(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5) {
     case SYS_ACCEPT:            SYSCALL_RETURN(sys_accept_user((int)a1, a2, a3));
     case SYS_SENDTO:            SYSCALL_RETURN(-1);
     case SYS_RECVFROM:          SYSCALL_RETURN(-1);
+    case SYS_SPAWN:             SYSCALL_RETURN(sys_spawn_user(a1, a2, a3));
+    case SYS_STAT:              SYSCALL_RETURN(sys_stat_user(a1, a2));
+    case SYS_FSTAT:             SYSCALL_RETURN(sys_fstat_user((int)a1, a2));
+    case SYS_FTRUNCATE:         SYSCALL_RETURN(sys_ftruncate((int)a1, (isize)a2));
+    case SYS_RENAME:            SYSCALL_RETURN(sys_rename_user(a1, a2));
+    case SYS_OPENAT:            SYSCALL_RETURN(sys_openat_user((int)a1, a2, (u32)a3));
+    case SYS_FSTATAT:           SYSCALL_RETURN(sys_fstatat_user((int)a1, a2, a3, (int)a4));
+    case SYS_MKDIRAT:           SYSCALL_RETURN(sys_mkdirat_user((int)a1, a2, (u32)a3));
+    case SYS_UNLINKAT:          SYSCALL_RETURN(sys_unlinkat_user((int)a1, a2, (int)a3));
+    case SYS_RENAMEAT:          SYSCALL_RETURN(sys_renameat_user((int)a1, a2, (int)a3, a4));
 
     /* Wayland */
     case SYS_WL_CREATE_SURFACE: SYSCALL_RETURN(sys_wl_create_surface(a1, (i32)a2, (i32)a3, (u32)a4, (u32)a5));

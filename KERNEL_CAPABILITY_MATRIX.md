@@ -17,8 +17,8 @@ x86_64 operating-system workloads.
 | Requirement | YamOS State | Notes |
 | --- | --- | --- |
 | Persistent disk/storage driver fully mounted as writable system volume | PARTIAL | virtio-blk disk registers with block core and FAT32 volumes auto-mount under /mnt; root is still initrd/ramfs |
-| Full POSIX/Linux syscall compatibility | MISSING | syscall audit, errno model, path APIs, process APIs, socket APIs, permissions |
-| `execve` and stronger process model | MISSING | replace current stubs with executable replacement, argv/envp, wait/exit hardening |
+| Full POSIX/Linux syscall compatibility | MISSING | syscall audit, errno model, remaining path APIs, process APIs, socket APIs, permissions |
+| `execve` and stronger process model | PARTIAL | `SYS_SPAWN` can launch static ELF files from VFS paths with argv/envp; user exit now creates waitable zombies and libc `waitpid` reaps encoded exit status through a syscall copy-out wrapper. True `execve`, interpreter scripts, process replacement, and broader wait semantics remain |
 | Dynamic linker / shared libraries | MISSING | ELF interpreter, relocation loader, shared object search path, libc ABI |
 | Threads and signals | MISSING | pthread/TLS/signal delivery/signal masks required by runtimes and browsers |
 | Real permissions/users/security | MISSING | persistent users, UID/GID, file modes, capabilities, sandboxing |
@@ -36,12 +36,12 @@ Linux/POSIX-style ports.
 
 | Compatibility Area | Missing / Incomplete Items |
 | --- | --- |
-| Process execution | `execve`, `execvpe`, argv/envp setup, interpreter scripts, process replacement, robust `waitpid`, exit status semantics |
+| Process execution | PARTIAL: `SYS_SPAWN` launches static ELF files from VFS paths or bare names resolved through the early executable search path, with argv/envp; `exit`/`waitpid` now handle waitable zombies and encoded exit status, including user-space status copy-out. Missing `execve`, `execvpe`, interpreter scripts, process replacement, signals, and full wait option semantics |
 | Dynamic linking | ELF `PT_INTERP`, shared library loader, relocations, PLT/GOT, `dlopen`, `dlsym`, `dlclose`, library search paths |
 | Threads | kernel threads for user processes, pthread ABI, TLS, thread-local errno, robust futex behavior, thread join/detach |
 | Signals | signal delivery, masks, handlers, default actions, `sigaction`, `sigprocmask`, timers and interruption semantics |
-| File API | PARTIAL: disk-backed FAT32 create/write/truncate/unlink works for regular files; missing `rename`, `link`, `symlink`, `readlink`, `stat/lstat/fstat` accuracy, `fcntl`, file locks, permissions |
-| Directories/path APIs | PARTIAL: per-process cwd, `chdir`, `getcwd`, and relative VFS paths exist; missing `openat` family and mount namespaces |
+| File API | PARTIAL: `open` now fails missing paths unless `O_CREAT` is supplied; `O_APPEND` write semantics work; `lseek(..., SEEK_END)` uses VFS metadata; kernel-backed `stat`/`fstat` ABI exists for file size/type metadata; `ftruncate` works for RAMFS/FAT32 files; `rename` works for RAMFS and FAT32 regular files; disk-backed FAT32 create/write/truncate/unlink works for regular files; missing `link`, `symlink`, `readlink`, fuller timestamp/device accuracy, `fcntl`, file locks, permissions |
+| Directories/path APIs | PARTIAL: per-process cwd, `chdir`, `getcwd`, relative VFS paths, and first `openat`/`fstatat`/`mkdirat`/`unlinkat`/`renameat` support exist; missing mount namespaces and fuller `*at` flag semantics |
 | Memory API | file-backed `mmap`, shared mappings, `msync`, `mremap`, guard/protection auditing, overcommit policy |
 | Sockets/network | nonblocking mode, `select`, `poll` hardening, `epoll`, `getsockopt/setsockopt`, `getsockname/getpeername`, UDP sockets, IPv6 |
 | Time APIs | monotonic/realtime clocks, `nanosleep`, timers, timezone/localtime correctness |
@@ -96,9 +96,9 @@ Linux/POSIX-style ports.
 | AHCI SATA | MISSING | PCI probe, HBA init, command slots |
 | NVMe | MISSING | PCI probe, admin queue, IO queues |
 | Partition parser | PARTIAL | MBR FAT32 detection, GPT basic-data FAT32-compatible detection, and superfloppy FAT32 fallback |
-| Persistent root/system volume | PARTIAL | block-backed FAT32 mounts at /mnt/vd0; /home and /var are promoted to disk when available; root remains initrd/ramfs |
+| Persistent root/system volume | PARTIAL | block-backed FAT32 mounts at /mnt/vd0; /home, /var, and /usr/local are promoted to disk when available; root remains initrd/ramfs |
 | FAT32 | PARTIAL | connect to block layer, fsck/recovery |
-| VFS | PARTIAL | permissions, rename/unlink, directory iteration |
+| VFS | PARTIAL | path resolution, open existence checks, create/truncate/ftruncate, rename, unlink, directory iteration, and basic stat/fstat metadata work; permissions, link/symlink/timestamp hardening remain |
 | Page cache | MISSING | required before serious file-backed mmap and speed |
 
 ## Processes, Security, And Syscalls
@@ -106,7 +106,7 @@ Linux/POSIX-style ports.
 | Area | YamOS State | Next Work |
 | --- | --- | --- |
 | Scheduler | PARTIAL | priorities, affinity, latency tests |
-| Userspace ELF loading | PARTIAL | dynamic linker story, signals, wait/exec hardening |
+| Userspace ELF loading | PARTIAL | static ELF boot modules, argv/envp-aware VFS-path spawn, storage-backed `/usr/local/bin` app launch, and user-space spawn/wait verification work; dynamic linker story, signals, and true exec hardening remain |
 | Syscall table | PARTIAL | POSIX coverage audit |
 | Users/accounts UI | PARTIAL | persistent accounts, password hashing |
 | Permissions/security model | MISSING | UID/GID, file permissions, capabilities |

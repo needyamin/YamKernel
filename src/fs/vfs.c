@@ -18,6 +18,9 @@
 typedef enum { FS_NONE=0, FS_INITRD, FS_FAT32, FS_DEVFS, FS_PROCFS, FS_RAMFS } fs_type_e;
 
 #define VFS_BLOCK_FAT32_MAX_BYTES (64 * 1024 * 1024)
+#define VFS_O_CREAT 0x0040
+#define VFS_O_TRUNC 0x0200
+#define VFS_O_APPEND 0x0400
 
 #define RAMFS_MAX_FILES 128
 #define RAMFS_MAX_DATA  (16 * 1024 * 1024)
@@ -180,6 +183,7 @@ static bool vfs_mount_fat32_block(block_device_t *dev, u64 start_lba,
                                   u64 sector_count, const char *mount_point);
 static void vfs_promote_home_to_block(vfs_mount_t *source);
 static void vfs_promote_var_to_block(vfs_mount_t *source);
+static void vfs_promote_usr_local_to_block(vfs_mount_t *source);
 
 /* Find the best-matching mount for a given path.
  * Returns the mount index and sets *rel_path to the path relative to the mount. */
@@ -199,6 +203,10 @@ static int vfs_find_mount(const char *path, const char **rel_path) {
     }
     if (best >= 0 && rel_path) {
         const char *p = path + best_len;
+        if (best_len == 1) {
+            *rel_path = (*p == '\0') ? "/" : path;
+            return best;
+        }
         /* Ensure relative path starts with / */
         if (*p != '/' && best_len > 1) {
             /* mount point is /foo, path is /foo/bar — rel = /bar */
@@ -250,6 +258,11 @@ static bool mount_child_at(const char *parent, u32 index, vfs_dirent_t *out) {
         seen++;
     }
     return false;
+}
+
+static bool mount_has_child(const char *parent) {
+    vfs_dirent_t scratch;
+    return mount_child_at(parent, 0, &scratch);
 }
 
 static bool mbr_type_is_fat32(u8 type) {
@@ -475,6 +488,22 @@ static void vfs_promote_var_to_block(vfs_mount_t *source) {
             source->block_dev ? source->block_dev->name : "(unknown)");
 }
 
+static void vfs_promote_usr_local_to_block(vfs_mount_t *source) {
+    if (!source || source->type != FS_FAT32 || !source->priv) return;
+
+    fat32_vol_t *vol = (fat32_vol_t *)source->priv;
+    bool changed = false;
+    changed |= fat32_ensure_dir_path(vol, "/bin");
+    changed |= fat32_ensure_dir_path(vol, "/lib");
+    changed |= fat32_ensure_dir_path(vol, "/share");
+    if (changed && source->block_backed) (void)vfs_flush_block_mount(source);
+
+    if (!vfs_replace_mount_with_block_alias("/usr/local", source)) return;
+
+    kprintf("[VFS] Promoted /usr/local to persistent FAT32 volume %s\n",
+            source->block_dev ? source->block_dev->name : "(unknown)");
+}
+
 static void vfs_mount_block_devices(void) {
     u8 sector[512];
     char mount_point[32];
@@ -527,6 +556,7 @@ static void vfs_mount_block_devices(void) {
     if (g_primary_block_fat32_mount) {
         vfs_promote_home_to_block(g_primary_block_fat32_mount);
         vfs_promote_var_to_block(g_primary_block_fat32_mount);
+        vfs_promote_usr_local_to_block(g_primary_block_fat32_mount);
     }
 }
 
@@ -696,6 +726,27 @@ static bool ramfs_truncate(ramfs_t *fs, const char *path) {
     return true;
 }
 
+static bool ramfs_resize(ramfs_t *fs, const char *path, usize size) {
+    ramfs_node_t *n = ramfs_create(fs, path, false);
+    if (!n || n->is_dir) return false;
+    if (size > n->cap) {
+        usize newcap = n->cap ? n->cap : 256;
+        while (newcap < size) newcap *= 2;
+        if (fs->bytes_used - n->cap + newcap > RAMFS_MAX_DATA) return false;
+        u8 *newdata = (u8 *)kmalloc(newcap);
+        if (!newdata) return false;
+        memset(newdata, 0, newcap);
+        if (n->data && n->size) memcpy(newdata, n->data, n->size < size ? n->size : size);
+        if (n->data) kfree(n->data);
+        fs->bytes_used = fs->bytes_used - n->cap + newcap;
+        n->data = newdata;
+        n->cap = newcap;
+    }
+    if (n->data && size > n->size) memset(n->data + n->size, 0, size - n->size);
+    n->size = size;
+    return true;
+}
+
 static int ramfs_unlink(ramfs_t *fs, const char *path) {
     ramfs_node_t *n = ramfs_find(fs, path);
     if (!n || strcmp(path, "/") == 0) return -1;
@@ -711,6 +762,30 @@ static int ramfs_unlink(ramfs_t *fs, const char *path) {
     if (n->data) kfree(n->data);
     fs->bytes_used -= n->cap;
     memset(n, 0, sizeof(*n));
+    return 0;
+}
+
+static int ramfs_rename(ramfs_t *fs, const char *oldpath, const char *newpath) {
+    ramfs_node_t *n = ramfs_find(fs, oldpath);
+    if (!n || strcmp(oldpath, "/") == 0 || ramfs_find(fs, newpath)) return -1;
+    usize old_len = strlen(oldpath);
+    usize new_len = strlen(newpath);
+    if (new_len >= sizeof(n->name)) return -1;
+
+    strncpy(n->name, newpath, sizeof(n->name) - 1);
+    n->name[sizeof(n->name) - 1] = 0;
+    if (!n->is_dir) return 0;
+
+    for (int i = 0; i < RAMFS_MAX_FILES; i++) {
+        ramfs_node_t *child = &fs->nodes[i];
+        if (!child->used || child == n) continue;
+        if (strncmp(child->name, oldpath, old_len) != 0 || child->name[old_len] != '/') continue;
+        char renamed[192];
+        if (new_len + strlen(child->name + old_len) >= sizeof(renamed)) return -1;
+        ksnprintf(renamed, sizeof(renamed), "%s%s", newpath, child->name + old_len);
+        strncpy(child->name, renamed, sizeof(child->name) - 1);
+        child->name[sizeof(child->name) - 1] = 0;
+    }
     return 0;
 }
 
@@ -810,6 +885,55 @@ static isize vfs_do_write(int mount_idx, const char *rel_path, const void *buf, 
     }
 }
 
+static bool procfs_exists(const char *path) {
+    if (!path) return false;
+    if (path[0] == '/') path++;
+    return strcmp(path, "cpuinfo") == 0 ||
+           strcmp(path, "meminfo") == 0 ||
+           strcmp(path, "version") == 0 ||
+           strcmp(path, "uptime") == 0 ||
+           strcmp(path, "loadavg") == 0;
+}
+
+static bool vfs_path_exists_for_open(int mount_idx, const char *rel_path) {
+    if (mount_idx < 0 || mount_idx >= g_mount_count) return false;
+    vfs_mount_t *m = &g_mounts[mount_idx];
+    switch (m->type) {
+        case FS_INITRD: {
+            usize size = 0;
+            return initrd_lookup(rel_path, &size) != NULL || initrd_is_dir(rel_path);
+        }
+        case FS_FAT32: {
+            fat32_vol_t *vol = (fat32_vol_t *)m->priv;
+            fat32_fileinfo_t info;
+            if (!vol || !vol->mounted) return false;
+            if (!rel_path || rel_path[0] == 0 || strcmp(rel_path, "/") == 0) return true;
+            return fat32_lookup(vol, rel_path, &info);
+        }
+        case FS_DEVFS:
+            return devfs_exists(rel_path);
+        case FS_PROCFS:
+            return procfs_exists(rel_path);
+        case FS_RAMFS:
+            return ramfs_find((ramfs_t *)m->priv, rel_path) != NULL;
+        default:
+            return false;
+    }
+}
+
+static void vfs_fill_stat(yam_stat_t *out, u32 mode, i64 size, u64 ino) {
+    memset(out, 0, sizeof(*out));
+    out->dev = 1;
+    out->ino = ino;
+    out->mode = mode;
+    out->nlink = ((mode & YAM_S_IFMT) == YAM_S_IFDIR) ? 2 : 1;
+    out->uid = 0;
+    out->gid = 0;
+    out->size = size;
+    out->blksize = 512;
+    out->blocks = size > 0 ? (size + 511) / 512 : 0;
+}
+
 /* ---- File Descriptor Layer ---- */
 
 int fd_alloc(file_t *file) {
@@ -880,18 +1004,29 @@ int sys_open(const char *pathname, u32 flags) {
     const char *rel;
     int midx = vfs_find_mount(abs, &rel);
     if (midx < 0) return -1;
-    if (g_mounts[midx].type == FS_RAMFS && (flags & 0x40)) {
-        ramfs_create((ramfs_t *)g_mounts[midx].priv, rel, false);
+    bool exists = vfs_path_exists_for_open(midx, rel);
+    bool create = (flags & VFS_O_CREAT) != 0;
+    bool trunc = (flags & VFS_O_TRUNC) != 0;
+
+    if (!exists && !create) return -1;
+
+    if (g_mounts[midx].type == FS_RAMFS && create) {
+        if (!ramfs_create((ramfs_t *)g_mounts[midx].priv, rel, false)) return -1;
+        exists = true;
     }
-    if (g_mounts[midx].type == FS_RAMFS && (flags & 0x200)) {
-        ramfs_truncate((ramfs_t *)g_mounts[midx].priv, rel);
+    if (g_mounts[midx].type == FS_RAMFS && trunc) {
+        if (!ramfs_truncate((ramfs_t *)g_mounts[midx].priv, rel)) return -1;
     }
-    if (g_mounts[midx].type == FS_FAT32 && (flags & 0x200)) {
+    if (g_mounts[midx].type == FS_FAT32 && (create || trunc)) {
         fat32_vol_t *vol = (fat32_vol_t *)g_mounts[midx].priv;
         char empty = 0;
         if (!vol || !vol->mounted) return -1;
-        if (fat32_write_file(vol, rel, &empty, 0) < 0) return -1;
-        if (g_mounts[midx].block_backed && vfs_flush_block_mount(&g_mounts[midx]) < 0) return -1;
+        if (!exists || trunc) {
+            if (fat32_write_file(vol, rel, &empty, 0) < 0) return -1;
+            if (g_mounts[midx].block_backed && vfs_flush_block_mount(&g_mounts[midx]) < 0) return -1;
+        }
+    } else if (!exists && create) {
+        return -1;
     }
 
     /* Allocate a file_t */
@@ -923,6 +1058,48 @@ int sys_unlink(const char *pathname) {
         fat32_vol_t *vol = (fat32_vol_t *)g_mounts[midx].priv;
         if (!vol || !fat32_unlink(vol, rel)) return -1;
         if (g_mounts[midx].block_backed && vfs_flush_block_mount(&g_mounts[midx]) < 0) return -1;
+        return 0;
+    }
+    return -1;
+}
+
+int sys_rename(const char *oldpath, const char *newpath) {
+    if (!oldpath || !newpath) return -1;
+    char old_abs[256];
+    char new_abs[256];
+    vfs_resolve_path(oldpath, old_abs, sizeof(old_abs));
+    vfs_resolve_path(newpath, new_abs, sizeof(new_abs));
+    if (strcmp(old_abs, "/") == 0 || strcmp(new_abs, "/") == 0) return -1;
+
+    const char *old_rel;
+    const char *new_rel;
+    int old_midx = vfs_find_mount(old_abs, &old_rel);
+    int new_midx = vfs_find_mount(new_abs, &new_rel);
+    if (old_midx < 0 || old_midx != new_midx) return -1;
+
+    if (g_mounts[old_midx].type == FS_RAMFS) {
+        return ramfs_rename((ramfs_t *)g_mounts[old_midx].priv, old_rel, new_rel);
+    }
+    if (g_mounts[old_midx].type == FS_FAT32) {
+        fat32_vol_t *vol = (fat32_vol_t *)g_mounts[old_midx].priv;
+        fat32_fileinfo_t info;
+        if (!vol || !fat32_lookup(vol, old_rel, &info) || info.is_dir) return -1;
+        if (fat32_lookup(vol, new_rel, &info)) return -1;
+        usize cap = info.file_size ? info.file_size : 1;
+        u8 *tmp = (u8 *)kmalloc(cap);
+        if (!tmp) return -1;
+        isize n = fat32_read_file(vol, old_rel, tmp, cap);
+        if (n < 0) {
+            kfree(tmp);
+            return -1;
+        }
+        if (fat32_write_file(vol, new_rel, tmp, (usize)n) < 0) {
+            kfree(tmp);
+            return -1;
+        }
+        kfree(tmp);
+        if (!fat32_unlink(vol, old_rel)) return -1;
+        if (g_mounts[old_midx].block_backed && vfs_flush_block_mount(&g_mounts[old_midx]) < 0) return -1;
         return 0;
     }
     return -1;
@@ -971,6 +1148,115 @@ int sys_readdir(const char *pathname, u32 index, vfs_dirent_t *out) {
         strncpy(out->name, entries[index].name, sizeof(out->name) - 1);
         out->size = entries[index].file_size;
         out->is_dir = entries[index].is_dir;
+        return 0;
+    }
+    return -1;
+}
+
+int sys_stat(const char *pathname, yam_stat_t *out) {
+    if (!pathname || !out) return -1;
+    char abs[256];
+    vfs_resolve_path(pathname, abs, sizeof(abs));
+
+    if (strcmp(abs, "/") == 0 || mount_has_child(abs)) {
+        vfs_fill_stat(out, YAM_S_IFDIR | YAM_S_IRUSR | YAM_S_IWUSR | YAM_S_IXUSR, 0, 1);
+        return 0;
+    }
+    for (int i = 0; i < g_mount_count; i++) {
+        if (g_mounts[i].active && strcmp(g_mounts[i].mount_point, abs) == 0) {
+            vfs_fill_stat(out, YAM_S_IFDIR | YAM_S_IRUSR | YAM_S_IWUSR | YAM_S_IXUSR, 0, (u64)(i + 2));
+            return 0;
+        }
+    }
+
+    const char *rel;
+    int midx = vfs_find_mount(abs, &rel);
+    if (midx < 0) return -1;
+    vfs_mount_t *m = &g_mounts[midx];
+    if (m->type == FS_RAMFS) {
+        ramfs_node_t *n = ramfs_find((ramfs_t *)m->priv, rel);
+        if (!n) return -1;
+        u32 kind = n->is_dir ? YAM_S_IFDIR | YAM_S_IXUSR : YAM_S_IFREG;
+        vfs_fill_stat(out, kind | YAM_S_IRUSR | YAM_S_IWUSR, (i64)n->size, (u64)(n - ((ramfs_t *)m->priv)->nodes + 1000));
+        return 0;
+    }
+    if (m->type == FS_FAT32) {
+        fat32_vol_t *vol = (fat32_vol_t *)m->priv;
+        fat32_fileinfo_t info;
+        if (!vol || !fat32_lookup(vol, rel, &info)) return -1;
+        u32 kind = info.is_dir ? YAM_S_IFDIR | YAM_S_IXUSR : YAM_S_IFREG;
+        vfs_fill_stat(out, kind | YAM_S_IRUSR | YAM_S_IWUSR, (i64)info.file_size, info.first_cluster);
+        return 0;
+    }
+    if (m->type == FS_INITRD) {
+        usize size = 0;
+        void *data = initrd_lookup(rel, &size);
+        if (data) {
+            vfs_fill_stat(out, YAM_S_IFREG | YAM_S_IRUSR, (i64)size, 2000);
+            return 0;
+        }
+        if (initrd_is_dir(rel)) {
+            vfs_fill_stat(out, YAM_S_IFDIR | YAM_S_IRUSR | YAM_S_IXUSR, 0, 2001);
+            return 0;
+        }
+        return -1;
+    }
+    if (m->type == FS_DEVFS) {
+        if (!devfs_exists(rel)) return -1;
+        vfs_fill_stat(out, YAM_S_IFCHR | YAM_S_IRUSR | YAM_S_IWUSR, 0, 3000);
+        return 0;
+    }
+    if (m->type == FS_PROCFS) {
+        if (!procfs_exists(rel)) return -1;
+        char tmp[768];
+        isize n = procfs_read(rel, tmp, sizeof(tmp));
+        vfs_fill_stat(out, YAM_S_IFREG | YAM_S_IRUSR, n > 0 ? n : 0, 4000);
+        return 0;
+    }
+    return -1;
+}
+
+int sys_fstat(int fd, yam_stat_t *out) {
+    if (!out || fd < 0) return -1;
+    if (fd <= 2 && !fd_get(fd)) {
+        vfs_fill_stat(out, YAM_S_IFCHR | YAM_S_IRUSR | YAM_S_IWUSR, 0, (u64)(3000 + fd));
+        return 0;
+    }
+    file_t *f = fd_get(fd);
+    if (!f) return -1;
+    if (f->mount_idx < 0) {
+        vfs_fill_stat(out, YAM_S_IFCHR | YAM_S_IRUSR | YAM_S_IWUSR, 0, (u64)(5000 + fd));
+        return 0;
+    }
+    return sys_stat(f->path, out);
+}
+
+int sys_ftruncate(int fd, isize length) {
+    if (fd < 0 || length < 0) return -1;
+    file_t *f = fd_get(fd);
+    if (!f || f->mount_idx < 0) return -1;
+    const char *rel;
+    int midx = vfs_find_mount(f->path, &rel);
+    if (midx < 0) return -1;
+    usize size = (usize)length;
+
+    if (g_mounts[midx].type == FS_RAMFS) {
+        if (!ramfs_resize((ramfs_t *)g_mounts[midx].priv, rel, size)) return -1;
+        if (f->offset > size) f->offset = size;
+        return 0;
+    }
+    if (g_mounts[midx].type == FS_FAT32) {
+        u8 *tmp = (u8 *)kmalloc(size ? size : 1);
+        if (!tmp) return -1;
+        memset(tmp, 0, size ? size : 1);
+        if (size > 0) {
+            isize old = vfs_do_read(midx, rel, tmp, size, 0);
+            if (old < 0) old = 0;
+        }
+        isize n = vfs_do_write(midx, rel, tmp, size);
+        kfree(tmp);
+        if (n < 0) return -1;
+        if (f->offset > size) f->offset = size;
         return 0;
     }
     return -1;
@@ -1120,10 +1406,30 @@ isize sys_write(int fd, const void *buf, usize count) {
     const char *rel;
     int midx = vfs_find_mount(f->path, &rel);
     if (midx < 0) return -1;
+    if (f->flags & VFS_O_APPEND) {
+        yam_stat_t st;
+        if (sys_stat(f->path, &st) == 0 && st.size >= 0) f->offset = (usize)st.size;
+    }
     if (g_mounts[midx].type == FS_RAMFS) {
         isize n = ramfs_write((ramfs_t *)g_mounts[midx].priv, rel, buf, count, f->offset);
         if (n > 0) f->offset += (usize)n;
         return n;
+    }
+    if (g_mounts[midx].type == FS_FAT32) {
+        usize total = f->offset + count;
+        u8 *tmp = (u8 *)kmalloc(total ? total : 1);
+        if (!tmp) return -1;
+        memset(tmp, 0, total ? total : 1);
+        if (f->offset > 0) {
+            isize old = vfs_do_read(midx, rel, tmp, f->offset, 0);
+            if (old < 0) old = 0;
+        }
+        memcpy(tmp + f->offset, buf, count);
+        isize n = vfs_do_write(midx, rel, tmp, total);
+        kfree(tmp);
+        if (n < 0) return -1;
+        f->offset += count;
+        return (isize)count;
     }
     isize n = vfs_do_write(midx, rel, buf, count);
     if (n > 0) f->offset += (usize)n;
@@ -1139,14 +1445,9 @@ isize sys_lseek(int fd, isize offset, int whence) {
     } else if (whence == 1) {
         base = (isize)f->offset;
     } else if (whence == 2) {
-        const char *rel;
-        int midx = vfs_find_mount(f->path, &rel);
-        if (midx >= 0 && g_mounts[midx].type == FS_RAMFS) {
-            ramfs_node_t *n = ramfs_find((ramfs_t *)g_mounts[midx].priv, rel);
-            base = n ? (isize)n->size : 0;
-        } else {
-            base = (isize)f->offset;
-        }
+        yam_stat_t st;
+        if (sys_fstat(fd, &st) < 0) return -1;
+        base = (isize)st.size;
     } else {
         return -1;
     }

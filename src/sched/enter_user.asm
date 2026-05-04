@@ -1,6 +1,6 @@
 ; YamKernel — Drop from ring 0 to ring 3.
-; void enter_user_mode(u64 rip, u64 rsp);
-;   RDI = user RIP   RSI = user RSP
+; void enter_user_mode(u64 rip, u64 rsp, u64 argc, u64 argv, u64 envp);
+;   RDI = user RIP   RSI = user RSP   RDX = argc   RCX = argv   R8 = envp
 
 bits 64
 section .text
@@ -18,8 +18,10 @@ enter_user_mode:
     swapgs                      ; GS_BASE -> user value (0)
     xor   rax, rax
     xor   rbx, rbx
+    mov   rdi, rdx                 ; user argc
+    mov   rsi, rcx                 ; user argv
+    mov   rdx, r8                  ; user envp
     xor   rcx, rcx
-    xor   rdx, rdx
     xor   rbp, rbp
     xor   r8,  r8
     xor   r9,  r9

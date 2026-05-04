@@ -6,6 +6,7 @@
 #define _FS_VFS_H
 
 #include <nexus/types.h>
+#include "kernel/api/syscall.h"
 
 /* POSIX Standard VFS Types */
 struct file;
@@ -72,7 +73,11 @@ int    sys_dup(int fd);
 int    sys_dup2(int oldfd, int newfd);
 int    sys_mkdir(const char *pathname, u32 mode);
 int    sys_unlink(const char *pathname);
+int    sys_rename(const char *oldpath, const char *newpath);
 int    sys_readdir(const char *pathname, u32 index, vfs_dirent_t *out);
+int    sys_stat(const char *pathname, yam_stat_t *out);
+int    sys_fstat(int fd, yam_stat_t *out);
+int    sys_ftruncate(int fd, isize length);
 int    sys_chdir(const char *pathname);
 isize  sys_getcwd(char *buf, usize size);
 isize  sys_read(int fd, void *buf, usize count);

@@ -60,6 +60,37 @@
 #define SYS_ACCEPT            74
 #define SYS_SENDTO            75
 #define SYS_RECVFROM          76
+#define SYS_SPAWN             77
+#define SYS_STAT              78
+#define SYS_FSTAT             79
+#define SYS_FTRUNCATE         80
+#define SYS_RENAME            81
+#define SYS_OPENAT            82
+#define SYS_FSTATAT           83
+#define SYS_MKDIRAT           84
+#define SYS_UNLINKAT          85
+#define SYS_RENAMEAT          86
+
+#define YAM_OS_FLAG_VFS_SPAWN (1u << 7)
+
+#ifndef YAM_STAT_T_DEFINED
+#define YAM_STAT_T_DEFINED
+typedef struct {
+    u64 dev;
+    u64 ino;
+    u32 mode;
+    u32 nlink;
+    u32 uid;
+    u32 gid;
+    u64 rdev;
+    i64 size;
+    i64 blksize;
+    i64 blocks;
+    i64 atime;
+    i64 mtime;
+    i64 ctime;
+} yam_stat_t;
+#endif
 
 static inline u64 syscall0(u64 num) {
     u64 ret;

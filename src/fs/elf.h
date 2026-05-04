@@ -57,5 +57,19 @@ typedef struct {
 /* elf.c */
 struct task;
 bool elf_load(const void *file_data, usize file_size, const char *name);
+i64  elf_spawn(const void *file_data, usize file_size, const char *name);
+i64  elf_spawn_path(const char *path);
+i64  elf_spawn_argv(const void *file_data, usize file_size, const char *name,
+                    int argc, const char *const argv[]);
+i64  elf_spawn_argv_envp(const void *file_data, usize file_size, const char *name,
+                         int argc, const char *const argv[],
+                         const char *const envp[]);
+i64  elf_spawn_path_argv(const char *path, int argc, const char *const argv[]);
+i64  elf_spawn_path_argv_envp(const char *path, int argc,
+                              const char *const argv[],
+                              const char *const envp[]);
+i64  elf_spawn_resolved_argv_envp(const char *name, int argc,
+                                  const char *const argv[],
+                                  const char *const envp[]);
 
 #endif /* _FS_ELF_H */

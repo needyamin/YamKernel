@@ -121,6 +121,7 @@ static volatile struct limine_module_request module_request = {
  * Global module pointers
  * ============================================================================ */
 void *g_authd_module = NULL;  usize g_authd_module_size = 0;
+void *g_hello_module = NULL;  usize g_hello_module_size = 0;
 void *g_wallpaper_module = NULL;
 
 /* ============================================================================
@@ -214,6 +215,10 @@ void kernel_main(void) {
                     g_authd_module = mod->address;
                     g_authd_module_size = mod->size;
                     KINFO("MODULE", "    -> matched AUTHD APP @ %p", g_authd_module);
+                } else if (strstr(mod->path, "hello.elf")) {
+                    g_hello_module = mod->address;
+                    g_hello_module_size = mod->size;
+                    KINFO("MODULE", "    -> matched HELLO APP @ %p", g_hello_module);
                 }
             }
         } else {

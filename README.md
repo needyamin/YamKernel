@@ -11,7 +11,7 @@ browser engines and language runtimes as-is. These are required foundations:
 
 - persistent root/system volume
 - full POSIX/Linux syscall compatibility
-- `execve` and a stronger process model
+- full `execve` and a stronger process model
 - dynamic linker / shared libraries
 - threads and signals
 - real permissions/users/security
@@ -23,7 +23,7 @@ browser engines and language runtimes as-is. These are required foundations:
 - real hardware driver coverage beyond the current QEMU-focused path
 
 Missing compatibility details are tracked in `KERNEL_CAPABILITY_MATRIX.md`.
-Important missing surfaces include process execution (`execve`), dynamic
+Important missing surfaces include full process replacement (`execve`), dynamic
 linking, pthread/TLS, signals, file permissions, file-backed `mmap`,
 nonblocking sockets with `select`/`epoll`, PTYs/termios, TLS/certificates,
 package signatures, browser-engine storage/sandboxing, and broader hardware
@@ -38,13 +38,13 @@ drivers.
 | SMP | Partial | Limine starts AP cores; APs initialize and park. Local APIC IPI primitives exist; scheduler currently uses CPU 0 only. |
 | Memory | In-tree | Zone-aware PMM, VMM, heap, slab, CoW/fork support, `brk`, `mmap`, `mprotect`, kernel/user stack guards, TLB shootdown hooks. |
 | Scheduler | In-tree | CFS-style scheduler, wait queues, mutexes, futexes, cgroups, OOM, idle/power hooks. |
-| Syscalls | In-tree | File, process, memory, scheduler, Wayland, driver, AI, touch, YamGraph IPC, OS info, app registry, TCP sockets, `unlink`, and `readdir` calls. |
-| Filesystems | In-tree | VFS with initrd root, writable ramfs mounts, devfs, procfs, per-process cwd, relative paths, directory listing, delete, truncate-on-open, FAT32 read/write/unlink driver code, block core with QEMU virtio-blk disk registration, MBR/GPT FAT32 discovery, and auto-mounted block FAT32 volumes under `/mnt`. |
+| Syscalls | In-tree | File, process, memory, scheduler, Wayland, driver, AI, touch, YamGraph IPC, OS info, app registry, TCP sockets, VFS ELF spawn, user-space `waitpid` status copy-out, `stat`/`fstat`, `ftruncate`, `rename`, first `*at` path calls, `unlink`, and `readdir` calls. |
+| Filesystems | In-tree | VFS with initrd root, writable ramfs mounts, devfs, procfs, per-process cwd, relative paths, `openat`-style dirfd resolution, open existence checks, `O_APPEND` writes, metadata-backed `SEEK_END`, directory listing, delete, rename, create/truncate/ftruncate, basic file metadata, FAT32 read/write/unlink driver code, block core with QEMU virtio-blk disk registration, MBR/GPT FAT32 discovery, and auto-mounted block FAT32 volumes under `/mnt`. |
 | Networking | In-tree | e1000 path plus ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP state-machine code, first fd-backed TCP socket ABI, plain HTTP, certificate-store bootstrap, and bounded TLS ClientHello probe. |
 | USB/Input | In-tree | XHCI controller path, USB core, HID, keyboard, mouse, evdev, touch, gestures. |
 | PCI/Drivers | In-tree | Bridge-aware PCI scan, command/status helpers, safe BAR sizing, MSI/MSI-X capability discovery, and driver inventory binding. |
 | Desktop | In-tree | Wayland-style compositor, polished first-boot setup/login, File Manager, calendar/time/status bar, quick settings, top menu, dock/taskbar, standard window controls, maximize/restore, windows, VTTY mode. |
-| Userland | In-tree | Minimal user ELF service for authd, libc/libyam syscall support, native app manifests, and kernel app registry. Main desktop tools are compositor-native kernel services. |
+| Userland | In-tree | Static Ring 3 ELF apps/services for `authd` and `/bin/hello`, libc/libyam syscall support, native app manifests, argv/envp-aware VFS-backed app spawn, and kernel app registry. Main desktop tools are compositor-native kernel services. |
 | AI/ML | In-tree | Tensor allocation and accelerator abstraction syscalls. |
 
 ## Current Desktop Behavior
@@ -61,6 +61,7 @@ drivers.
 - File Manager launches from the dock launcher or File menu and now has an Explorer-style shell with sidebar locations, back/forward/up navigation, editable address and search fields, sortable details view, item details pane, create file/folder actions, file delete, and an integrated text editor for VFS files.
 - The desktop bar shows BDT calendar/time, wired network status from the kernel network interface, Wi-Fi driver state, and audio mixer state; clicking time opens the calendar and clicking status chips opens quick settings.
 - Terminal file commands now use the same VFS: `ls`, `cat`, `mkdir`, `touch`, `rm`, and `write /home/root/file.txt text`.
+- Terminal can launch the sample static ELF app with `run /bin/hello arg...` or direct `hello arg...`.
 - Terminal supports `cd` and `pwd`; VFS paths now resolve relative to each task's current working directory.
 - App windows use right-side minimize, maximize/restore, and close controls; minimized apps restore from the dock.
 - The visible Terminal is `src/os/services/compositor/wl_terminal.c`.
@@ -97,13 +98,14 @@ Build outputs:
 - `build/yamkernel.elf`
 - `build/yamkernel.iso`
 - `build/authd.elf`
+- `build/hello.elf`
 - raw splash assets under `build/logo.bin` and `build/wallpaper.bin`
 
 ## Architecture
 
 ```text
 +---------------------------- Ring 3 --------------------------------+
-| authd ELF service | libc + libyam syscall wrappers                  |
+| authd service | /bin/hello VFS ELF | libc + libyam wrappers      |
 +----------------------- SYSCALL / SYSRET ---------------------------+
 | File, process, memory, scheduler, Wayland, driver, AI, IPC, app ABI |
 +---------------------------- Ring 0 --------------------------------+
@@ -130,7 +132,7 @@ src/ipc/                  IPC scaffolding
 src/net/                  ARP/IP/ICMP/UDP/TCP/DHCP/DNS stack
 src/drivers/              PCI, USB, input, serial, timer, video, DRM, net
 src/nexus/                YamGraph, channels, capabilities
-src/os/apps/              authd ELF service and user linker script
+src/os/apps/              authd, hello sample app, and user linker script
 src/os/lib/               libc and libyam
 src/os/README.md          OS-layer layout and app-facing structure rules
 src/os/dev/               devfs and virtual TTYs
@@ -141,9 +143,10 @@ src/os/services/          compositor and OS services
 ## Application Architecture
 
 - `src/kernel/api/syscall.h` is the public ABI source of truth for kernel and userspace.
-- `src/os/lib/libyam/app.h` exposes the native app SDK: `yam_os_info()`, `yam_app_register()`, and `yam_app_query()`.
+- `src/os/lib/libyam/app.h` exposes the native app SDK: `yam_os_info()`, `yam_app_register()`, `yam_app_query()`, and `yam_spawn()`.
 - `src/os/services/app_registry/` records Ring 3 app/service manifests in the kernel with PID, YamGraph node, app type, requested permissions, name, publisher, version, and description.
 - `authd` now registers itself as a native YamOS service before using YamGraph IPC.
+- `/bin/hello` is packaged as `hello.elf`, registered into initrd, and launched through the argv/envp-aware VFS-backed ELF spawn path. Bare executable names resolve through `/bin`, `/usr/local/bin`, `/opt/yamos/packages`, and `/home/root/bin`.
 - See `APP_ARCHITECTURE.md` for the app model and the next steps toward installable developer apps.
 - Userland now has first TCP socket ABI numbers and libc wrappers for `socket`, `bind`, `connect`, `listen`, `accept`, `send`, `recv`, `sendto`, and `recvfrom`; currently AF_INET/SOCK_STREAM TCP is implemented, while datagram UDP remains future work.
 
@@ -167,8 +170,16 @@ src/os/services/          compositor and OS services
 - Terminal installer commands now route to the generic OS installer/capability service. TLS/certificate capability is probed with an outbound TLS ClientHello and ServerHello check; persistent package installation still needs package signatures and downloader/install transactions.
 - Browser engines, language runtimes, and package tools should use the fd-backed socket ABI instead of private kernel-only network helpers as that ABI matures.
 - First missing-compatibility slice added: per-process current working directory, `SYS_CHDIR`, `SYS_GETCWD`, libc `chdir/getcwd`, and relative VFS path resolution.
-- File Manager writes through VFS. With the QEMU virtio FAT32 disk attached, `/home` and `/var` are persistent; without it they fall back to ramfs.
-- QEMU runs attach `build/yamos-fat32.disk` as `vd0`; YamOS auto-mounts FAT32-compatible virtio disks at `/mnt/vd0`, exposes mounted volumes in `/mnt`, and promotes `/home` and `/var` to the FAT32 disk when available.
+- File Manager writes through VFS. With the QEMU virtio FAT32 disk attached, `/home`, `/var`, and `/usr/local` are persistent; without it they fall back to ramfs.
+- VFS `open()` now returns failure for missing paths unless `O_CREAT` is supplied, while `/dev` and `/proc` only open known pseudo-files.
+- libc `stat()`/`fstat()` now route to kernel VFS metadata instead of guessing file type in user space.
+- libc `ftruncate()` now routes to `SYS_FTRUNCATE` for RAMFS/FAT32 file resizing.
+- libc `rename()` now routes to `SYS_RENAME`; RAMFS renames nodes in place, and FAT32 regular-file rename currently uses copy-then-unlink.
+- First libc `*at` wrappers now route to kernel dirfd-aware syscalls: `openat`, `fstatat`, `mkdirat`, `unlinkat`, and `renameat`.
+- VFS honors `O_APPEND` before each regular file write, so libc append modes such as `fopen(path, "a")` append instead of overwriting from offset zero.
+- `lseek(fd, 0, SEEK_END)` now uses VFS metadata through `fstat`, so EOF seeking works for initrd, RAMFS, FAT32, and other stat-backed files.
+- QEMU runs attach `build/yamos-fat32.disk` as `vd0`; YamOS auto-mounts FAT32-compatible virtio disks at `/mnt/vd0`, exposes mounted volumes in `/mnt`, and promotes `/home`, `/var`, and `/usr/local` to the FAT32 disk when available.
+- The `/bin/hello` boot probe now validates the public app process path by spawning another `hello` from Ring 3 and reaping it through libc `waitpid()`.
 - AP cores are initialized and can receive kernel IPIs, but full multi-core task scheduling remains disabled until address-space switching and run-queue ownership are audited.
 - TSC-deadline is detected when the CPU exposes it. The current timer path still uses the calibrated periodic APIC timer unless a later platform-specific timer switch is added.
 - CPU exceptions print register state, and the panic path has a register-frame variant for fatal exception debugging.

@@ -34,6 +34,10 @@ typedef unsigned int gid_t;
 #define SEEK_CUR 1
 #define SEEK_END 2
 
+#define WNOHANG 1
+#define WEXITSTATUS(status) (((status) >> 8) & 0xff)
+#define WIFEXITED(status)   (1)
+
 #define _SC_PAGESIZE 1
 #define _SC_PAGE_SIZE _SC_PAGESIZE
 #define _SC_OPEN_MAX 2
@@ -52,17 +56,26 @@ static inline int close(int fd) {
 static inline int open(const char *path, int flags, ...) {
     return (int)syscall2(SYS_OPEN, (u64)path, (u64)flags);
 }
+static inline int openat(int dirfd, const char *path, int flags, ...) {
+    int fd = (int)syscall3(SYS_OPENAT, (u64)dirfd, (u64)path, (u64)flags);
+    if (fd < 0) errno = ENOENT;
+    return fd;
+}
 static inline off_t lseek(int fd, off_t offset, int whence) {
     return (off_t)syscall3(SYS_LSEEK, (u64)fd, (u64)offset, (u64)whence);
 }
 static inline int mkdir(const char *path, mode_t mode) {
     return (int)syscall2(SYS_MKDIR, (u64)path, (u64)mode);
 }
+static inline int mkdirat(int dirfd, const char *path, mode_t mode) {
+    int rc = (int)syscall3(SYS_MKDIRAT, (u64)dirfd, (u64)path, (u64)mode);
+    if (rc < 0) errno = ENOENT;
+    return rc;
+}
 static inline int ftruncate(int fd, off_t length) {
-    (void)fd;
-    (void)length;
-    errno = ENOSYS;
-    return -1;
+    int rc = (int)syscall2(SYS_FTRUNCATE, (u64)fd, (u64)length);
+    if (rc < 0) errno = EBADF;
+    return rc;
 }
 static inline pid_t getpid(void) {
     return (pid_t)syscall0(SYS_GETPID);
@@ -91,11 +104,29 @@ static inline int execve(const char *path, char *const argv[], char *const envp[
     errno = ENOSYS;
     return -1;
 }
+static inline pid_t spawn(const char *path) {
+    pid_t pid = (pid_t)syscall3(SYS_SPAWN, (u64)path, 0, 0);
+    if (pid < 0) errno = ENOENT;
+    return pid;
+}
+static inline pid_t spawnv(const char *path, char *const argv[]) {
+    pid_t pid = (pid_t)syscall3(SYS_SPAWN, (u64)path, (u64)argv, 0);
+    if (pid < 0) errno = ENOENT;
+    return pid;
+}
+static inline pid_t spawnve(const char *path, char *const argv[], char *const envp[]) {
+    pid_t pid = (pid_t)syscall3(SYS_SPAWN, (u64)path, (u64)argv, (u64)envp);
+    if (pid < 0) errno = ENOENT;
+    return pid;
+}
 static inline pid_t fork(void) {
     return (pid_t)syscall0(SYS_FORK);
 }
 static inline pid_t waitpid(pid_t pid, int *status, int options) {
     return (pid_t)syscall3(SYS_WAITPID, (u64)pid, (u64)status, (u64)options);
+}
+static inline pid_t wait(int *status) {
+    return waitpid(-1, status, 0);
 }
 
 char   *getcwd(char *buf, size_t size);
@@ -146,9 +177,15 @@ static inline int fchownat(int dirfd, const char *path, uid_t owner, gid_t group
 }
 static inline void sync(void) {}
 static inline int nice(int inc) { (void)inc; return 0; }
-static inline int rename(const char *oldpath, const char *newpath) { (void)oldpath; (void)newpath; errno = ENOSYS; return -1; }
+static inline int rename(const char *oldpath, const char *newpath) {
+    int rc = (int)syscall2(SYS_RENAME, (u64)oldpath, (u64)newpath);
+    if (rc < 0) errno = ENOENT;
+    return rc;
+}
 static inline int renameat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath) {
-    (void)olddirfd; (void)newdirfd; return rename(oldpath, newpath);
+    int rc = (int)syscall4(SYS_RENAMEAT, (u64)olddirfd, (u64)oldpath, (u64)newdirfd, (u64)newpath);
+    if (rc < 0) errno = ENOENT;
+    return rc;
 }
 static inline int unlink(const char *path) {
     int rc = (int)syscall1(SYS_UNLINK, (u64)path);
@@ -156,7 +193,9 @@ static inline int unlink(const char *path) {
     return rc;
 }
 static inline int unlinkat(int dirfd, const char *path, int flags) {
-    (void)dirfd; (void)flags; return unlink(path);
+    int rc = (int)syscall3(SYS_UNLINKAT, (u64)dirfd, (u64)path, (u64)flags);
+    if (rc < 0) errno = ENOENT;
+    return rc;
 }
 static inline int rmdir(const char *path) { (void)path; errno = ENOSYS; return -1; }
 static inline mode_t umask(mode_t mask) { (void)mask; return 0; }
