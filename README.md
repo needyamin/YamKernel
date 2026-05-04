@@ -4,6 +4,10 @@ YamOS is an experimental x86_64 operating system built around **YamKernel**, a g
 
 Current tree: **v0.4.0 development line**.
 
+
+<img width="1920" height="1032" alt="Image" src="https://github.com/user-attachments/assets/dfebb446-79b5-413f-805d-fae61ffc8fdd" />
+
+
 ## Not Complete Yet
 
 YamOS cannot yet run arbitrary x86_64 Linux/Windows software or install large
