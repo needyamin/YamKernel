@@ -704,56 +704,39 @@ void wl_compositor_process_input(void) {
                             if (g_compositor.cursor_y >= dock_y - mh - 10 && g_compositor.cursor_y < dock_y - 10) {
                                 i32 rel_y = g_compositor.cursor_y - (dock_y - mh - 10);
                                 i32 rel_x = g_compositor.cursor_x - mx;
-                                if (rel_x >= 18 && rel_x < 248) {
-                                    if (rel_y >= 68 && rel_y < 110) {
-                                        kprintf("[WAYLAND] Launching Terminal (kernel compositor app)...\n");
-                                        sched_spawn("wl-term-k", wl_term_task, NULL, 2);
-                                    } else if (rel_y >= 116 && rel_y < 158) {
-                                        kprintf("[WAYLAND] Launching Browser (kernel compositor app)...\n");
-                                        sched_spawn("wl-browser-k", wl_browser_task, NULL, 2);
-                                    } else if (rel_y >= 164 && rel_y < 206) {
-                                        kprintf("[WAYLAND] Launching Calculator (kernel compositor app)...\n");
-                                        sched_spawn("wl-calc-k", wl_calc_task, NULL, 2);
-                                    } else if (rel_y >= 212 && rel_y < 254) {
-                                        kprintf("[WAYLAND] Launching File Manager...\n");
-                                        sched_spawn("wl-files-k", wl_file_manager_task, NULL, 2);
-                                    } else if (rel_y >= 260 && rel_y < 302) {
-                                        kprintf("[WAYLAND] Opening Terminal for driver probe...\n");
-                                        sched_spawn("wl-term-k", wl_term_task, NULL, 2);
+                                if (rel_y >= 70 && rel_y <= 134) {
+                                    int col = (rel_x - 35) / 92;
+                                    if (col >= 0 && col < 5) {
+                                        if (col == 0) sched_spawn("wl-term-k", wl_term_task, NULL, 2);
+                                        else if (col == 1) sched_spawn("wl-browser-k", wl_browser_task, NULL, 2);
+                                        else if (col == 2) sched_spawn("wl-calc-k", wl_calc_task, NULL, 2);
+                                        else if (col == 3) sched_spawn("wl-files-k", wl_file_manager_task, NULL, 2);
+                                        else if (col == 4) sched_spawn("wl-term-k", wl_term_task, NULL, 2);
                                     }
-                                } else if (rel_x >= 272 && rel_x < 502) {
-                                    if (rel_y >= 68 && rel_y < 110) {
-                                        kprintf("[WAYLAND] Launcher opening Ethernet Settings...\n");
-                                        open_or_focus_window("Ethernet Settings", "wl-net-settings", wl_network_settings_task);
-                                    } else if (rel_y >= 116 && rel_y < 158) {
-                                        kprintf("[WAYLAND] Launcher opening Wi-Fi Settings...\n");
-                                        open_or_focus_window("Wi-Fi Settings", "wl-wifi-settings", wl_wifi_settings_task);
-                                    } else if (rel_y >= 164 && rel_y < 206) {
-                                        kprintf("[WAYLAND] Launcher opening Bluetooth Settings...\n");
-                                        open_or_focus_window("Bluetooth Settings", "wl-bt-settings", wl_bluetooth_settings_task);
-                                    } else if (rel_y >= 212 && rel_y < 254) {
-                                        kprintf("[WAYLAND] Launcher opening Sound Settings...\n");
-                                        open_or_focus_window("Sound Settings", "wl-sound-settings", wl_sound_settings_task);
-                                    } else if (rel_y >= 260 && rel_y < 302) {
-                                        kprintf("[WAYLAND] Launcher opening Display Settings...\n");
-                                        open_or_focus_window("Display Settings", "wl-display-settings", wl_display_settings_task);
+                                } else if (rel_y >= 180 && rel_y <= 244) {
+                                    int col = (rel_x - 35) / 92;
+                                    if (col >= 0 && col < 5) {
+                                        if (col == 0) open_or_focus_window("Ethernet Settings", "wl-net-settings", wl_network_settings_task);
+                                        else if (col == 1) open_or_focus_window("Wi-Fi Settings", "wl-wifi-settings", wl_wifi_settings_task);
+                                        else if (col == 2) open_or_focus_window("Bluetooth Settings", "wl-bt-settings", wl_bluetooth_settings_task);
+                                        else if (col == 3) open_or_focus_window("Sound Settings", "wl-sound-settings", wl_sound_settings_task);
+                                        else if (col == 4) open_or_focus_window("Display Settings", "wl-display-settings", wl_display_settings_task);
                                     }
-                                }
-                                if (rel_y >= 326 && rel_y < 360) {
-                                    kprintf("[AUTH] Locking desktop for switch-user login\n");
-                                    g_compositor.state = COMPOSITOR_STATE_LOGIN;
-                                    g_compositor.login_pass[0] = '\0';
-                                    g_compositor.login_failed = false;
-                                    g_compositor.login_focus_pass = false;
-                                    g_compositor.current_user[0] = '\0';
-                                } else if (rel_y >= 380 && rel_y < 412 && rel_x >= 18 && rel_x < 248) {
-                                    /* RESTART */
-                                    kprintf("[POWER] Restarting system...\n");
-                                    outb(0x64, 0xFE);
-                                } else if (rel_y >= 380 && rel_y < 412 && rel_x >= 272 && rel_x < 502) {
-                                    /* SHUTDOWN */
-                                    kprintf("[POWER] Shutting down...\n");
-                                    outw(0x604, 0x2000);
+                                } else if (rel_y >= 370 && rel_y <= 406) {
+                                    if (rel_x >= 35 && rel_x < 175) {
+                                        kprintf("[AUTH] Locking desktop for switch-user login\n");
+                                        g_compositor.state = COMPOSITOR_STATE_LOGIN;
+                                        g_compositor.login_pass[0] = '\0';
+                                        g_compositor.login_failed = false;
+                                        g_compositor.login_focus_pass = false;
+                                        g_compositor.current_user[0] = '\0';
+                                    } else if (rel_x >= 190 && rel_x < 330) {
+                                        kprintf("[POWER] Restarting system...\n");
+                                        outb(0x64, 0xFE);
+                                    } else if (rel_x >= 345 && rel_x < 485) {
+                                        kprintf("[POWER] Shutting down...\n");
+                                        outw(0x604, 0x2000);
+                                    }
                                 }
                                 g_compositor.show_power_menu = false;
                                 continue;

@@ -140,6 +140,14 @@ void wl_draw_text(wl_surface_t *s, i32 x, i32 y, const char *str, u32 fg, u32 bg
     }
 }
 
+void wl_draw_text_shadow(wl_surface_t *s, i32 x, i32 y, const char *str, u32 fg, u32 shadow) {
+    if (!str) return;
+    /* Draw shadow offset */
+    wl_draw_text(s, x + 1, y + 1, str, shadow, 0);
+    /* Draw foreground text */
+    wl_draw_text(s, x, y, str, fg, 0);
+}
+
 void wl_draw_filled_circle(wl_surface_t *s, i32 cx, i32 cy, u32 r, u32 color) {
     if (!s || !s->buffer || !s->buffer->pixels) return;
     u32 *pixels = s->buffer->pixels;
