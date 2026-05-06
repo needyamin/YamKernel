@@ -32,6 +32,9 @@ void drm_init(void);
 /* Get the current display mode */
 drm_mode_t drm_get_mode(void);
 
+/* Set the display resolution (QEMU Bochs VBE only) */
+bool drm_set_mode(u32 width, u32 height);
+
 /* Allocate a dumb buffer for software rendering */
 drm_buffer_t *drm_create_dumb_buffer(u32 width, u32 height);
 
@@ -40,6 +43,13 @@ void drm_destroy_dumb_buffer(drm_buffer_t *buf);
 
 /* Page-flip: blit a dumb buffer to the primary framebuffer (vsync placeholder) */
 void drm_page_flip(drm_buffer_t *buf);
+
+typedef struct {
+    u32 x, y, width, height;
+} drm_rect_t;
+
+/* Page-flip with damage tracking: only blits the specified rectangles */
+void drm_page_flip_damage(drm_buffer_t *buf, drm_rect_t *rects, u32 num_rects);
 
 /* Get the primary scanout buffer (the actual hardware framebuffer) */
 drm_buffer_t *drm_get_primary(void);

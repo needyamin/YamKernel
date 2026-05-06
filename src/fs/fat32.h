@@ -82,8 +82,8 @@ typedef struct __attribute__((packed)) {
 
 /* ---- Mounted FAT32 Volume ---- */
 typedef struct {
-    u8     *disk_data;      /* Pointer to disk image in memory */
-    usize   disk_size;
+    struct block_device *dev;
+    u64     start_lba;
     u32     bytes_per_sector;
     u32     sectors_per_cluster;
     u32     bytes_per_cluster;
@@ -105,7 +105,7 @@ typedef struct {
 } fat32_fileinfo_t;
 
 /* ---- Public API ---- */
-bool fat32_mount(void *disk_data, usize disk_size, fat32_vol_t *vol);
+bool fat32_mount(struct block_device *dev, u64 start_lba, fat32_vol_t *vol);
 void fat32_unmount(fat32_vol_t *vol);
 
 /* Returns bytes read, or -1 on error */

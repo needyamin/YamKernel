@@ -35,6 +35,7 @@
 #include "net/net.h"
 #include "ipc/ipc.h"
 #include "fs/vfs.h"
+#include "fs/bcache.h"
 #include "fs/elf.h"
 #include "lib/kprintf.h"
 #include "lib/string.h"
@@ -47,6 +48,7 @@
 #include "drivers/core/driver_manager.h"
 #include "drivers/block/block.h"
 #include "drivers/block/virtio_blk.h"
+#include "drivers/block/ahci.h"
 #include "drivers/input/keyboard.h"
 #include "drivers/input/mouse.h"
 #include "drivers/input/evdev.h"
@@ -349,8 +351,10 @@ void kernel_main(void) {
         driver_manager_init();
         driver_bind_pci_inventory();
         block_init();
+        ahci_init_all();
         virtio_blk_init_all();
         block_dump();
+        bcache_init();
         usb_init();
         i2c_init(); spi_init();
         vfs_init();

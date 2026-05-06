@@ -5,6 +5,7 @@
 #include "compositor.h"
 #include "wl_draw.h"
 #include "drivers/video/framebuffer.h"
+#include "drivers/drm/drm.h"
 #include "lib/kprintf.h"
 #include "lib/string.h"
 
@@ -105,8 +106,9 @@ static void draw_display_settings(wl_surface_t *s) {
 
     wl_draw_text(s, 32, 326, comp->show_debug_overlay ? "Debug overlay is on" : "Debug overlay is off",
                  comp->show_debug_overlay ? COL_GREEN : COL_MUTED, 0);
-    draw_button(s, 248, 318, 118, comp->show_debug_overlay ? "Hide debug" : "Show debug", true);
-    draw_button(s, 384, 318, 112, "Refresh", false);
+    draw_button(s, 160, 318, 90, comp->show_debug_overlay ? "Hide Dbg" : "Show Dbg", true);
+    draw_button(s, 260, 318, 110, "1920x1080", false);
+    draw_button(s, 380, 318, 110, "1024x768", false);
 }
 
 static bool hit(i32 x, i32 y, i32 rx, i32 ry, i32 rw, i32 rh) {
@@ -115,13 +117,22 @@ static bool hit(i32 x, i32 y, i32 rx, i32 ry, i32 rw, i32 rh) {
 
 static void handle_display_click(i32 x, i32 y) {
     wl_compositor_t *comp = wl_get_compositor();
-    if (hit(x, y, 248, 318, 118, 34)) {
+    if (hit(x, y, 160, 318, 90, 34)) {
         comp->show_debug_overlay = !comp->show_debug_overlay;
         kprintf("[DISPLAY] debug overlay from Display Settings: %s\n",
                 comp->show_debug_overlay ? "on" : "off");
-    } else if (hit(x, y, 384, 318, 112, 34)) {
-        fb_clear(0xFF111827);
-        kprintf("[DISPLAY] refresh requested from Display Settings\n");
+    } else if (hit(x, y, 260, 318, 110, 34)) {
+        drm_set_mode(1920, 1080);
+        comp->display_w = 1920;
+        comp->display_h = 1080;
+        comp->scanout = drm_get_primary();
+        kprintf("[DISPLAY] Resolution changed to 1920x1080\n");
+    } else if (hit(x, y, 380, 318, 110, 34)) {
+        drm_set_mode(1024, 768);
+        comp->display_w = 1024;
+        comp->display_h = 768;
+        comp->scanout = drm_get_primary();
+        kprintf("[DISPLAY] Resolution changed to 1024x768\n");
     }
 }
 

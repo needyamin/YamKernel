@@ -5,6 +5,7 @@
 #include "vfs.h"
 #include "initrd.h"
 #include "fat32.h"
+#include "bcache.h"
 #include "../drivers/block/block.h"
 #include "../lib/kprintf.h"
 #include "../lib/string.h"
@@ -331,17 +332,11 @@ static int block_rw_all(block_device_t *dev, bool write, u64 lba, u32 sectors, v
 }
 
 static int vfs_flush_block_mount(vfs_mount_t *m) {
-    if (!m || !m->block_backed || !m->block_dev || !m->block_image) return 0;
-    if (m->block_dev->read_only || !m->block_dev->write) return -1;
-    if (m->block_sector_count > 0xFFFFFFFFULL) return -1;
-    int rc = block_rw_all(m->block_dev, true, m->block_start_lba,
-                          (u32)m->block_sector_count, m->block_image);
-    if (rc == 0 && m->block_dev->flush) (void)m->block_dev->flush(m->block_dev);
-    if (rc == 0) {
-        kprintf("[VFS] Flushed block-backed FAT32 mount '%s' -> %s\n",
-                m->mount_point, m->block_dev->name);
-    }
-    return rc;
+    if (!m || !m->block_backed || !m->block_dev) return 0;
+    bcache_flush(m->block_dev);
+    kprintf("[VFS] Flushed block-backed FAT32 mount '%s' -> %s\n",
+            m->mount_point, m->block_dev->name);
+    return 0;
 }
 
 static bool vfs_mount_fat32_block(block_device_t *dev, u64 start_lba,
@@ -349,32 +344,11 @@ static bool vfs_mount_fat32_block(block_device_t *dev, u64 start_lba,
     if (!dev || !mount_point || g_mount_count >= VFS_MAX_MOUNTS) return false;
     if (dev->sector_size == 0 || sector_count == 0) return false;
 
-    u64 bytes = sector_count * dev->sector_size;
-    if (bytes == 0 || bytes > VFS_BLOCK_FAT32_MAX_BYTES || sector_count > 0xFFFFFFFFULL) {
-        kprintf("[VFS] FAT32 block mount skipped %s: volume too large bytes=%lu\n",
-                dev->name, bytes);
-        return false;
-    }
-
-    u8 *image = (u8 *)kmalloc((usize)bytes);
     fat32_vol_t *vol = (fat32_vol_t *)kmalloc(sizeof(fat32_vol_t));
-    if (!image || !vol) {
-        if (image) kfree(image);
-        if (vol) kfree(vol);
-        return false;
-    }
-
-    if (block_rw_all(dev, false, start_lba, (u32)sector_count, image) < 0) {
-        kprintf("[VFS] FAT32 block mount read failed dev=%s lba=%lu sectors=%lu\n",
-                dev->name, start_lba, sector_count);
-        kfree(image);
-        kfree(vol);
-        return false;
-    }
+    if (!vol) return false;
 
     memset(vol, 0, sizeof(*vol));
-    if (!fat32_mount(image, (usize)bytes, vol)) {
-        kfree(image);
+    if (!fat32_mount(dev, start_lba, vol)) {
         kfree(vol);
         return false;
     }
@@ -385,7 +359,7 @@ static bool vfs_mount_fat32_block(block_device_t *dev, u64 start_lba,
     m->type = FS_FAT32;
     m->priv = vol;
     m->block_dev = dev;
-    m->block_image = image;
+    m->block_image = NULL;
     m->block_start_lba = start_lba;
     m->block_sector_count = sector_count;
     m->block_backed = true;

@@ -36,11 +36,50 @@ void drm_init(void) {
 }
 
 drm_mode_t drm_get_mode(void) {
-    return (drm_mode_t){
-        .width      = g_primary.width,
-        .height     = g_primary.height,
-        .refresh_hz = 60,
-    };
+    drm_mode_t mode;
+    mode.width = g_primary.width;
+    mode.height = g_primary.height;
+    mode.refresh_hz = 60;
+    return mode;
+}
+
+
+bool drm_set_mode(u32 width, u32 height) {
+    if (!g_primary.pixels) return false;
+
+    // Try Bochs VBE
+    outw(0x01CE, 4); // VBE_DISPI_INDEX_ENABLE
+    outw(0x01CF, 0); // Disable
+
+    outw(0x01CE, 1); // XRES
+    outw(0x01CF, (u16)width);
+
+    outw(0x01CE, 2); // YRES
+    outw(0x01CF, (u16)height);
+
+    outw(0x01CE, 3); // BPP
+    outw(0x01CF, 32);
+
+    outw(0x01CE, 4); // ENABLE
+    outw(0x01CF, 0x41); // ENABLE | LFB_ENABLED
+
+    g_primary.width = width;
+    g_primary.height = height;
+    g_primary.size = width * height * 4;
+    g_primary.pitch = width * 4;
+
+    if (g_shadow_buffer) {
+        // Free old shadow buffer and reallocate
+        // Note: kmalloc might not be able to free properly, but YamOS heap supports kfree.
+        kfree(g_shadow_buffer);
+        g_shadow_buffer = (u32 *)kmalloc(g_primary.size);
+        if (g_shadow_buffer) {
+            memset(g_shadow_buffer, 0, g_primary.size);
+        }
+    }
+
+    kprintf_color(0xFF00FF88, "[DRM] Mode set: %ux%u @ 32 bpp\n", width, height);
+    return true;
 }
 
 drm_buffer_t *drm_create_dumb_buffer(u32 width, u32 height) {
@@ -103,6 +142,45 @@ void drm_page_flip(drm_buffer_t *buf) {
             }
         } else {
             memcpy(dst, src, copy_w * 4);
+        }
+    }
+}
+
+void drm_page_flip_damage(drm_buffer_t *buf, drm_rect_t *rects, u32 num_rects) {
+    if (!buf || !buf->pixels || !g_primary.pixels) return;
+
+    if (num_rects == 0) return; /* No damage */
+
+    u32 src_pitch4 = buf->pitch / 4;
+    u32 dst_pitch4 = g_primary.pitch / 4;
+
+    for (u32 i = 0; i < num_rects; i++) {
+        drm_rect_t r = rects[i];
+        
+        /* Clip against primary framebuffer bounds */
+        if (r.x >= g_primary.width || r.y >= g_primary.height) continue;
+        if (r.x + r.width > g_primary.width) r.width = g_primary.width - r.x;
+        if (r.y + r.height > g_primary.height) r.height = g_primary.height - r.y;
+
+        /* Clip against source buffer bounds */
+        if (r.x + r.width > buf->width) r.width = buf->width - r.x;
+        if (r.y + r.height > buf->height) r.height = buf->height - r.y;
+
+        for (u32 y = r.y; y < r.y + r.height; y++) {
+            u32 *src = buf->pixels + y * src_pitch4 + r.x;
+            u32 *dst = g_primary.pixels + y * dst_pitch4 + r.x;
+            
+            if (g_shadow_buffer) {
+                u32 *shadow = g_shadow_buffer + y * dst_pitch4 + r.x;
+                for (u32 x = 0; x < r.width; x++) {
+                    if (src[x] != shadow[x]) {
+                        dst[x] = src[x];
+                        shadow[x] = src[x];
+                    }
+                }
+            } else {
+                memcpy(dst, src, r.width * 4);
+            }
         }
     }
 }
