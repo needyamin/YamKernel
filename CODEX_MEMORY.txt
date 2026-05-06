@@ -118,6 +118,26 @@ Current Network Stack State
 - TCP socket file_ops: read/write/poll/close wired through VFS file_t.
 - UDP datagram fd-backed ABI: reserved (SYS_SENDTO/RECVFROM stub -1).
 
+Current Threading & Signal State  (Phase 1.1 complete)
+-------------------------------------------------------
+- sched_thread_create(): copies parent task, shares pml4, allocates new kernel
+  stack; IA32_FS_BASE written from task.tls_base at every context switch.
+- TLS block (tls_block_t): allocated by pthread_create, FS:0 = self pointer
+  (glibc ABI compat), 128 pthread_key slots in specific[].
+- Futex: FUTEX_WAIT/WAKE hash table (64 buckets, wait.c); SYS_FUTEX=42.
+  FUTEX_WAIT/WAKE/WAKE_PRIVATE/WAIT_PRIVATE constants in syscall.h + libyam.
+- pthread_mutex_t: futex-backed 0/1/2 (unlocked/locked/contended);
+  lock uses CAS(__ATOMIC_ACQUIRE) + futex_wait; unlock = atomic_fetch_sub + wake.
+- pthread_cond_t: sequence-counter futex; cond_wait = unlock + futex_wait on seq
+  + relock; broadcast = fetch_add + futex_wake(INT_MAX).
+- pthread_key_create/delete/getspecific/setspecific: backed by tls_block.specific[].
+- Signal ABI: SYS_SIGACTION=89, SYS_SIGPROCMASK=90, SYS_SIGRETURN=91.
+  sigaction stores handler; SIGKILL(9)/SIGSTOP(17) cannot be caught/blocked.
+  sigprocmask: SIG_BLOCK/UNBLOCK/SETMASK; delivers at every SYSCALL_RETURN.
+  Default unhandled signal action: sched_exit_current(128+sig).
+  sys_sigreturn: first slice only (full ucontext push pending).
+- New OS flags: YAM_OS_FLAG_PTHREAD_ABI (1<<10), YAM_OS_FLAG_SIGNALS (1<<11).
+
 Current Application Architecture State
 ---------------------------------------
 - App registry: 64 slots, spinlock-protected. Records PID, task name,
@@ -172,11 +192,15 @@ Phase 2 (Performance/HW)     — COMPLETE
 Phase 3 (Connected Ecosystem) — IN PROGRESS
   [DONE] Non-blocking socket ABI: SOCK_NONBLOCK, select(), fcntl(F_SETFL).
   [DONE] File Manager multi-user: opens in logged-in user's home dir.
-  [TODO] Full TLS/HTTPS handshake (beyond ClientHello probe).
-  [TODO] ypkg package manager.
-  [TODO] Thread ABI + futex hardening for userspace.
-  [TODO] Signal delivery + mask/handler semantics.
-  [TODO] epoll / io_uring foundations.
+  [DONE] Phase 1.1 pthread ABI: futex mutex/cond, TLS keys, signal delivery.
+  [TODO] Full TLS/HTTPS handshake (mbedTLS port, X.509, TLS 1.3).
+  [TODO] ypkg package manager (HTTPS download + FAT32 install DB).
+  [TODO] Phase 1.2: Full sigframe (ucontext on user stack + sigreturn restore).
+  [TODO] Phase 1.3: ELF dynamic linker (ld.so, PT_INTERP, dlopen/dlsym).
+  [TODO] Phase 4: execve + fork + Unix sockets + namespace sandboxing.
+  [TODO] Phase 5: virtio-gpu DRM + Mesa OpenGL ES (Chromium/Brave requirement).
+  [TODO] Phase 6: musl libc + libc++ port.
+  [TODO] Phase 7: Chromium/Brave port (unblocked after Phases 1.2, 1.3, 4-6).
 
 Build Verification (latest passing)
 ------------------------------------

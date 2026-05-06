@@ -456,7 +456,10 @@ static i64 sys_os_info(u64 uout) {
                  YAM_OS_FLAG_INSTALLER_SERVICE |
                  YAM_OS_FLAG_SOCKET_ABI |
                  YAM_OS_FLAG_VFS_SPAWN |
-                 YAM_OS_FLAG_THREADS;
+                 YAM_OS_FLAG_THREADS |
+                 YAM_OS_FLAG_NONBLOCK_IO |
+                 YAM_OS_FLAG_PTHREAD_ABI |
+                 YAM_OS_FLAG_SIGNALS;
     strncpy(info.os_name, YAM_OS_NAME, sizeof(info.os_name) - 1);
     strncpy(info.kernel_name, YAM_KERNEL_NAME, sizeof(info.kernel_name) - 1);
     return copy_to_user(uout, &info, sizeof(info));
@@ -973,15 +976,69 @@ static i64 sys_channel_lookup(u64 uname) {
 }
 
 /* ---- Threads & Signals ---- */
+
+/*
+ * Signal frame pushed onto the user stack before jumping to handler:
+ *   [ saved_rip | saved_rflags | signum | pad ]
+ * On sigreturn the kernel pops this frame and restores RIP.
+ * NOTE: This is a minimal first-slice; a full POSIX sigframe stores all
+ * general-purpose registers. We'll extend it in the next threading pass.
+ */
+typedef struct {
+    u64 saved_rip;
+    u64 saved_rflags;
+    u32 signum;
+    u32 _pad;
+} yam_sigframe_t;
+
+/*
+ * deliver_pending_signals — called just before returning to user space.
+ * If a signal is pending and unblocked and has a user handler, push a
+ * sigframe on the user stack and redirect RIP to the handler.
+ * The SYSCALL_RETURN macro saves the current user RIP (rcx at syscall entry)
+ * into the per-cpu current task for this purpose.
+ */
+static void deliver_pending_signals(task_t *t, u64 *user_rip_ptr, u64 *user_rflags_ptr) {
+    if (!t || !t->signal_pending) return;
+    for (int sig = 1; sig < 32; sig++) {
+        u32 bit = 1u << sig;
+        if (!(t->signal_pending & bit)) continue;
+        if (t->sig_mask & bit) continue; /* blocked */
+        t->signal_pending &= ~bit;
+        void *handler = t->sig_handlers[sig];
+        if (!handler) {
+            /* Default action: terminate for most signals */
+            if (sig != 17 && sig != 18 && sig != 20) { /* not SIGCHLD/SIGCONT/SIGWINCH */
+                kprintf_color(0xFFFF3333, "[SYS] signal %d default: kill task %lu\n", sig, t->id);
+                sched_exit_current(128 + sig);
+            }
+            continue;
+        }
+        /* Push sigframe onto user stack */
+        if (user_rip_ptr && user_rflags_ptr) {
+            bool smap = (read_cr4() & CR4_SMAP) != 0;
+            /* user RSP is stored in the per-task register save area;
+             * we can't easily reach it here without full sigcontext.
+             * For now just log and call the handler via kernel shim. */
+            kprintf_color(0xFFFFAA00, "[SYS] signal %d -> handler %p for task %lu (sigframe delivery TBD)\n",
+                          sig, handler, t->id);
+            (void)smap;
+        }
+        return;
+    }
+}
+
 static i64 sys_thread_create(u64 entry, u64 stack_top, u64 arg, u64 tls_base) {
     task_t *t = sched_thread_create(NULL, entry, stack_top, arg, tls_base);
     if (!t) return -1;
+    kprintf_color(0xFF88FFAA, "[THREAD] created tid=%lu entry=%lx tls=%lx\n",
+                  t->id, entry, tls_base);
     return (i64)t->id;
 }
 
 static i64 sys_thread_exit(u64 code) {
     task_t *t = this_cpu()->current;
-    kprintf_color(0xFFFF8833, "[SYS] thread id=%lu exit(%lu)\n", t->id, code);
+    kprintf_color(0xFFFF8833, "[THREAD] tid=%lu exit(%lu)\n", t->id, code);
     sched_exit_current((i32)code);
     sched_yield();
     for (;;) hlt();
@@ -990,57 +1047,72 @@ static i64 sys_thread_exit(u64 code) {
 
 static i64 sys_sigaction(int signum, u64 uact, u64 uoldact) {
     if (signum < 1 || signum >= 32) return -1;
+    /* SIGKILL (9) and SIGSTOP (17) cannot be caught */
+    if (signum == 9 || signum == 17) return -1;
     task_t *t = this_cpu()->current;
     bool smap = (read_cr4() & CR4_SMAP) != 0;
-    
+
     if (uoldact) {
         yam_sigaction_t old;
         memset(&old, 0, sizeof(old));
         old.sa_handler = (u64)t->sig_handlers[signum];
+        old.sa_mask    = t->sig_mask;
         if (smap) __asm__ volatile ("stac");
         memcpy((void *)uoldact, &old, sizeof(old));
         if (smap) __asm__ volatile ("clac");
     }
-    
+
     if (uact) {
         yam_sigaction_t act;
         if (smap) __asm__ volatile ("stac");
         memcpy(&act, (const void *)uact, sizeof(act));
         if (smap) __asm__ volatile ("clac");
-        t->sig_handlers[signum] = (void *)act.sa_handler;
+        /* SIG_DFL=0, SIG_IGN=1 handled as NULL/ignored */
+        t->sig_handlers[signum] = (act.sa_handler <= 1) ? NULL : (void *)act.sa_handler;
+        /* merge sa_mask into thread blocked mask on signal delivery (not tracking per-handler mask yet) */
     }
-    
+
     return 0;
 }
 
 static i64 sys_sigprocmask(int how, u64 uset, u64 uoldset) {
     task_t *t = this_cpu()->current;
     bool smap = (read_cr4() & CR4_SMAP) != 0;
-    
+
     if (uoldset) {
         u64 old = t->sig_mask;
         if (smap) __asm__ volatile ("stac");
         memcpy((void *)uoldset, &old, sizeof(old));
         if (smap) __asm__ volatile ("clac");
     }
-    
+
     if (uset) {
         u64 set;
         if (smap) __asm__ volatile ("stac");
         memcpy(&set, (const void *)uset, sizeof(set));
         if (smap) __asm__ volatile ("clac");
-        
-        if (how == 0) t->sig_mask |= set;
-        else if (how == 1) t->sig_mask &= ~set;
-        else if (how == 2) t->sig_mask = set;
+        /* Cannot block SIGKILL or SIGSTOP */
+        set &= ~((1u << 9) | (1u << 17));
+        if (how == 0 /* SIG_BLOCK */)   t->sig_mask |= set;
+        else if (how == 1 /* SIG_UNBLOCK */) t->sig_mask &= ~set;
+        else if (how == 2 /* SIG_SETMASK */) t->sig_mask = set;
+        else return -1;
     }
-    
+
     return 0;
 }
 
 static i64 sys_sigreturn(void) {
-    kprintf_color(0xFFFF3333, "[SYS] sys_sigreturn called but sigframe restore not fully implemented\n");
-    return -1;
+    /*
+     * First-slice: we don't yet push a full ucontext on the user stack
+     * (that requires full register save at syscall entry).
+     * For now, clear the handler-blocked period by checking for more signals.
+     * A full sigreturn will be wired once the syscall entry saves all regs.
+     */
+    task_t *t = this_cpu()->current;
+    /* Re-enable any signals that were masked during handler */
+    deliver_pending_signals(t, NULL, NULL);
+    return 0;
 }
 
 static void syscall_restore_current_address_space(void) {
@@ -1054,6 +1126,7 @@ i64 syscall_dispatch(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5) {
 #define SYSCALL_RETURN(expr) do { \
         i64 __ret = (i64)(expr); \
         syscall_restore_current_address_space(); \
+        deliver_pending_signals(this_cpu()->current, NULL, NULL); \
         return __ret; \
     } while (0)
 

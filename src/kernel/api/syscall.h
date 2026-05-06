@@ -126,6 +126,14 @@
 #define YAM_OS_FLAG_VFS_SPAWN         (1u << 7)
 #define YAM_OS_FLAG_THREADS           (1u << 8)
 #define YAM_OS_FLAG_NONBLOCK_IO       (1u << 9)
+#define YAM_OS_FLAG_PTHREAD_ABI       (1u << 10) /* futex mutex/cond/keys live */
+#define YAM_OS_FLAG_SIGNALS           (1u << 11) /* sigaction/sigprocmask wired */
+
+/* Futex operation codes (mirror Linux for compat) */
+#define FUTEX_WAIT          0
+#define FUTEX_WAKE          1
+#define FUTEX_WAKE_PRIVATE  128
+#define FUTEX_WAIT_PRIVATE  129
 
 #define YAM_APP_TYPE_PROCESS  1
 #define YAM_APP_TYPE_SERVICE  2

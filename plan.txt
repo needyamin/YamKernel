@@ -8,44 +8,153 @@ visual experiences and macOS-inspired workflows.
 
 Comparison:
 - SerenityOS: Unix from scratch | Strength: Custom Ecosystem | Gap: Visual Modernity
-- Haiku: BeOS Successor | Strength: Usability | Gap: Modern Web Support
-- Redox: Rust Safety | Strength: Security | Gap: Application UX
-- YamOS: Apple-like UI | Strength: Aesthetics | Gap: Kernel Infrastructure
+- Haiku: BeOS Successor       | Strength: Usability          | Gap: Modern Web Support
+- Redox: Rust Safety           | Strength: Security           | Gap: Application UX
+- YamOS: Apple-like UI         | Strength: Aesthetics         | Gap: Real App Compatibility
 
-2. Critical Technical Gaps
---------------------------
-- Threads & Signals: MISSING. Essential for modern language runtimes and 
-  multi-process browsers. (Target: pthread-compatible ABI).
-- Dynamic Linking: MISSING. ELF interpreter required for shared libraries 
-  to reduce memory pressure.
-- Asynchronous I/O: MISSING. Necessary for responsive network applications 
-  (Target: select/poll/epoll).
-- Page Cache: [DONE] 1MB LRU Block Cache integrated into VFS with dirty-tracking.
-- Persistent Storage: [DONE] FAT32 Write-back with AHCI/VirtIO-blk support.
+2. Critical Technical Gaps (to run real software like Brave)
+-------------------------------------------------------------
+- Threads & Signals:    MISSING. Essential for multi-threaded apps and browsers.
+                        Target: full pthread-compatible ABI, thread-local errno,
+                        robust futexes, and POSIX signal delivery with masks/handlers.
+- Dynamic Linking:      MISSING. Required for any real application.
+                        Target: ELF PT_INTERP, ld.so, relocations, dlopen/dlsym,
+                        shared library search paths.
+- Multi-process Model:  MISSING. Browsers (Brave/Chrome) run many separate processes.
+                        Target: proper execve() process replacement, fork(), wait(),
+                        Unix domain sockets, and namespace/capability sandboxing.
+- Async I/O:            [PARTIAL] select() + SOCK_NONBLOCK done (SYS_SELECT=92,
+                        SYS_FCNTL=93). Needs epoll and io_uring foundations.
+- Hardware Graphics:    MISSING. Brave needs OpenGL/Vulkan via Mesa.
+                        Target: virtio-gpu driver, DRM/KMS GEM buffer objects,
+                        Mesa software rasterizer port, then hardware acceleration.
+- Complete libc/libc++: MISSING. Brave requires a full POSIX libc and full C++ STL.
+                        Target: musl libc port, then libc++ / libstdc++ compatibility.
+- Page Cache:           [DONE] 1MB LRU Block Cache integrated into VFS with dirty-tracking.
+- Persistent Storage:   [DONE] FAT32 write-back with AHCI/VirtIO-blk support.
+- Non-blocking Sockets: [DONE] SOCK_NONBLOCK, select(), fcntl(F_SETFL/F_GETFL).
 
 3. Implementation Roadmap
 -------------------------
 
 Phase 1: The Runtime Foundation [IN PROGRESS]
-- Kernel Threads & Futexes (Internal core present, needs public ABI)
-- Build ELF Dynamic Loader (ld.so)
-- Standard POSIX Signal Delivery
+  Step 1.1 - Kernel Threads & Futexes         [DONE]
+    * Full SYS_THREAD_CREATE / SYS_THREAD_EXIT ABI
+    * Futex wait/wake (FUTEX_WAIT, FUTEX_WAKE) with timeout
+    * Thread-Local Storage (TLS) via FS base MSR per-thread
+    * Thread-local errno allocation
+  Step 1.2 - POSIX Signal Delivery            [NEXT]
+    * SYS_SIGACTION, SYS_SIGPROCMASK, SYS_SIGRETURN (ABI numbers reserved)
+    * Signal delivery on syscall return path (pending mask check)
+    * Default actions: terminate, ignore, stop
+    * Interruption semantics for blocking syscalls (EINTR)
+  Step 1.3 - ELF Dynamic Loader (ld.so)
+    * PT_INTERP segment recognition in elf_spawn()
+    * ELF RELA/REL relocation engine
+    * Shared library load into process address space
+    * dlopen() / dlsym() / dlclose() syscall ABI
+    * LD_LIBRARY_PATH and rpath search order
 
 Phase 2: Performance & Hardware [DONE]
-- 1MB LRU Block Cache for VFS
-- AHCI SATA Driver (DMA-enabled)
-- DRM Modesetting & Damage Tracking (Bochs VBE)
-- Runtime Resolution Switching (1024x768 -> 1920x1080)
+  * 1MB LRU Block Cache for VFS
+  * AHCI SATA Driver (DMA-enabled)
+  * DRM Modesetting & Damage Tracking (Bochs VBE)
+  * Runtime Resolution Switching (1024x768 -> 1920x1080)
 
-Phase 3: Connected Ecosystem [NEXT]
-- Non-blocking Socket ABI (select/poll)
-- Full TLS/HTTPS Stack (Porting mbedTLS or similar)
-- Initial Package Manager (ypkg) & Downloader
+Phase 3: Connected Ecosystem [IN PROGRESS]
+  Step 3.1 - Non-blocking Socket ABI         [DONE]
+    * SOCK_NONBLOCK, select(), fcntl() live (SYS_SELECT=92, SYS_FCNTL=93)
+    * TCP connect/recv/accept return EAGAIN / EINPROGRESS
+  Step 3.2 - Full TLS/HTTPS Stack            [NEXT]
+    * Port mbedTLS or BearSSL into kernel net layer
+    * X.509 certificate parsing and chain validation
+    * TLS 1.2/1.3 ClientHello -> ServerHello -> Handshake -> AppData
+    * HTTPS in YamBrowser and ypkg downloader
+  Step 3.3 - Package Manager (ypkg)
+    * HTTPS package manifest download
+    * Signature verification
+    * Install/remove/list database on FAT32
 
-Phase 4: Experience Polish
-- Hardware-Accelerated Blurs (using Dirty Rects)
-- FreeType / HarfBuzz Font Integration
-- VFS-level Permissions (UID/GID enforcement)
+Phase 4: Multi-process & Sandboxing  <-- REQUIRED FOR BRAVE/REAL APPS
+  Step 4.1 - Proper execve() Process Replacement
+    * Replace current spawn-only model with true execve()
+    * Replace the existing process image, argc/argv/envp, stack layout
+    * Interpreter script (#!) handling
+  Step 4.2 - fork() / clone() Primitives
+    * Clone address space (CoW fork), inherit file descriptors
+    * vfork() fast path for exec-after-fork
+  Step 4.3 - Unix Domain Sockets & Shared Memory
+    * AF_UNIX socket pairs (socketpair())
+    * POSIX shared memory (shm_open, mmap MAP_SHARED)
+    * Pipe and pipe2() primitives
+  Step 4.4 - Namespace & Capability Sandboxing
+    * PID namespaces for process isolation
+    * Mount namespaces for filesystem isolation
+    * Capability bits (CAP_NET_ADMIN, CAP_SYS_ADMIN, etc.)
+    * seccomp-like syscall filter for sandboxed renderer processes
+
+Phase 5: Hardware-Accelerated Graphics  <-- REQUIRED FOR BRAVE/REAL APPS
+  Step 5.1 - virtio-gpu DRM Driver
+    * virtio-gpu PCI device probe and command virtqueue
+    * GEM buffer object allocation and import/export
+    * DRM/KMS scanout via virtio-gpu display
+  Step 5.2 - OpenGL / Mesa Port
+    * Mesa software rasterizer (llvmpipe or softpipe) as first GL target
+    * EGL surface backed by virtio-gpu GEM buffers
+    * OpenGL ES 2.0 minimum for Chromium's ANGLE layer
+  Step 5.3 - Vulkan (longer term)
+    * lavapipe (Mesa Vulkan software renderer) port
+    * Real GPU driver via virtio-gpu Vulkan extension
+
+Phase 6: Complete C/C++ Standard Libraries  <-- REQUIRED FOR BRAVE/REAL APPS
+  Step 6.1 - musl libc Port
+    * Replace minimal libc shim with full musl source tree
+    * Full POSIX thread, signal, locale, math, time, regex support
+    * Dynamic linking hooks (musl ld.so)
+  Step 6.2 - libc++ / libstdc++ Port
+    * C++17/20 standard library linked against musl
+    * std::thread, std::mutex, std::atomic backed by real kernel primitives
+  Step 6.3 - Core Runtime Libraries
+    * libz, libssl (via OpenSSL/mbedTLS), libpng, libjpeg
+    * libffi (needed by many scripting runtimes)
+
+Phase 7: Real Browser Support (Brave / Chromium)
+  Step 7.1 - Prerequisites Checklist
+    * [ ] Dynamic linker (Phase 1.3) live
+    * [ ] Full pthreads ABI (Phase 1.1) live
+    * [ ] POSIX signals (Phase 1.2) live
+    * [ ] execve + fork (Phase 4.1/4.2) live
+    * [ ] Unix sockets + shared memory (Phase 4.3) live
+    * [ ] OpenGL ES via Mesa (Phase 5.2) live
+    * [ ] musl libc + libc++ (Phase 6.1/6.2) live
+    * [ ] Full TLS/HTTPS (Phase 3.2) live
+  Step 7.2 - Chromium Porting
+    * Port Chromium's OS abstraction layer (base/) to YamOS syscalls
+    * Wire Ozone/Wayland backend to YamOS compositor protocol
+    * Sandbox the renderer process using Phase 4.4 namespaces
+  Step 7.3 - Brave Packaging
+    * Build Brave on top of ported Chromium
+    * Package as a ypkg installable from the package manager
+
+Phase 8: Experience Polish (ongoing)
+  * Hardware-accelerated compositor blurs (dirty rects + GPU)
+  * FreeType / HarfBuzz font rendering in compositor and apps
+  * VFS-level permissions (UID/GID enforcement, chmod/chown)
+  * epoll + io_uring for high-performance async I/O
+  * Full multi-user per-session isolation
+  * Audio: HDA/AC'97 driver, ALSA compatibility layer
+
+-----------------------------------------------------------
+Priority order to reach "real apps runnable" milestone:
+  1. Threads + Futexes + TLS       (Phase 1.1)
+  2. POSIX Signals                  (Phase 1.2)
+  3. Dynamic Linker / ld.so        (Phase 1.3)
+  4. TLS/HTTPS                      (Phase 3.2)
+  5. execve + fork                  (Phase 4.1/4.2)
+  6. Unix sockets + shared memory   (Phase 4.3)
+  7. musl libc + libc++             (Phase 6.1/6.2)
+  8. Mesa OpenGL ES                  (Phase 5.2)
+  → After all 8: Chromium/Brave port becomes feasible.
 
 -----------------------------------------------------------
 (c) 2026 YamOS Development Team

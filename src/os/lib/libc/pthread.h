@@ -15,7 +15,7 @@ typedef struct { unsigned __attr; } pthread_condattr_t;
 typedef struct { void *__x; } pthread_mutex_t;
 typedef struct { unsigned __attr; } pthread_mutexattr_t;
 typedef unsigned pthread_key_t;
-typedef unsigned pthread_t;
+typedef unsigned long pthread_t;
 typedef struct { unsigned __attr; } pthread_attr_t;
 
 int pthread_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *attr);
@@ -30,6 +30,7 @@ int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex);
 int pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex,
                            const struct timespec *abstime);
 int pthread_cond_signal(pthread_cond_t *cond);
+int pthread_cond_broadcast(pthread_cond_t *cond);
 int pthread_condattr_init(pthread_condattr_t *attr);
 int pthread_condattr_setclock(pthread_condattr_t *attr, int clock_id);
 
