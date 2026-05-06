@@ -455,7 +455,8 @@ static i64 sys_os_info(u64 uout) {
                  YAM_OS_FLAG_NETWORK_STACK |
                  YAM_OS_FLAG_INSTALLER_SERVICE |
                  YAM_OS_FLAG_SOCKET_ABI |
-                 YAM_OS_FLAG_VFS_SPAWN;
+                 YAM_OS_FLAG_VFS_SPAWN |
+                 YAM_OS_FLAG_THREADS;
     strncpy(info.os_name, YAM_OS_NAME, sizeof(info.os_name) - 1);
     strncpy(info.kernel_name, YAM_KERNEL_NAME, sizeof(info.kernel_name) - 1);
     return copy_to_user(uout, &info, sizeof(info));
@@ -863,6 +864,77 @@ static i64 sys_channel_lookup(u64 uname) {
     return (i64)id;
 }
 
+/* ---- Threads & Signals ---- */
+static i64 sys_thread_create(u64 entry, u64 stack_top, u64 arg, u64 tls_base) {
+    task_t *t = sched_thread_create(NULL, entry, stack_top, arg, tls_base);
+    if (!t) return -1;
+    return (i64)t->id;
+}
+
+static i64 sys_thread_exit(u64 code) {
+    task_t *t = this_cpu()->current;
+    kprintf_color(0xFFFF8833, "[SYS] thread id=%lu exit(%lu)\n", t->id, code);
+    sched_exit_current((i32)code);
+    sched_yield();
+    for (;;) hlt();
+    return 0;
+}
+
+static i64 sys_sigaction(int signum, u64 uact, u64 uoldact) {
+    if (signum < 1 || signum >= 32) return -1;
+    task_t *t = this_cpu()->current;
+    bool smap = (read_cr4() & CR4_SMAP) != 0;
+    
+    if (uoldact) {
+        yam_sigaction_t old;
+        memset(&old, 0, sizeof(old));
+        old.sa_handler = (u64)t->sig_handlers[signum];
+        if (smap) __asm__ volatile ("stac");
+        memcpy((void *)uoldact, &old, sizeof(old));
+        if (smap) __asm__ volatile ("clac");
+    }
+    
+    if (uact) {
+        yam_sigaction_t act;
+        if (smap) __asm__ volatile ("stac");
+        memcpy(&act, (const void *)uact, sizeof(act));
+        if (smap) __asm__ volatile ("clac");
+        t->sig_handlers[signum] = (void *)act.sa_handler;
+    }
+    
+    return 0;
+}
+
+static i64 sys_sigprocmask(int how, u64 uset, u64 uoldset) {
+    task_t *t = this_cpu()->current;
+    bool smap = (read_cr4() & CR4_SMAP) != 0;
+    
+    if (uoldset) {
+        u64 old = t->sig_mask;
+        if (smap) __asm__ volatile ("stac");
+        memcpy((void *)uoldset, &old, sizeof(old));
+        if (smap) __asm__ volatile ("clac");
+    }
+    
+    if (uset) {
+        u64 set;
+        if (smap) __asm__ volatile ("stac");
+        memcpy(&set, (const void *)uset, sizeof(set));
+        if (smap) __asm__ volatile ("clac");
+        
+        if (how == 0) t->sig_mask |= set;
+        else if (how == 1) t->sig_mask &= ~set;
+        else if (how == 2) t->sig_mask = set;
+    }
+    
+    return 0;
+}
+
+static i64 sys_sigreturn(void) {
+    kprintf_color(0xFFFF3333, "[SYS] sys_sigreturn called but sigframe restore not fully implemented\n");
+    return -1;
+}
+
 static void syscall_restore_current_address_space(void) {
     u64 *pml4 = syscall_current_pml4();
     u64 phys = vmm_virt_hhdm_to_phys(pml4);
@@ -961,6 +1033,13 @@ i64 syscall_dispatch(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5) {
     case SYS_CHANNEL_SEND:    SYSCALL_RETURN(sys_channel_send((u32)a1, (u32)a2, a3, (u32)a4));
     case SYS_CHANNEL_RECV:    SYSCALL_RETURN(sys_channel_recv((u32)a1, a2));
     case SYS_CHANNEL_LOOKUP:  SYSCALL_RETURN(sys_channel_lookup(a1));
+
+    /* Threads & Signals */
+    case SYS_THREAD_CREATE:   SYSCALL_RETURN(sys_thread_create(a1, a2, a3, a4));
+    case SYS_THREAD_EXIT:     SYSCALL_RETURN(sys_thread_exit(a1));
+    case SYS_SIGACTION:       SYSCALL_RETURN(sys_sigaction((int)a1, a2, a3));
+    case SYS_SIGPROCMASK:     SYSCALL_RETURN(sys_sigprocmask((int)a1, a2, a3));
+    case SYS_SIGRETURN:       SYSCALL_RETURN(sys_sigreturn());
 
     default: SYSCALL_RETURN(-1);
     }

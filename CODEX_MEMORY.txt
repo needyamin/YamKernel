@@ -137,7 +137,7 @@ Current Kernel/Driver State
   - [DRIVER] inventory: pci=6 bound=2 unbound=4 drivers=6
   - [BLOCK] core initialized: max_devices=16
   - [DHCP] ACK! IP=10.0.2.15 GW=10.0.2.2 DNS=10.0.2.3
-  - [HTTP] GET http://example.com/ -> 1023 bytes
+  - [HTTP] GET http://ansnew.com/ -> 1023 bytes
 - Verified one direct QEMU hardware test with an attached virtio-blk disk:
   - [PCI] Scanned bus. Found 7 devices.
   - [DRIVER] bind pci 00:04.0 1af4:1001 class=01:00 -> block/virtio-blk
@@ -166,16 +166,16 @@ Current Kernel/Driver State
 - IPv4 receive respects IP total_len instead of Ethernet padded length.
 - TCP receive respects TCP data_offset/options before locating payload.
 - Kernel HTTP/1.0 client exists at src/net/http.c.
-- Generic kernel capability probe now uses http://example.com/ and writes cache
+- Generic kernel capability probe now uses http://ansnew.com/ and writes cache
   probe bytes to /var/cache/yamos/downloads/kernel-net-probe.txt.
 - Active boot capability request is `kernel-net`, not any language package.
 - The old language placeholder module is no longer copied into the ISO and is
   no longer listed in limine.conf.
 - Verified QEMU boot after cleanup:
-  - [INSTALLER] service ready: probe db=1 net_probe=http://example.com/
-  - [DNS] example.com -> 104.20.23.154
+  - [INSTALLER] service ready: probe db=1 net_probe=http://ansnew.com/
+  - [DNS] ansnew.com -> 104.20.23.154
   - [TCP] Connected to 104.20.23.154:80
-  - [HTTP] GET http://example.com/ -> 797 bytes
+  - [HTTP] GET http://ansnew.com/ -> 797 bytes
   - cache probe wrote 797 bytes to kernel-net-probe.txt
 
 Current Filesystem State
@@ -217,7 +217,7 @@ Current Filesystem State
     - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
       passed.
     - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed and showed `[HTTP] GET http://example.com/ -> 797 bytes`.
+      passed and showed `[HTTP] GET http://ansnew.com/ -> 797 bytes`.
 - These mounts are temporary ramfs, not persistent storage.
 - Serious next storage work: real block driver, disk enumeration, partition
   detection, writable persistent filesystem mount, fsck/recovery story.
@@ -414,7 +414,7 @@ Current Application Architecture State
       - `[HELLO] stat /usr/local/bin/hello-local mode=0100600 size=103504`
       - `[HELLO] fstat /usr/local/bin/hello-local mode=0100600 size=103504`
       - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
-      - `[HTTP] GET http://example.com/ -> 797 bytes`
+      - `[HTTP] GET http://ansnew.com/ -> 797 bytes`
 - Added kernel-backed `ftruncate()` file resizing slice:
   - Public ABI now includes `SYS_FTRUNCATE` 80; `SYS_MAX` is 81.
   - VFS implements `sys_ftruncate(fd, length)` for RAMFS and FAT32 regular
@@ -435,7 +435,7 @@ Current Application Architecture State
       - `[HELLO] fstat /tmp/hello-truncate.txt before=6`
       - `[HELLO] ftruncate /tmp/hello-truncate.txt size=2`
       - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
-      - `[HTTP] GET http://example.com/ -> 797 bytes`
+      - `[HTTP] GET http://ansnew.com/ -> 797 bytes`
 - Added kernel-backed `rename()` VFS slice:
   - Public ABI now includes `SYS_RENAME` 81; `SYS_MAX` is 82.
   - VFS implements `sys_rename(oldpath, newpath)` for same-mount paths.
@@ -454,7 +454,7 @@ Current Application Architecture State
       - `[HELLO] rename /tmp/hello-rename.txt size=6`
       - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
       - `[INIT] waitpid hello-local -> pid=6 status=0x0 exit=0`
-      - `[HTTP] GET http://example.com/ -> 797 bytes`
+      - `[HTTP] GET http://ansnew.com/ -> 797 bytes`
 - Added first dirfd-aware `*at` path syscall slice:
   - Public ABI now includes:
     - `SYS_OPENAT` 82
@@ -482,7 +482,7 @@ Current Application Architecture State
       - `[HELLO] openat/fstatat /tmp/hello-at.tmp size=2`
       - `[HELLO] renameat /tmp/hello-at.txt size=2`
       - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
-      - `[HTTP] GET http://example.com/ -> 797 bytes`
+      - `[HTTP] GET http://ansnew.com/ -> 797 bytes`
 - Added VFS `O_APPEND` write semantics:
   - `sys_write()` now checks `file_t.flags & O_APPEND` before regular VFS
     writes and moves the file offset to current EOF using `sys_stat()`.
@@ -499,7 +499,7 @@ Current Application Architecture State
     - `build/verify.log` showed the append probe in all three `hello` runs:
       - `[HELLO] append /tmp/hello-append.txt size=2`
       - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
-      - `[HTTP] GET http://example.com/ -> 797 bytes`
+      - `[HTTP] GET http://ansnew.com/ -> 797 bytes`
 - Fixed `lseek(..., SEEK_END)` to use VFS metadata:
   - `sys_lseek()` now calls `sys_fstat()` for `SEEK_END` instead of only
     knowing RAMFS sizes and falling back to the current offset for other
@@ -518,7 +518,7 @@ Current Application Architecture State
       - `[HELLO] seek_end /bin/hello offset=117472`
       - `[HELLO] seek_end /usr/local/bin/hello-local offset=117472`
       - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
-      - `[HTTP] GET http://example.com/ -> 798 bytes`
+      - `[HTTP] GET http://ansnew.com/ -> 798 bytes`
 - Added VFS `O_CREAT | O_EXCL` exclusive-create semantics:
   - `sys_open()` now rejects open when the target already exists and both
     `O_CREAT` and `O_EXCL` are present.
@@ -534,7 +534,7 @@ Current Application Architecture State
     - `build/verify.log` showed the probe in all three `hello` runs:
       - `[HELLO] o_excl /tmp/hello-excl.txt second_open_failed`
       - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
-      - `[HTTP] GET http://example.com/ -> 798 bytes`
+      - `[HTTP] GET http://ansnew.com/ -> 798 bytes`
 
 Current Desktop/GUI State
 -------------------------
@@ -632,13 +632,13 @@ Current Desktop/GUI State
     - loading/progress state
     - response status metadata
     - browser status bar
-  - Supports URL normalization from `example.com` to `http://example.com`.
+  - Supports URL normalization from `ansnew.com` to `http://ansnew.com`.
   - Tracks small back/forward history.
   - Parses host/path for `http://host/path`.
   - Rejects `https://` clearly because TLS/certificate service is not present.
   - Extracts HTTP body, title tag, and simple HTML text by stripping tags and
     preserving coarse block breaks.
-  - Initial suggestions include `http://example.com/` and `http://neverssl.com/`.
+  - Initial suggestions include `http://ansnew.com/` and `http://neverssl.com/`.
   - This is not Mozilla-class yet; missing: TLS, certificates, JavaScript, CSS
     layout, images, DOM, fonts, sandboxed renderer processes, cache, cookies.
   - Verification after browser work:
@@ -660,7 +660,7 @@ Current Desktop/GUI State
   - Rebuilt and verified:
     - `make iso` passed.
     - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed and showed `[HTTP] GET http://example.com/ -> 797 bytes`.
+      passed and showed `[HTTP] GET http://ansnew.com/ -> 797 bytes`.
 - Static browser renderer follow-up after owner asked for markup/CSS/JS
   rendering:
   - Added a small render-tree layer in
@@ -679,7 +679,7 @@ Current Desktop/GUI State
       passed.
     - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
       passed and showed e1000, DHCP, DNS, TCP, and
-      `[HTTP] GET http://example.com/ -> 797 bytes`.
+      `[HTTP] GET http://ansnew.com/ -> 797 bytes`.
 - Browser-vs-Firefox correction pass:
   - Owner correctly said YamBrowser still looks like a toy versus Firefox.
   - Added `BROWSER_FIREFOX_GAP.md` with a blunt feature comparison and next
@@ -708,7 +708,7 @@ Current Desktop/GUI State
     - `build/verify.log` showed:
       - `[DHCP] ACK! IP=10.0.2.15 GW=10.0.2.2 DNS=10.0.2.3`
       - `[TCP] Connected to 104.20.23.154:80`
-      - `[HTTP] GET http://example.com/ -> 797 bytes`
+      - `[HTTP] GET http://ansnew.com/ -> 797 bytes`
 - Browser layout/scroll/style pass:
   - Added browser document viewport constants and scroll state:
     `DOC_TOP`, `DOC_BOTTOM`, `DOC_VIEW_H`, `document_scroll`,
@@ -731,7 +731,7 @@ Current Desktop/GUI State
   - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
     passed after this pass.
   - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-    passed after this pass and showed `[HTTP] GET http://example.com/ -> 797 bytes`.
+    passed after this pass and showed `[HTTP] GET http://ansnew.com/ -> 797 bytes`.
 - OS capability / socket ABI pass:
   - Owner asked for YamOS to become capable of installing and handling browser
     engines, programming languages, and real x86_64 OS workloads.
@@ -769,7 +769,7 @@ Current Desktop/GUI State
       passed.
     - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
       passed and showed e1000, DHCP, DNS, TCP, and
-      `[HTTP] GET http://example.com/ -> 797 bytes`.
+      `[HTTP] GET http://ansnew.com/ -> 797 bytes`.
 - GUI radio/quick-settings pass:
   - Added kernel status/control headers for Wi-Fi and Bluetooth:
     - `src/drivers/net/iwlwifi.h`
@@ -801,7 +801,7 @@ Current Desktop/GUI State
       - `[wlan0] No Intel wireless NIC present (firmware blob required)`
       - `[hci0] Bluetooth HCI service initialized; USB transport/backend pending`
       - `[WAYLAND] Compositor initialized at 1280x800`
-      - `[HTTP] GET http://example.com/ -> 798 bytes`
+      - `[HTTP] GET http://ansnew.com/ -> 798 bytes`
 - Split radio settings GUI pass:
   - Owner corrected that radio controls should not all live in one crowded
     panel. Direction: use multiple GUI surfaces when the feature deserves it.

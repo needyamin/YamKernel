@@ -5,6 +5,13 @@
 #include "sys/stat.h"
 #include "unistd.h"
 #include "../libyam/app.h"
+#include "pthread.h"
+
+static void *thread_worker(void *arg) {
+    long id = (long)arg;
+    printf("[HELLO] Thread %ld running! pid=%ld pthread_self=%ld\n", id, (long)getpid(), (long)pthread_self());
+    return (void *)(id * 2);
+}
 
 int main(int argc, char **argv, char **envp);
 
@@ -128,6 +135,19 @@ int main(int argc, char **argv, char **envp) {
             pid_t waited = waitpid(child, &status, 0);
             printf("[HELLO] waitpid child -> pid=%ld status=0x%x exit=%d\n",
                    (long)waited, status, WEXITSTATUS(status));
+        }
+    }
+    if (info.flags & YAM_OS_FLAG_THREADS) {
+        printf("[HELLO] OS supports threads. Testing pthread_create...\n");
+        pthread_t t1, t2;
+        if (pthread_create(&t1, NULL, thread_worker, (void *)1) == 0 &&
+            pthread_create(&t2, NULL, thread_worker, (void *)2) == 0) {
+            void *ret1 = NULL, *ret2 = NULL;
+            pthread_join(t1, &ret1);
+            pthread_join(t2, &ret2);
+            printf("[HELLO] Threads joined. ret1=%ld ret2=%ld\n", (long)ret1, (long)ret2);
+        } else {
+            printf("[HELLO] pthread_create failed\n");
         }
     }
     return 0;

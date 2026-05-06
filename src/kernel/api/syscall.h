@@ -94,12 +94,19 @@
 #define SYS_UNLINKAT          85
 #define SYS_RENAMEAT          86
 
+/* Kernel Threads & Signals (Phase 1) */
+#define SYS_THREAD_CREATE     87
+#define SYS_THREAD_EXIT       88
+#define SYS_SIGACTION         89
+#define SYS_SIGPROCMASK       90
+#define SYS_SIGRETURN         91
+
 /* Touchscreen (new in v0.3.0) */
 #define SYS_TOUCH_CALIBRATE   56
 #define SYS_TOUCH_GET_SLOTS   57
 #define SYS_GESTURE_CONFIG    58
 
-#define SYS_MAX     87
+#define SYS_MAX     92
 
 #define YAM_ABI_VERSION 1
 #define YAM_OS_NAME "YamOS"
@@ -113,6 +120,7 @@
 #define YAM_OS_FLAG_INSTALLER_SERVICE (1u << 5)
 #define YAM_OS_FLAG_SOCKET_ABI        (1u << 6)
 #define YAM_OS_FLAG_VFS_SPAWN         (1u << 7)
+#define YAM_OS_FLAG_THREADS           (1u << 8)
 
 #define YAM_APP_TYPE_PROCESS  1
 #define YAM_APP_TYPE_SERVICE  2
@@ -235,6 +243,16 @@ typedef struct {
     u64 size;
     u32 is_dir;
 } yam_dirent_t;
+
+#ifndef YAM_SIGACTION_T_DEFINED
+#define YAM_SIGACTION_T_DEFINED
+typedef struct {
+    u64 sa_handler;
+    u64 sa_mask;
+    u32 sa_flags;
+    u64 sa_sigaction;
+} yam_sigaction_t;
+#endif
 
 #define YAM_S_IFMT  0170000
 #define YAM_S_IFDIR 0040000

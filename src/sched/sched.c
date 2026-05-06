@@ -15,6 +15,7 @@
 #include "../lib/string.h"
 #include "../cpu/cpuid.h"
 #include "../cpu/smp.h"
+#include "../cpu/msr.h"
 #include "../nexus/graph.h"
 
 static kmem_cache_t *task_cache;
@@ -324,6 +325,10 @@ static void switch_to(task_t *next) {
     pc->current = next;
     active_tasks[pc->cpu_id] = next;
     fpu_restore(next->fpu_state);
+    
+    if (next->tls_base) {
+        wrmsr(MSR_FS_BASE, next->tls_base);
+    }
 
     u64 *next_pml4 = next->pml4 ? next->pml4 : vmm_get_kernel_pml4();
     u64 *cur_pml4 = cur->pml4 ? cur->pml4 : vmm_get_kernel_pml4();
@@ -606,3 +611,92 @@ void sched_get_info(sched_info_t *out) {
         if (active && active->state == TASK_RUNNING) out->running_tasks++;
     }
 }
+
+/* ---- Kernel threads (User-space threads) ---- */
+task_t *sched_thread_create(const char *name, u64 entry, u64 stack_top, u64 arg, u64 tls_base) {
+    task_t *parent = sched_current();
+    if (!parent) return NULL;
+
+    if (!task_cache)
+        task_cache = kmem_cache_create("task_t", sizeof(task_t), 16);
+    task_t *child = (task_t *)kmem_cache_alloc(task_cache);
+    if (!child) return NULL;
+
+    /* Copy parent state */
+    memcpy(child, parent, sizeof(task_t));
+    child->id = next_id++;
+    child->parent = parent;
+    child->child_count = 0;
+    child->state = TASK_READY;
+    child->exit_code = 0;
+    child->signal_pending = 0;
+    child->start_tick = this_cpu()->ticks;
+    child->utime = child->stime = 0;
+    child->vol_switches = child->invol_switches = 0;
+    child->slice_ticks = 0;
+    child->need_resched = 0;
+    child->tls_base = tls_base;
+    child->thread_group = parent->thread_group ? parent->thread_group : parent->id;
+
+    /* Give it a name */
+    if (name) {
+        memset(child->name, 0, sizeof(child->name));
+        for (u32 i = 0; i < sizeof(child->name) - 1 && name[i]; i++) child->name[i] = name[i];
+    }
+    
+    child->graph_node = yamgraph_node_create(YAM_NODE_TASK, child->name, child);
+
+    /* Allocate new kernel stack */
+    child->stack = (u8 *)vmm_alloc_kernel_stack(SCHED_STACK_SIZE);
+    if (!child->stack) { kmem_cache_free(task_cache, child); return NULL; }
+    memset(child->stack, 0, SCHED_STACK_SIZE);
+
+    /* FPU state */
+    u32 fork_fpu_sz = cpuid_get_info()->xsave_size;
+    if (fork_fpu_sz == 0) fork_fpu_sz = 512;
+    child->fpu_state = (u8 *)kmalloc(fork_fpu_sz);
+    if (!child->fpu_state) { kmem_cache_free(task_cache, child); return NULL; }
+    memcpy(child->fpu_state, parent->fpu_state, fork_fpu_sz);
+
+    /* Share address space (no CoW) */
+    child->pml4 = parent->pml4;
+
+    /* Set up stack frame for enter_user_mode */
+    /* We don't use task_trampoline for this, we push an iretq frame directly. */
+    u64 *sp = (u64 *)(child->stack + SCHED_STACK_SIZE);
+    
+    *--sp = 0x1B;               /* SS = user data | RPL3 */
+    *--sp = stack_top;          /* user RSP */
+    *--sp = 0x202;              /* RFLAGS */
+    *--sp = 0x23;               /* CS = user code | RPL3 */
+    *--sp = entry;              /* user RIP */
+
+    /* Context switch frame */
+    extern void context_switch_user_thread_stub(void);
+    *--sp = arg;                /* Will be popped into rdi by the stub */
+    *--sp = (u64)context_switch_user_thread_stub; /* Return address for context_switch */
+    *--sp = 0;                  /* rbp */
+    *--sp = 0;                  /* rbx */
+    *--sp = 0;                  /* r12 */
+    *--sp = 0;                  /* r13 */
+    *--sp = 0;                  /* r14 */
+    *--sp = 0;                  /* r15 */
+    *--sp = 0x202;              /* rflags (for context_switch's popfq) */
+    
+    child->rsp = (u64)sp;
+
+    /* Add child to parent */
+    if (parent->child_count < MAX_CHILDREN)
+        parent->children[parent->child_count++] = child;
+
+    /* Add to run queue */
+    runqueue_t *rq = &per_cpu_rq[0];
+    u64 f = spin_lock_irqsave(&rq->lock);
+    child->vruntime = rq->min_vruntime;
+    rq_insert(rq, child);
+    spin_unlock_irqrestore(&rq->lock, f);
+    total_tasks++;
+
+    return child;
+}
+

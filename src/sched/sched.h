@@ -88,9 +88,17 @@ typedef struct task {
 
     /* Cgroup */
     struct cgroup *cgroup;
-    
+
     /* YamGraph */
     u32           graph_node;
+
+    /* Kernel threads */
+    u64           tls_base;      /* FS base for thread-local storage */
+    u64           thread_group;  /* 0 = process leader; pid of group leader for threads */
+
+    /* Signals */
+    u64           sig_mask;      /* Blocked signals bitmask */
+    void         *sig_handlers[32]; /* User-space signal handler pointers (NULL = default/ignore) */
 
     /* Links */
     struct task  *next;
@@ -142,6 +150,9 @@ void    task_exit(void);
 void    sched_exit_current(i32 code);
 i64     sys_kill(u64 pid, u32 sig);
 void    sched_kill_task(u64 id);
+
+/* Kernel threads */
+task_t *sched_thread_create(const char *name, u64 entry, u64 stack_top, u64 arg, u64 tls_base);
 
 /* Nice / Affinity */
 void    sched_set_nice(task_t *t, i8 nice);

@@ -61,7 +61,7 @@ AUTHD_ELF   := $(BUILD_DIR)/authd.elf
 HELLO_ELF   := $(BUILD_DIR)/hello.elf
 # User-space libc
 LIBC_DIR := src/os/lib/libc
-LIBC_SRCS := $(LIBC_DIR)/stdio.c $(LIBC_DIR)/stdlib.c $(LIBC_DIR)/string.c $(LIBC_DIR)/ctype.c $(LIBC_DIR)/posix.c $(LIBC_DIR)/time.c $(LIBC_DIR)/wchar.c
+LIBC_SRCS := $(LIBC_DIR)/stdio.c $(LIBC_DIR)/stdlib.c $(LIBC_DIR)/string.c $(LIBC_DIR)/ctype.c $(LIBC_DIR)/posix.c $(LIBC_DIR)/time.c $(LIBC_DIR)/wchar.c $(LIBC_DIR)/pthread.c $(LIBC_DIR)/signal.c
 LIBC_OBJS := $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(LIBC_SRCS))
 
 USER_CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-stack-check \

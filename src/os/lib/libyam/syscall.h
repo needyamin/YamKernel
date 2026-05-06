@@ -70,8 +70,14 @@
 #define SYS_MKDIRAT           84
 #define SYS_UNLINKAT          85
 #define SYS_RENAMEAT          86
+#define SYS_THREAD_CREATE     87
+#define SYS_THREAD_EXIT       88
+#define SYS_SIGACTION         89
+#define SYS_SIGPROCMASK       90
+#define SYS_SIGRETURN         91
 
 #define YAM_OS_FLAG_VFS_SPAWN (1u << 7)
+#define YAM_OS_FLAG_THREADS   (1u << 8)
 
 #ifndef YAM_STAT_T_DEFINED
 #define YAM_STAT_T_DEFINED
@@ -90,6 +96,16 @@ typedef struct {
     i64 mtime;
     i64 ctime;
 } yam_stat_t;
+#endif
+
+#ifndef YAM_SIGACTION_T_DEFINED
+#define YAM_SIGACTION_T_DEFINED
+typedef struct {
+    u64 sa_handler;
+    u64 sa_mask;
+    u32 sa_flags;
+    u64 sa_sigaction;
+} yam_sigaction_t;
 #endif
 
 static inline u64 syscall0(u64 num) {
