@@ -16,6 +16,7 @@
 #include "lib/string.h"
 #include "lib/kdebug.h"
 #include "fs/elf.h"
+#include "fs/vfs.h"
 #include "../../dev/vtty.h"
 #include "wl_draw.h"
 

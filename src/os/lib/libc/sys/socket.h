@@ -5,10 +5,38 @@
 #include "../libyam/syscall.h"
 
 #define AF_INET  2
-#define SOCK_STREAM 1
-#define SOCK_DGRAM  2
+#define SOCK_STREAM   1
+#define SOCK_DGRAM    2
+#define SOCK_NONBLOCK 0x800
 #define IPPROTO_TCP 6
 #define IPPROTO_UDP 17
+
+/* Errors */
+#define EAGAIN      11
+#define EWOULDBLOCK 11
+#define EINPROGRESS 115
+
+/* fcntl */
+#define F_GETFL  3
+#define F_SETFL  4
+#define O_NONBLOCK 0x800
+
+/* fd_set for select() — supports up to 128 FDs */
+#define FD_SETSIZE 128
+typedef struct { unsigned long long bits[2]; } fd_set;
+#define FD_ZERO(s)   do { (s)->bits[0]=0; (s)->bits[1]=0; } while(0)
+#define FD_SET(fd,s) ((s)->bits[(fd)/64] |=  (1ULL << ((fd)%64)))
+#define FD_CLR(fd,s) ((s)->bits[(fd)/64] &= ~(1ULL << ((fd)%64)))
+#define FD_ISSET(fd,s) (!!((s)->bits[(fd)/64] & (1ULL << ((fd)%64))))
+
+static inline int select(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds, long timeout_ms) {
+    (void)efds;
+    return (int)syscall4(SYS_SELECT, (u64)nfds, (u64)rfds, (u64)wfds, (u64)timeout_ms);
+}
+
+static inline int fcntl(int fd, int cmd, long arg) {
+    return (int)syscall3(SYS_FCNTL, (u64)fd, (u64)cmd, (u64)arg);
+}
 
 typedef unsigned int  socklen_t;
 typedef unsigned short sa_family_t;

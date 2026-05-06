@@ -151,6 +151,9 @@ void udp_receive(const ip_hdr_t *ip, const udp_hdr_t *udp, const void *data, usi
 
 /* ---- TCP API ---- */
 int  tcp_socket(void);
+int  tcp_socket_nonblock(void);
+void tcp_set_nonblock(int fd, bool nonblock);
+bool tcp_is_nonblock(int fd);
 int  tcp_connect(int fd, u32 dst_ip, u16 dst_port);
 int  tcp_listen(int fd, u16 port);
 int  tcp_accept(int fd);

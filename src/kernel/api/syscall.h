@@ -106,7 +106,11 @@
 #define SYS_TOUCH_GET_SLOTS   57
 #define SYS_GESTURE_CONFIG    58
 
-#define SYS_MAX     92
+/* Phase 3: Non-blocking I/O */
+#define SYS_SELECT            92
+#define SYS_FCNTL             93
+
+#define SYS_MAX     94
 
 #define YAM_ABI_VERSION 1
 #define YAM_OS_NAME "YamOS"
@@ -121,6 +125,7 @@
 #define YAM_OS_FLAG_SOCKET_ABI        (1u << 6)
 #define YAM_OS_FLAG_VFS_SPAWN         (1u << 7)
 #define YAM_OS_FLAG_THREADS           (1u << 8)
+#define YAM_OS_FLAG_NONBLOCK_IO       (1u << 9)
 
 #define YAM_APP_TYPE_PROCESS  1
 #define YAM_APP_TYPE_SERVICE  2

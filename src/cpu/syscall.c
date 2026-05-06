@@ -491,6 +491,7 @@ typedef struct {
     int tcp_fd;
     u16 bound_port;
     bool listening;
+    bool nonblocking;
 } yam_socket_file_t;
 
 static isize socket_read(file_t *file, void *buf, usize count) {
@@ -576,12 +577,23 @@ static int socket_wrap_tcp_fd(int tcp_fd, int domain, int type, int proto, u16 b
 
 static i64 sys_socket_user(int domain, int type, int proto) {
     if (domain != AF_INET) return -1;
-    if (type != SOCK_STREAM) return -1;
+    bool nonblock = (type & SOCK_NONBLOCK) != 0;
+    int base_type = type & ~SOCK_NONBLOCK;
+    if (base_type != SOCK_STREAM) return -1;
     if (proto != 0 && proto != IPPROTO_TCP) return -1;
     int tcpfd = tcp_socket();
     if (tcpfd < 0) return -1;
-    int fd = socket_wrap_tcp_fd(tcpfd, domain, type, proto ? proto : IPPROTO_TCP, 0, false);
-    if (fd >= 0) kprintf("[SOCKET] socket(AF_INET, SOCK_STREAM) -> fd%d tcp%d\n", fd, tcpfd);
+    if (nonblock) tcp_set_nonblock(tcpfd, true);
+    int fd = socket_wrap_tcp_fd(tcpfd, domain, base_type, proto ? proto : IPPROTO_TCP, 0, false);
+    if (fd >= 0) {
+        file_t *f = fd_get(fd);
+        if (f) {
+            yam_socket_file_t *sock = (yam_socket_file_t *)f->private_data;
+            if (sock) sock->nonblocking = nonblock;
+        }
+        kprintf("[SOCKET] socket(AF_INET, SOCK_STREAM%s) -> fd%d tcp%d\n",
+                nonblock ? "|NONBLOCK" : "", fd, tcpfd);
+    }
     return fd;
 }
 
@@ -640,10 +652,106 @@ static i64 sys_accept_user(int fd, u64 uaddr, u64 ulen) {
     yam_socket_file_t *sock = (yam_socket_file_t *)f->private_data;
     if (!sock || !sock->listening) return -1;
     int client_tcp = tcp_accept(sock->tcp_fd);
-    if (client_tcp < 0) return -1;
+    if (client_tcp < 0) return client_tcp; /* propagate -EAGAIN */
+    if (sock->nonblocking) tcp_set_nonblock(client_tcp, true);
     int client_fd = socket_wrap_tcp_fd(client_tcp, sock->domain, sock->type, sock->proto, 0, false);
     kprintf("[SOCKET] accept fd%d -> fd%d tcp%d\n", fd, client_fd, client_tcp);
     return client_fd;
+}
+
+/* ---- fcntl: get/set file descriptor flags ---- */
+static i64 sys_fcntl_user(int fd, int cmd, u64 arg) {
+    file_t *f = fd_get(fd);
+    if (!f) return -1;
+    if (cmd == F_GETFL) {
+        int flags = 0;
+        if (f->fops == &socket_fops) {
+            yam_socket_file_t *sock = (yam_socket_file_t *)f->private_data;
+            if (sock && sock->tcp_fd >= 0 && tcp_is_nonblock(sock->tcp_fd))
+                flags |= O_NONBLOCK;
+        }
+        return flags;
+    }
+    if (cmd == F_SETFL) {
+        if (f->fops == &socket_fops) {
+            yam_socket_file_t *sock = (yam_socket_file_t *)f->private_data;
+            if (sock && sock->tcp_fd >= 0) {
+                bool nonblock = (arg & O_NONBLOCK) != 0;
+                tcp_set_nonblock(sock->tcp_fd, nonblock);
+                sock->nonblocking = nonblock;
+                kprintf("[SOCKET] fcntl fd%d O_NONBLOCK=%d\n", fd, nonblock ? 1 : 0);
+            }
+        }
+        return 0;
+    }
+    return -1;
+}
+
+/* ---- select: wait for multiple file descriptors ---- */
+typedef u64 yam_fd_set_word_t;
+#define YAM_FD_SETWORDS 2
+typedef struct { yam_fd_set_word_t bits[YAM_FD_SETWORDS]; } yam_fd_set_t;
+
+static inline bool yfds_isset(const yam_fd_set_t *s, int fd) {
+    if (fd < 0 || fd >= 128) return false;
+    return (s->bits[fd / 64] >> (fd % 64)) & 1;
+}
+static inline void yfds_set(yam_fd_set_t *s, int fd) {
+    if (fd >= 0 && fd < 128) s->bits[fd / 64] |= (1ULL << (fd % 64));
+}
+
+static i64 sys_select_user(int nfds, u64 readfds_u, u64 writefds_u, i64 timeout_ms) {
+    if (nfds <= 0 || nfds > 128) return -1;
+    bool smap = (read_cr4() & CR4_SMAP) != 0;
+    yam_fd_set_t rfds_k, wfds_k;
+    memset(&rfds_k, 0, sizeof(rfds_k));
+    memset(&wfds_k, 0, sizeof(wfds_k));
+    if (readfds_u) {
+        if (smap) __asm__ volatile ("stac");
+        memcpy(&rfds_k, (const void *)readfds_u, sizeof(yam_fd_set_t));
+        if (smap) __asm__ volatile ("clac");
+    }
+    if (writefds_u) {
+        if (smap) __asm__ volatile ("stac");
+        memcpy(&wfds_k, (const void *)writefds_u, sizeof(yam_fd_set_t));
+        if (smap) __asm__ volatile ("clac");
+    }
+    pollfd_t pfds[128];
+    int pcount = 0;
+    int fd_to_poll[128];
+    for (int i = 0; i < nfds; i++) {
+        bool want_r = yfds_isset(&rfds_k, i);
+        bool want_w = yfds_isset(&wfds_k, i);
+        if (!want_r && !want_w) continue;
+        pfds[pcount].fd = i;
+        pfds[pcount].events = 0;
+        pfds[pcount].revents = 0;
+        if (want_r) pfds[pcount].events |= POLLIN;
+        if (want_w) pfds[pcount].events |= POLLOUT;
+        fd_to_poll[pcount] = i;
+        pcount++;
+    }
+    if (pcount == 0) return 0;
+    int ready = sys_poll(pfds, (u32)pcount, timeout_ms);
+    if (readfds_u) {
+        if (smap) __asm__ volatile ("stac");
+        yam_fd_set_t *rout = (yam_fd_set_t *)readfds_u;
+        memset(rout, 0, sizeof(yam_fd_set_t));
+        for (int i = 0; i < pcount; i++)
+            if (pfds[i].revents & (POLLIN | POLLERR | POLLHUP))
+                yfds_set(rout, fd_to_poll[i]);
+        if (smap) __asm__ volatile ("clac");
+    }
+    if (writefds_u) {
+        if (smap) __asm__ volatile ("stac");
+        yam_fd_set_t *wout = (yam_fd_set_t *)writefds_u;
+        memset(wout, 0, sizeof(yam_fd_set_t));
+        for (int i = 0; i < pcount; i++)
+            if (pfds[i].revents & POLLOUT)
+                yfds_set(wout, fd_to_poll[i]);
+        if (smap) __asm__ volatile ("clac");
+    }
+    return ready;
 }
 
 /* ---- Wayland / GUI Syscall Handlers ---- */
@@ -1003,6 +1111,9 @@ i64 syscall_dispatch(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5) {
     case SYS_MKDIRAT:           SYSCALL_RETURN(sys_mkdirat_user((int)a1, a2, (u32)a3));
     case SYS_UNLINKAT:          SYSCALL_RETURN(sys_unlinkat_user((int)a1, a2, (int)a3));
     case SYS_RENAMEAT:          SYSCALL_RETURN(sys_renameat_user((int)a1, a2, (int)a3, a4));
+    /* Phase 3: Non-blocking I/O */
+    case SYS_SELECT:            SYSCALL_RETURN(sys_select_user((int)a1, a2, a3, (i64)a4));
+    case SYS_FCNTL:             SYSCALL_RETURN(sys_fcntl_user((int)a1, (int)a2, a3));
 
     /* Wayland */
     case SYS_WL_CREATE_SURFACE: SYSCALL_RETURN(sys_wl_create_surface(a1, (i32)a2, (i32)a3, (u32)a4, (u32)a5));

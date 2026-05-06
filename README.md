@@ -2,7 +2,7 @@
 
 YamOS is an experimental x86_64 operating system built around **YamKernel**, a graph-based hybrid kernel. It boots with Limine, brings up a modern kernel core, and layers a small desktop/userland on top of YamGraph, a live resource graph where tasks, memory, devices, files, channels, and capabilities are modeled as connected nodes.
 
-Current tree: **v0.4.0 development line**.
+Current tree: **v0.5.0 development line** — Phase 3 (Connected Ecosystem) in progress.
 
 
 <img width="1920" height="1032" alt="Image" src="https://github.com/user-attachments/assets/dfebb446-79b5-413f-805d-fae61ffc8fdd" />
@@ -42,12 +42,12 @@ drivers.
 | SMP | Partial | Limine starts AP cores; APs initialize and park. Local APIC IPI primitives exist; scheduler currently uses CPU 0 only. |
 | Memory | In-tree | Zone-aware PMM, VMM, heap, slab, CoW/fork support, `brk`, `mmap`, `mprotect`, kernel/user stack guards, TLB shootdown hooks. |
 | Scheduler | In-tree | CFS-style scheduler, wait queues, mutexes, futexes, cgroups, OOM, idle/power hooks. |
-| Syscalls | In-tree | File, process, memory, scheduler, Wayland, driver, AI, touch, YamGraph IPC, OS info, app registry, TCP sockets, VFS ELF spawn, user-space `waitpid` status copy-out, `stat`/`fstat`, `ftruncate`, `rename`, first `*at` path calls, `unlink`, and `readdir` calls. |
-| Filesystems | In-tree | VFS with initrd root, writable ramfs mounts, devfs, procfs, per-process cwd, relative paths, `openat`-style dirfd resolution, open existence checks, `O_APPEND` writes, metadata-backed `SEEK_END`, directory listing, delete, rename, create/truncate/ftruncate, basic file metadata, FAT32 read/write/unlink driver code, 1MB LRU block cache with dirty tracking, block core with QEMU virtio-blk and AHCI disk registration, MBR/GPT FAT32 discovery, and auto-mounted block FAT32 volumes under `/mnt`. |
-| Networking | In-tree | e1000 path plus ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP state-machine code, first fd-backed TCP socket ABI, plain HTTP, certificate-store bootstrap, and bounded TLS ClientHello probe. |
+| Syscalls | In-tree | File, process, memory, scheduler, Wayland, driver, AI, touch, YamGraph IPC, OS info, app registry, TCP sockets, VFS ELF spawn, user-space `waitpid` status copy-out, `stat`/`fstat`, `ftruncate`, `rename`, first `*at` path calls, `unlink`, `readdir`, `select()` (backed by `poll`), and `fcntl(F_SETFL/F_GETFL)` for non-blocking I/O. |
+| Filesystems | In-tree | VFS with initrd root, writable ramfs mounts, devfs, procfs, per-process cwd, relative paths, `openat`-style dirfd resolution, open existence checks, `O_APPEND` writes, metadata-backed `SEEK_END`, directory listing, delete, rename, create/truncate/ftruncate, basic file metadata, FAT32 read/write/unlink driver code, 1MB LRU block cache with dirty tracking, block core with QEMU virtio-blk and AHCI disk registration, MBR/GPT FAT32 discovery, auto-mounted block FAT32 volumes under `/mnt`, and per-user `/home/<username>` directory auto-creation at login. |
+| Networking | In-tree | e1000 path plus ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP state-machine with non-blocking connect/recv/accept (`EAGAIN`/`EINPROGRESS`), `SOCK_NONBLOCK`, fd-backed TCP socket ABI, plain HTTP, certificate-store bootstrap, and bounded TLS ClientHello probe. |
 | USB/Input | In-tree | XHCI controller path, USB core, HID, keyboard, mouse, evdev, touch, gestures. |
 | PCI/Drivers | In-tree | Bridge-aware PCI scan, command/status helpers, safe BAR sizing, MSI/MSI-X capability discovery, AHCI SATA storage driver, and driver inventory binding. |
-| Desktop | In-tree | Wayland-style compositor, polished first-boot setup/login, File Manager, calendar/time/status bar, direct status-chip settings windows, separate Ethernet/Wi-Fi/Bluetooth/Sound/Display settings windows, DRM damage tracking (dirty rectangles), Bochs VBE runtime resolution modesetting, top menu, dock/taskbar, standard window controls, maximize/restore, windows, VTTY mode. |
+| Desktop | In-tree | Wayland-style compositor with multi-user support (up to 8 accounts, per-user home dirs auto-created at login); polished first-boot setup/login; File Manager (user-home-aware, sidebar with Home/Users/Root/Temp/System/Volumes, address bar, search, sort, new file/folder, text editor); calendar/time/status bar; standalone Ethernet/Wi-Fi/Bluetooth/Sound/Display settings windows; DRM damage tracking (dirty rectangles); Bochs VBE runtime resolution modesetting; top menu; dock/taskbar; standard window controls; maximize/restore; VTTY mode. |
 | Userland | In-tree | Static Ring 3 ELF apps/services for `authd` and `/bin/hello`, libc/libyam syscall support, native app manifests, argv/envp-aware VFS-backed app spawn, and kernel app registry. Main desktop tools are compositor-native kernel services. |
 | AI/ML | In-tree | Tensor allocation and accelerator abstraction syscalls. |
 
@@ -62,7 +62,7 @@ drivers.
 - Terminal, Browser, and Calculator currently launch as compositor-native apps for reliable drawing.
 - Browser now has a real plain-HTTP path through kernel DNS/TCP/HTTP, a modern toolbar/address bar, back/forward/reload controls, history, response status display, a scrollable static document paint layer, and first inline color/background style handling for headings, paragraphs, list items, links, pre/code blocks, buttons, form placeholders, and image placeholders. Full encrypted HTTPS page loading, JavaScript, full CSS layout, real image decoding, and Firefox-class multi-process rendering remain future work.
 - Calculator is a compositor-native desktop utility with standard/scientific modes, fixed-decimal arithmetic, memory register, history, keyboard input, and compositor clipboard copy/paste.
-- File Manager launches from the dock launcher or File menu and now has an Explorer-style shell with sidebar locations, back/forward/up navigation, editable address and search fields, sortable details view, item details pane, create file/folder actions, file delete, and an integrated text editor for VFS files.
+- File Manager launches from the dock or File menu with a full Explorer-style shell: sidebar locations (Home for the current user, Users `/home`, Root, Temp, System, Volumes), back/forward/up navigation, editable address bar and search field, sortable details view (name/type/size), item details pane, new file/folder dialogs, file delete, and an integrated text editor. It opens in the logged-in user's own home directory (`/home/<username>`) and reads that path from the live compositor session on launch.
 - The desktop bar shows BDT calendar/time, wired network status from the kernel network interface, Wi-Fi radio state, Bluetooth radio state, and audio mixer state.
 - Top-bar status chips open their own settings directly: Ethernet opens Ethernet Settings, Wi-Fi opens Wi-Fi Settings, Bluetooth opens Bluetooth Settings, Sound opens Sound Settings, and the clock opens Calendar. Re-clicking an already-open settings chip focuses/restores that same window instead of spawning duplicates. The old shared Quick Settings popover path has been removed from the compositor. The detailed settings windows use standalone layouts instead of one shared/sidebar shell, and expose DHCP renewal, scan/connect or scan/pair actions, and sound mixer controls while reporting honest blockers: QEMU currently has wired e1000 networking, real Wi-Fi needs firmware/MAC work, Bluetooth needs a USB HCI backend, and audio output needs a real device driver.
 - Wi-Fi and Bluetooth scan/connect/pair controls now consume explicit kernel driver operation results. If the radio is off, no supported adapter/controller is present, firmware is missing, or USB HCI transport is pending, the settings window and `net` shell command report the exact blocker instead of implying the connection attempt succeeded.
@@ -137,7 +137,7 @@ src/mem/                  PMM, VMM, heap, slab, OOM
 src/sched/                scheduler, wait queues, cgroups, user entry
 src/fs/                   VFS, FAT32, initrd, ELF loader, poll
 src/ipc/                  IPC scaffolding
-src/net/                  ARP/IP/ICMP/UDP/TCP/DHCP/DNS stack
+src/net/                  ARP/IP/ICMP/UDP/TCP/DHCP/DNS stack, non-blocking socket layer, select/poll
 src/drivers/              PCI, USB, input, serial, timer, video, DRM, net
 src/nexus/                YamGraph, channels, capabilities
 src/os/apps/              authd, hello sample app, and user linker script
@@ -156,7 +156,7 @@ src/os/services/          compositor and OS services
 - `authd` now registers itself as a native YamOS service before using YamGraph IPC.
 - `/bin/hello` is packaged as `hello.elf`, registered into initrd, and launched through the argv/envp-aware VFS-backed ELF spawn path. Bare executable names resolve through `/bin`, `/usr/local/bin`, `/opt/yamos/packages`, and `/home/root/bin`.
 - See `APP_ARCHITECTURE.md` for the app model and the next steps toward installable developer apps.
-- Userland now has first TCP socket ABI numbers and libc wrappers for `socket`, `bind`, `connect`, `listen`, `accept`, `send`, `recv`, `sendto`, and `recvfrom`; currently AF_INET/SOCK_STREAM TCP is implemented, while datagram UDP remains future work.
+- Userland now has TCP socket ABI with `socket`, `bind`, `connect`, `listen`, `accept`, `send`, `recv`, `sendto`, and `recvfrom`. Non-blocking I/O is supported via `SOCK_NONBLOCK`, `fcntl(fd, F_SETFL, O_NONBLOCK)`, and `select()` with a 128-fd `fd_set`. `EAGAIN`/`EINPROGRESS` are returned on non-blocking operations with no data.
 
 ## Boot Flow
 
@@ -178,7 +178,7 @@ src/os/services/          compositor and OS services
 - Terminal installer commands now route to the generic OS installer/capability service. TLS/certificate capability is probed with an outbound TLS ClientHello and ServerHello check; persistent package installation still needs package signatures and downloader/install transactions.
 - Browser engines, language runtimes, and package tools should use the fd-backed socket ABI instead of private kernel-only network helpers as that ABI matures.
 - First missing-compatibility slice added: per-process current working directory, `SYS_CHDIR`, `SYS_GETCWD`, libc `chdir/getcwd`, and relative VFS path resolution.
-- File Manager writes through VFS. With the QEMU virtio FAT32 disk attached, `/home`, `/var`, and `/usr/local` are persistent; without it they fall back to ramfs.
+- File Manager writes through VFS. With the QEMU virtio FAT32 disk attached, `/home`, `/var`, and `/usr/local` are persistent; without it they fall back to ramfs. The File Manager opens in the current user's home directory (`/home/<username>`) and the sidebar exposes a `Users` shortcut to `/home` so an admin can browse all accounts' directories.
 - VFS `open()` now returns failure for missing paths unless `O_CREAT` is supplied, while `/dev` and `/proc` only open known pseudo-files.
 - libc `stat()`/`fstat()` now route to kernel VFS metadata instead of guessing file type in user space.
 - libc `ftruncate()` now routes to `SYS_FTRUNCATE` for RAMFS/FAT32 file resizing.
@@ -193,6 +193,10 @@ src/os/services/          compositor and OS services
 - TSC-deadline is detected when the CPU exposes it. The current timer path still uses the calibrated periodic APIC timer unless a later platform-specific timer switch is added.
 - CPU exceptions print register state, and the panic path has a register-frame variant for fatal exception debugging.
 - Phase 2 (Performance & Hardware Foundation) complete: The storage stack has been refactored from monolithic memory mapping to a page-based LRU block cache, and the display stack now supports hardware-accelerated 2D damage tracking and runtime resolution modesetting.
+- Phase 3 (Connected Ecosystem) in progress:
+  - **Non-blocking socket ABI complete** — `SOCK_NONBLOCK`, `fcntl(F_SETFL/F_GETFL)` (SYS_FCNTL=93), and `select()` (SYS_SELECT=92) are live. TCP `connect`/`recv`/`accept` return `EAGAIN`/`EINPROGRESS` when non-blocking. Userland `fd_set` (128-bit, 2×u64) and `FD_ZERO/SET/CLR/ISSET` macros in `libc/sys/socket.h`.
+  - **Multi-user file manager** — File Manager opens in `/home/<current_user>`, resolved from the compositor session at launch. Home dirs (`/home/<username>`) are created by `sys_mkdir` automatically at first-boot setup, skip-setup, and at every successful login.
+  - Next: Full TLS/HTTPS handshake, ypkg package manager, thread/signal ABI hardening.
 
 ## Documentation
 

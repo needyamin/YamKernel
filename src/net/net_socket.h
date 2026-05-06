@@ -9,9 +9,23 @@
 #define AF_INET6    10
 
 /* Socket types */
-#define SOCK_STREAM 1   /* TCP */
-#define SOCK_DGRAM  2   /* UDP */
-#define SOCK_RAW    3   /* Raw IP */
+#define SOCK_STREAM   1   /* TCP */
+#define SOCK_DGRAM    2   /* UDP */
+#define SOCK_RAW      3   /* Raw IP */
+#define SOCK_NONBLOCK 0x800 /* Non-blocking mode (ORed with type) */
+
+/* Send/recv flags */
+#define MSG_DONTWAIT  0x40
+
+/* fcntl commands */
+#define F_GETFL  3
+#define F_SETFL  4
+#define O_NONBLOCK 0x800
+
+/* Error codes for non-blocking */
+#define EAGAIN  11
+#define EWOULDBLOCK EAGAIN
+#define EINPROGRESS 115
 
 /* Protocol numbers */
 #define IPPROTO_ICMP 1

@@ -48,6 +48,7 @@ typedef struct {
 } fm_item_t;
 
 static char fm_path[256] = "/home/root";
+static char fm_home_dir[256] = "/home/root"; /* resolved per logged-in user */
 static char fm_history[FM_HISTORY_MAX][256];
 static i32 fm_history_count = 0;
 static i32 fm_history_pos = -1;
@@ -455,12 +456,12 @@ static void fm_draw(wl_surface_t *s) {
     wl_draw_rect(s, 0, 49, 194, FM_H - 78, COL_SIDEBAR);
     wl_draw_rect(s, 193, 49, 1, FM_H - 78, COL_LINE);
     wl_draw_text(s, 22, 72, "Quick access", COL_MUTED, 0);
-    draw_sidebar_item(s, 100, "Home", "/home/root", "H");
-    draw_sidebar_item(s, 140, "Root", "/", "R");
-    draw_sidebar_item(s, 180, "Temp", "/tmp", "T");
-    draw_sidebar_item(s, 220, "System", "/var", "S");
-    draw_sidebar_item(s, 260, "Volumes", "/mnt", "V");
-    draw_sidebar_item(s, 300, "Local Disk", "/mnt/vd0", "D");
+    draw_sidebar_item(s, 100, "Home", fm_home_dir, "H");
+    draw_sidebar_item(s, 140, "Users", "/home", "U");
+    draw_sidebar_item(s, 180, "Root", "/", "R");
+    draw_sidebar_item(s, 220, "Temp", "/tmp", "T");
+    draw_sidebar_item(s, 260, "System", "/var", "S");
+    draw_sidebar_item(s, 300, "Volumes", "/mnt", "V");
 
     draw_button(s, 210, 52, 38, "<", 0xFF64748B, fm_history_pos > 0);
     draw_button(s, 254, 52, 38, ">", 0xFF64748B, fm_history_pos + 1 < fm_history_count);
@@ -548,12 +549,12 @@ static void fm_click(void) {
         return;
     }
 
-    if (hit(14, 100, 166, 34)) { fm_navigate("/home/root", true); return; }
-    if (hit(14, 140, 166, 34)) { fm_navigate("/", true); return; }
-    if (hit(14, 180, 166, 34)) { fm_navigate("/tmp", true); return; }
-    if (hit(14, 220, 166, 34)) { fm_navigate("/var", true); return; }
-    if (hit(14, 260, 166, 34)) { fm_navigate("/mnt", true); return; }
-    if (hit(14, 300, 166, 34)) { fm_navigate("/mnt/vd0", true); return; }
+    if (hit(14, 100, 166, 34)) { fm_navigate(fm_home_dir, true); return; }
+    if (hit(14, 140, 166, 34)) { fm_navigate("/home", true); return; }
+    if (hit(14, 180, 166, 34)) { fm_navigate("/", true); return; }
+    if (hit(14, 220, 166, 34)) { fm_navigate("/tmp", true); return; }
+    if (hit(14, 260, 166, 34)) { fm_navigate("/var", true); return; }
+    if (hit(14, 300, 166, 34)) { fm_navigate("/mnt", true); return; }
 
     if (hit(210, 52, 38, 30) && fm_history_pos > 0) {
         fm_history_pos--;
@@ -666,6 +667,19 @@ static void fm_key(u16 sc) {
 void wl_file_manager_task(void *arg) {
     (void)arg;
     task_sleep_ms(250);
+
+    /* Resolve home dir from currently logged-in user */
+    wl_compositor_t *comp = wl_get_compositor();
+    if (comp && comp->current_user[0]) {
+        ksnprintf(fm_home_dir, sizeof(fm_home_dir), "/home/%s", comp->current_user);
+        /* Also set initial path if we haven't navigated yet */
+        if (strcmp(fm_path, "/home/root") == 0 || fm_path[0] == 0) {
+            fm_copy(fm_path, sizeof(fm_path), fm_home_dir);
+        }
+    } else {
+        fm_copy(fm_home_dir, sizeof(fm_home_dir), "/home/root");
+        fm_copy(fm_path, sizeof(fm_path), "/home/root");
+    }
     wl_surface_t *s = wl_surface_create("File Manager", 120, 70, FM_W, FM_H, sched_current()->id);
     if (!s) return;
     fm_push_history(fm_path);

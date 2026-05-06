@@ -75,9 +75,13 @@
 #define SYS_SIGACTION         89
 #define SYS_SIGPROCMASK       90
 #define SYS_SIGRETURN         91
+/* Phase 3: Non-blocking I/O */
+#define SYS_SELECT            92
+#define SYS_FCNTL             93
 
-#define YAM_OS_FLAG_VFS_SPAWN (1u << 7)
-#define YAM_OS_FLAG_THREADS   (1u << 8)
+#define YAM_OS_FLAG_VFS_SPAWN    (1u << 7)
+#define YAM_OS_FLAG_THREADS      (1u << 8)
+#define YAM_OS_FLAG_NONBLOCK_IO  (1u << 9)
 
 #ifndef YAM_STAT_T_DEFINED
 #define YAM_STAT_T_DEFINED

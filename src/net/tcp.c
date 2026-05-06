@@ -43,6 +43,7 @@ typedef struct {
     int           retransmit_count;
     bool          waiting_syn_ack;
     bool          waiting_fin_ack;
+    bool          nonblocking;  /* O_NONBLOCK / SOCK_NONBLOCK */
 
     /* Accept queue (for listening sockets) */
     bool          listening;
@@ -127,6 +128,21 @@ int tcp_socket(void) {
     return -1;
 }
 
+int tcp_socket_nonblock(void) {
+    int fd = tcp_socket();
+    if (fd >= 0) g_tcp_socks[fd].nonblocking = true;
+    return fd;
+}
+
+void tcp_set_nonblock(int fd, bool nonblock) {
+    if (fd >= 0 && fd < TCP_MAX_SOCKETS) g_tcp_socks[fd].nonblocking = nonblock;
+}
+
+bool tcp_is_nonblock(int fd) {
+    if (fd < 0 || fd >= TCP_MAX_SOCKETS) return false;
+    return g_tcp_socks[fd].nonblocking;
+}
+
 int tcp_connect(int fd, u32 dst_ip, u16 dst_port) {
     if (fd < 0 || fd >= TCP_MAX_SOCKETS || !g_tcp_socks[fd].active) return -1;
     tcp_sock_t *s = &g_tcp_socks[fd];
@@ -145,7 +161,12 @@ int tcp_connect(int fd, u32 dst_ip, u16 dst_port) {
     /* Send SYN */
     tcp_send_segment(s, TCP_SYN, NULL, 0);
 
-    /* Wait for SYN-ACK (blocking poll) */
+    /* Non-blocking: return EINPROGRESS immediately */
+    if (s->nonblocking) {
+        return -EINPROGRESS;
+    }
+
+    /* Blocking: wait for SYN-ACK */
     for (int i = 0; i < 8000000 && s->waiting_syn_ack; i++) {
         if ((i % 100) == 0) net_poll();
         __asm__ volatile("pause");
@@ -175,9 +196,13 @@ int tcp_accept(int fd) {
     if (fd < 0 || fd >= TCP_MAX_SOCKETS || !g_tcp_socks[fd].active) return -1;
     tcp_sock_t *ls = &g_tcp_socks[fd];
 
-    /* Wait for a connection in the accept queue */
-    while (ls->accept_head == ls->accept_tail)
-        __asm__ volatile("pause");
+    if (ls->nonblocking) {
+        if (ls->accept_head == ls->accept_tail) return -EAGAIN;
+    } else {
+        /* Blocking: wait for a connection in the accept queue */
+        while (ls->accept_head == ls->accept_tail)
+            __asm__ volatile("pause");
+    }
 
     int client_fd = ls->accept_queue[ls->accept_tail];
     ls->accept_tail = (ls->accept_tail + 1) % 8;
@@ -197,12 +222,17 @@ int tcp_recv(int fd, void *buf, usize max_len) {
     tcp_sock_t *s = &g_tcp_socks[fd];
     if (!s->active && s->recv_head == s->recv_tail) return -1;
 
-    /* Wait for data (blocking) */
-    for (int i = 0; i < 1000000; i++) {
-        if (s->recv_head != s->recv_tail) break;
-        if (s->state == SOCK_STATE_CLOSE_WAIT || s->state == SOCK_STATE_CLOSED) return 0;
-        if ((i % 1000) == 0) net_poll();
-        __asm__ volatile("pause");
+    /* Non-blocking: return EAGAIN if no data available */
+    if (s->nonblocking) {
+        if (s->recv_head == s->recv_tail) return -EAGAIN;
+    } else {
+        /* Blocking: wait for data */
+        for (int i = 0; i < 1000000; i++) {
+            if (s->recv_head != s->recv_tail) break;
+            if (s->state == SOCK_STATE_CLOSE_WAIT || s->state == SOCK_STATE_CLOSED) return 0;
+            if ((i % 1000) == 0) net_poll();
+            __asm__ volatile("pause");
+        }
     }
 
     usize avail = 0;

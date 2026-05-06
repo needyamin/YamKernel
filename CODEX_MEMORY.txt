@@ -1,1024 +1,201 @@
 YamOS Codex Memory
 ==================
-
-Read this first before working on the repo.
+Read this first before working on the repo. Keep this file lean.
 
 Project
 -------
-- Repo root: C:\laragon\www\YamOS
-- WSL path: /mnt/c/laragon/www/YamOS
-- Build shell: Windows PowerShell can call WSL Ubuntu.
-- Main ISO: build/yamkernel.iso
+- Repo root: C:\laragon\www\YamOS  |  WSL: /mnt/c/laragon/www/YamOS
+- Build: wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"
+- Verify: powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify
+- Output: build/yamkernel.iso  |  Log: build/verify.log
 
 Owner Direction
 ---------------
-- Keep the repo focused on kernel and OS-level work only.
-- Standing implementation rule: when any requested feature depends on missing
-  or incomplete kernel support, update the kernel-level foundation first
-  (driver, memory, VFS, syscall ABI, scheduler, security, network, storage, or
-  process model as appropriate), verify it, and only then build the app/service
-  feature on top. Do not paper over missing kernel infrastructure with
-  application-level theater.
-- Focus on serious kernel development, driver development, memory management,
-  networking, filesystems, process model, and hardware support.
-- Do not add fake language runtimes, package-manager theater, or language-
-  specific installer behavior.
-- User-level/application-level software creation work is parked for later.
-  When the owner says to resume user/application-level work, return to the
-  app ABI, developer SDK, packaging/install, and userspace process foundations.
-  Until then, prioritize OS/GUI/driver/kernel foundations.
-- Any installer/capability work should be generic OS infrastructure only.
-- YamOS is not complete enough to run arbitrary x86_64 OS software yet. Standing
-  required foundations:
-  - persistent disk/storage driver fully mounted as writable system volume
-  - full POSIX/Linux syscall compatibility
-  - `execve` and stronger process model
-  - dynamic linker / shared libraries
-  - threads and signals
-  - real permissions/users/security
-  - TLS/HTTPS + certificate store
-  - nonblocking sockets, `select`/`epoll`
+- Kernel/OS-level work first. No fake runtimes, package-manager theater, or
+  language-specific stubs. App-level work is unblocked only after kernel
+  foundations are solid (see missing compat list below).
+- Kernel-first rule: if a feature needs missing kernel support, fix the kernel
+  first, then build the feature on top.
+- YamOS is not complete enough to run arbitrary x86_64 software yet.
+- Standing required foundations (incomplete):
+  - execve + strong process model
+  - dynamic linker / PT_INTERP / dlopen
+  - pthread ABI, TLS, thread-local errno, robust futex
+  - signal delivery, masks, handlers, interruption semantics
+  - persistent writable filesystem (FAT32 block-backed fully mounted)
+  - full POSIX path/fcntl/lock/permission semantics
+  - nonblocking sockets (DONE: SOCK_NONBLOCK, select, fcntl O_NONBLOCK)
+  - select/poll/epoll (DONE: select via sys_poll, SYS_SELECT=92, SYS_FCNTL=93)
+  - TLS/HTTPS + certificate store (partial: probe only)
   - package manager/downloader
-  - full browser engine support
-  - language runtime porting layer
-  - real hardware driver coverage beyond current QEMU-focused path
-- Missing compatibility details to track:
-  - process execution: `execve`, argv/envp, interpreter scripts, wait/exit
-  - dynamic linking: `PT_INTERP`, relocations, `dlopen/dlsym`, library paths
-  - threads: pthread ABI, TLS, thread-local errno, robust futex
-  - signals: delivery, masks, handlers, default actions, interruption semantics
-  - files: persistent root, rename/link/symlink/readlink, stat accuracy,
-    fcntl, locks, permissions
-  - paths: per-process cwd, chdir/getcwd, openat family
-  - memory: file-backed mmap, shared mappings, msync/mremap
-  - sockets: nonblocking, select/poll/epoll, sockopts, peer names, UDP, IPv6
-  - time: monotonic/realtime clocks, nanosleep, timers, timezone/localtime
-  - security: UID/GID, file modes, capabilities, sandboxing, secure random
-  - terminal: PTY, termios, line discipline, job control
-  - packages: HTTPS downloader, certificates, signatures, install database
-  - browser engine: TLS, DOM, CSS layout, JS hosting, codecs, cache/cookies,
-    storage, sandboxing
-  - hardware: storage, GPU, USB classes, audio, Wi-Fi, power management
-
-Useful Build Commands
----------------------
-- Full ISO:
-  wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"
-- Run QEMU:
-  wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make run"
-- Serial/headless helpers:
-  .\scripts\test.ps1 serial
-  .\scripts\test.ps1 headless
-  .\scripts\test.ps1 verify
-  .\scripts\test.ps1 debug
-- Owner preference for verification:
-  - Do not run raw qemu-system-x86_64 directly every time.
-  - Prefer project debug/log helpers such as .\scripts\test.ps1 verify,
-    .\scripts\test.ps1 debug, .\scripts\test.ps1 serial, or existing debug logs.
-  - Use direct QEMU only when a specific hardware configuration is required and
-    the helper cannot express it, then explain why.
-  - On this Windows host, direct .\scripts\test.ps1 may be blocked by execution
-    policy. Use:
-    powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify
+  - PTY, termios, job control
+  - UID/GID, file modes, capabilities, sandboxing
+  - GPU, USB audio, Wi-Fi 802.11 MAC, Bluetooth HCI transport
+  - browser engine: DOM, CSS, JS VM, TLS, codecs, sandboxing
 
 Architecture Map
 ----------------
-- Kernel entry: src/kernel/main.c
-- Kernel shell: src/kernel/shell.c
-- PID 1 init: src/os/bin/init.c
-- ELF loader: src/fs/elf.c
-- VFS: src/fs/vfs.c
-- Syscalls: src/cpu/syscall.c and src/kernel/api/syscall.h
-- PCI bus: src/drivers/bus/pci.c/.h
-- Driver manager: src/drivers/core/driver_manager.c/.h
-- Block device core: src/drivers/block/block.c/.h
-- e1000 NIC: src/drivers/net/e1000.c/.h
-- Network stack: src/net
-- Memory managers: src/mem
-- Compositor terminal: src/os/services/compositor/wl_terminal.c
-- Only user-space ELF service currently packaged in ISO: src/os/apps/authd.c
+- Kernel entry:     src/kernel/main.c
+- Kernel shell:     src/kernel/shell.c
+- PID 1 init:       src/os/bin/init.c
+- ELF loader:       src/fs/elf.c
+- VFS:              src/fs/vfs.c
+- Syscalls:         src/cpu/syscall.c + src/kernel/api/syscall.h (ABI source of truth)
+- Poll subsystem:   src/fs/poll.h + sys_poll() in vfs.c
+- PCI bus:          src/drivers/bus/pci.c/.h
+- Driver manager:   src/drivers/core/driver_manager.c/.h
+- Block device:     src/drivers/block/block.c/.h
+- e1000 NIC:        src/drivers/net/e1000.c/.h
+- Network stack:    src/net/ (ARP, IP, ICMP, UDP, TCP, DHCP, DNS, HTTP)
+- Memory managers:  src/mem/ (PMM, VMM, heap, slab)
+- Compositor:       src/os/services/compositor/
+- App registry:     src/os/services/app_registry/
+- libyam SDK:       src/os/lib/libyam/
+- libc:             src/os/lib/libc/
+
+Current Syscall ABI (src/kernel/api/syscall.h)
+-----------------------------------------------
+SYS_MAX = 94. Key syscalls:
+- File I/O: SYS_OPEN 1, SYS_READ 2, SYS_WRITE 3, SYS_CLOSE 4, SYS_LSEEK 18,
+  SYS_MKDIR 5, SYS_UNLINK 26, SYS_READDIR 27, SYS_CHDIR 28, SYS_GETCWD 29
+- Process: SYS_EXIT 6, SYS_GETPID 7, SYS_SLEEP 8, SYS_WAITPID 12, SYS_SPAWN 77
+- Memory: SYS_BRK 9, SYS_MMAP 10, SYS_MPROTECT 43, SYS_MADVISE 44
+- Sockets: SYS_SOCKET 70, SYS_BIND 71, SYS_CONNECT 72, SYS_LISTEN 73,
+  SYS_ACCEPT 74, SYS_SENDTO 75, SYS_RECVFROM 76
+- Non-blocking I/O (Phase 3): SYS_SELECT 92, SYS_FCNTL 93
+- File metadata: SYS_STAT 78, SYS_FSTAT 79, SYS_FTRUNCATE 80, SYS_RENAME 81
+- At-calls: SYS_OPENAT 82, SYS_FSTATAT 83, SYS_MKDIRAT 84, SYS_UNLINKAT 85,
+  SYS_RENAMEAT 86
+- Threads: SYS_THREAD_CREATE 87, SYS_THREAD_EXIT 88
+- Signals: SYS_SIGACTION 89, SYS_SIGPROCMASK 90, SYS_SIGRETURN 91
+- App ABI: SYS_OS_INFO 67, SYS_APP_REGISTER 68, SYS_APP_QUERY 69
+- Wayland: SYS_WL_CREATE_SURFACE..SYS_TOUCH_GET_SLOTS
+- OS flags: YAM_OS_FLAG_SOCKET_ABI (1<<6), VFS_SPAWN (1<<7), THREADS (1<<8),
+  NONBLOCK_IO (1<<9)
 
 Current Kernel/Driver State
 ---------------------------
-- PCI inventory APIs are present:
-  - pci_device_count()
-  - pci_device_at()
-  - pci_class_name()
-- PCI driver helper APIs are present:
-  - pci_command()
-  - pci_set_command_bits()
-  - pci_enable_io()
-  - pci_enable_mmio()
-  - pci_enable_bus_master()
-  - pci_read_bar()
-- Driver manager exists and runs after pci_init().
-- Built-in PCI driver records currently cover:
-  - net/e1000 by vendor/device 8086:100E
-  - usb/xhci by class 0C:03
-  - display/vga-framebuffer by class 03:00
-  - block/ahci by class 01:06
-  - block/virtio-blk by vendor/device 1AF4:1001
-  - block/virtio-blk-modern by vendor/device 1AF4:1042
-- Verified QEMU driver inventory:
-  - [PCI] Scanned bus. Found 6 devices.
-  - [DRIVER] bind pci 00:02.0 1234:1111 class=03:00 -> display/vga-framebuffer
-  - [DRIVER] bind pci 00:03.0 8086:100e class=02:00 -> net/e1000
-  - [DRIVER] inventory: pci=6 bound=2 unbound=4 drivers=5
-- Verified PCI BAR logging:
-  - framebuffer BAR0 mmio32 base=0xfd000000 size=0x1000000
-  - e1000 BAR0 mmio32 base=0xfeb80000 size=0x20000
-  - e1000 BAR1 io base=0xc000/c080 size=0x40
-- Added Makefile target `verify-log` and PowerShell mode
-  `.\scripts\test.ps1 verify`; it writes build/verify.log and prints key boot
-  evidence from PCI/driver/block/net logs.
-- Verified via project log helper:
-  - powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify
-  - [DRIVER] manager initialized: 6 built-in driver records
-  - [DRIVER] inventory: pci=6 bound=2 unbound=4 drivers=6
-  - [BLOCK] core initialized: max_devices=16
-  - [DHCP] ACK! IP=10.0.2.15 GW=10.0.2.2 DNS=10.0.2.3
-  - [HTTP] GET http://ansnew.com/ -> 1023 bytes
-- Verified one direct QEMU hardware test with an attached virtio-blk disk:
-  - [PCI] Scanned bus. Found 7 devices.
-  - [DRIVER] bind pci 00:04.0 1af4:1001 class=01:00 -> block/virtio-blk
-  - virtio-blk BAR0 io, BAR1 mmio32, BAR4 mmio64 were decoded.
-  - [DRIVER] inventory: pci=7 bound=3 unbound=4 drivers=6
-  - Note: this was a special hardware config test; future normal verification
-    should use project debug/log helpers first.
-- Block device core exists and initializes after PCI driver binding.
-- Block device registry APIs are present:
-  - block_init()
-  - block_register()
-  - block_device_count()
-  - block_device_at()
-  - block_find()
-  - block_dump()
-- Verified QEMU block-core boot:
-  - [BLOCK] core initialized: max_devices=16
-  - [BLOCK] inventory: devices=0
-- e1000 TX is enabled and QEMU link reports up.
-- DHCP sends DISCOVER/REQUEST and receives ACK in QEMU user networking.
-- IPv4 outgoing fragment flags byte order fixed.
-- TCP/UDP transport checksums fixed.
-- ARP/DNS waits poll RX while waiting.
-- Recursive RX/DHCP stack overflow fixed by retiring e1000 RX descriptors
-  before dispatch and skipping ARP for broadcast IP packets.
-- IPv4 receive respects IP total_len instead of Ethernet padded length.
-- TCP receive respects TCP data_offset/options before locating payload.
-- Kernel HTTP/1.0 client exists at src/net/http.c.
-- Generic kernel capability probe now uses http://ansnew.com/ and writes cache
-  probe bytes to /var/cache/yamos/downloads/kernel-net-probe.txt.
-- Active boot capability request is `kernel-net`, not any language package.
-- The old language placeholder module is no longer copied into the ISO and is
-  no longer listed in limine.conf.
-- Verified QEMU boot after cleanup:
-  - [INSTALLER] service ready: probe db=1 net_probe=http://ansnew.com/
-  - [DNS] ansnew.com -> 104.20.23.154
-  - [TCP] Connected to 104.20.23.154:80
-  - [HTTP] GET http://ansnew.com/ -> 797 bytes
-  - cache probe wrote 797 bytes to kernel-net-probe.txt
+- PCI scan: 6 devices in QEMU; bound: display/vga-framebuffer + net/e1000.
+- Built-in drivers: e1000 8086:100E, xhci 0C:03, vga 03:00, ahci 01:06,
+  virtio-blk 1AF4:1001, virtio-blk-modern 1AF4:1042, iwlwifi (class 02:80).
+- Block core: initialized, max_devices=16. FAT32 volumes auto-mounted at /mnt.
+- VFS promotes /home, /var, /usr/local to persistent FAT32 when vd0 present.
+- e1000: MMIO mapped, TX/RX rings ready, link up.
+- DHCP: ACK IP=10.0.2.15 GW=10.0.2.2 DNS=10.0.2.3 (verified).
+- HTTP: GET http://ansnew.com/ succeeds (797-797 bytes, varies by DNS).
+- TLS: certificate-store bootstrap + bounded ClientHello probe only; full
+  TLS handshake not yet complete.
+- Wi-Fi: iwlwifi driver skeleton; reports no adapter/firmware in QEMU.
+- Bluetooth: hci_usb skeleton; reports no USB HCI transport in QEMU.
 
 Current Filesystem State
 ------------------------
-- VFS mounts writable ramfs work dirs:
-  - /tmp
-  - /var with /var/cache/yamos/downloads, /var/lib/yamos/packages, /var/log
-  - /usr/local with /usr/local/bin, /usr/local/lib, /usr/local/share
-  - /opt with /opt/yamos/packages
-  - /home with /home/root and /home/guest
-- Added SYS_MKDIR and libc mkdir() wrapper.
-- Added practical file-manager VFS operations:
-  - `vfs_dirent_t`
-  - `sys_readdir(path, index, out)` for directory listing
-  - `sys_unlink(path)` for ramfs delete
-  - ramfs truncate-on-open when `O_TRUNC` is present
-  - recursive ramfs delete for directory subtrees
-- Added public syscall ABI entries:
-  - `SYS_UNLINK` 26
-  - `SYS_READDIR` 27
-  - `SYS_CHDIR` 28
-  - `SYS_GETCWD` 29
-  - `yam_dirent_t`
-- Added first missing-compatibility slice:
-  - `task_t.cwd[256]` stores per-process current working directory.
-  - New tasks inherit parent cwd or start at `/`.
-  - VFS normalizes `.` and `..` and resolves relative paths against
-    `sched_current()->cwd`.
-  - `sys_open`, `sys_mkdir`, `sys_unlink`, and `sys_readdir` now resolve
-    relative paths.
-  - Added `sys_chdir()` and `sys_getcwd()`.
-  - `SYS_OPEN` and `SYS_MKDIR` dispatch now copy user path strings before
-    entering VFS.
-  - libc `getcwd()` and `chdir()` now call real syscalls instead of always
-    pretending cwd is `/`.
-  - libc `unlink()` now calls `SYS_UNLINK`.
-  - Terminal supports `cd`, `pwd`, and cwd-aware prompt display.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed and showed `[HTTP] GET http://ansnew.com/ -> 797 bytes`.
-- These mounts are temporary ramfs, not persistent storage.
-- Serious next storage work: real block driver, disk enumeration, partition
-  detection, writable persistent filesystem mount, fsck/recovery story.
+- VFS mounts: /tmp (ramfs), /var (ramfs→FAT32), /usr/local (ramfs→FAT32),
+  /opt, /home (ramfs; per-user subdirs created at login), /mnt (block FAT32).
+- Supported: mkdir, open (O_CREAT, O_EXCL, O_TRUNC, O_APPEND), read, write,
+  unlink, readdir, rename (RAMFS in-place; FAT32 copy+unlink), stat/fstat,
+  ftruncate, lseek (SEEK_END via fstat), chdir/getcwd, *at dirfd family.
+- O_EXCL: rejects if path exists (lock-file support).
+- O_APPEND: moves offset to EOF before write.
+- VFS open checks existence before fd alloc; O_CREAT required for new files.
+- 1MB LRU block cache with dirty tracking.
+- /proc pseudo-files: cpuinfo, meminfo, version, uptime, loadavg.
+- /dev: devfs_exists() guards open.
+
+Current Network Stack State
+----------------------------
+- TCP state machine: SYN, SYN-ACK, ACK, CLOSE_WAIT, FIN handling.
+- tcp_sock_t.nonblocking flag; tcp_set_nonblock() / tcp_is_nonblock().
+- connect(): returns -EINPROGRESS if nonblocking.
+- recv(): returns -EAGAIN if nonblocking and no data.
+- accept(): returns -EAGAIN if nonblocking and no client.
+- sys_socket_user(): handles SOCK_NONBLOCK flag (ORed with type).
+- sys_fcntl_user(): F_GETFL / F_SETFL O_NONBLOCK on socket fds.
+- sys_select_user(): backed by sys_poll; 128-bit fd_set (2×u64);
+  maps readfds/writefds to POLLIN/POLLOUT; writes back result sets.
+- libc sys/socket.h: fd_set, FD_ZERO/SET/CLR/ISSET, select(), fcntl(),
+  SOCK_NONBLOCK, EAGAIN, O_NONBLOCK, EINPROGRESS.
+- TCP socket file_ops: read/write/poll/close wired through VFS file_t.
+- UDP datagram fd-backed ABI: reserved (SYS_SENDTO/RECVFROM stub -1).
 
 Current Application Architecture State
---------------------------------------
-- Added a real first slice of the YamOS native application architecture.
-- Public ABI source of truth remains `src/kernel/api/syscall.h`.
-- Added ABI constants and structs:
-  - `YAM_ABI_VERSION`
-  - `yam_os_info_t`
-  - `yam_app_manifest_t`
-  - `yam_app_record_t`
-  - app types: process, service, GUI, driver, runtime
-  - app permission flags: FS, NET, IPC, GUI, DEVICE, DRIVER, INSTALL, RUNTIME
-- Added syscalls:
-  - `SYS_OS_INFO` 67
-  - `SYS_APP_REGISTER` 68
-  - `SYS_APP_QUERY` 69
-  - `SYS_MAX` is now 70.
-- Added kernel app registry:
-  - `src/os/services/app_registry/app_registry.c`
-  - `src/os/services/app_registry/app_registry.h`
-  - 64 slots, protected by spinlock, records PID, task name, YamGraph node,
-    app type, requested permissions, name, publisher, version, description.
-- `kernel_main()` initializes the app registry during driver/subsystem phase.
-  It is initialized outside the Safe Mode hardware block because app ABI state
-  is OS core infrastructure, not hardware-specific.
-- `src/cpu/syscall.c` now handles OS info, app register, and app query syscalls.
-- Added native app SDK header:
-  - `src/os/lib/libyam/app.h`
-  - helpers: `yam_os_info()`, `yam_app_register()`, `yam_app_query()`,
-    `yam_pid()`, `yam_sleep_ms()`, and `YAM_APP_MANIFEST`.
-- `src/os/lib/libyam/syscall.h` now includes clipboard and app ABI syscall
-  numbers.
-- `src/os/apps/authd.c` now registers itself as a YamOS service with IPC
-  permission before listening on `auth_channel`.
-- Added `APP_ARCHITECTURE.md` explaining the hybrid app model, ABI contract,
-  app types, permissions, current authd example, and next production work.
-- Updated README to document native app manifests, app
-  registry, app ABI syscalls, and the new SDK header.
-- Verification after this change:
-  - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-    passed.
-  - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-    passed.
-  - `build/verify.log` showed:
-    - `[APP] registry initialized: slots=64 abi=1`
-    - `[APP] register pid=3 task='authd' app='authd' type=2 perms=0x4 graph=13`
-    - `[AUTHD] ABI=1 syscalls=70 kernel=YamKernel`
-  - Usual PCI, driver manager, block core, e1000, DHCP, DNS, TCP, and HTTP
-    verification evidence still appears.
-  - Ran `make clean` after verification, so `build/` may be absent until the
-    next `make iso`.
-- Added first real VFS-backed static app launch slice:
-  - Public ABI now includes `SYS_SPAWN` 77 and `SYS_MAX` 78.
-  - `yam_os_info_t.flags` now advertises `YAM_OS_FLAG_VFS_SPAWN`.
-  - `elf_spawn()` returns the spawned PID, while existing `elf_load()` remains
-    as a bool compatibility wrapper.
-  - `elf_spawn_path(path)` reads a static ELF through VFS file descriptors,
-    loads it into a user address space, and returns the new PID.
-  - Added argument-aware launch:
-    - `elf_spawn_argv()`
-    - `elf_spawn_path_argv()`
-    - `elf_spawn_argv_envp()`
-    - `elf_spawn_path_argv_envp()`
-    - user stack setup with `argc` and `argv[]`
-    - user stack setup with `envp[]`
-    - `enter_user_mode()` now preserves `argc` in RDI, `argv` in RSI, and
-      `envp` in RDX.
-  - `libyam` exposes `yam_spawn(path)`, `yam_spawn_args(path, argv)`, and
-    `yam_spawn_env(path, argv, envp)`.
-  - libc exposes non-POSIX `spawn(path)`, `spawnv(path, argv)`, and
-    `spawnve(path, argv, envp)` wrappers while `execve()` remains `ENOSYS`
-    until true process replacement exists.
-  - Added `src/os/apps/hello.c` as a static Ring 3 sample app.
-  - Makefile builds `build/hello.elf`; limine packages it as a boot module.
-  - PID 1 registers the hello module into initrd as `/bin/hello` and launches
-    it by bare name via `elf_spawn_resolved_argv_envp("hello", ...)`.
-  - Added executable name resolution for bare spawn names:
-    - `/bin`
-    - `/usr/local/bin`
-    - `/opt/yamos/packages`
-    - `/home/root/bin`
-  - `SYS_SPAWN` uses the same resolver, so userspace can call
-    `yam_spawn("hello")` without hard-coding `/bin/hello`.
-  - Terminal exposes `run /bin/hello arg...` and direct `hello arg...`, both
-    using the same resolver and passing a small shell environment.
-  - Fixed VFS root mount relative-path handling so initrd reads receive
-    `/bin/hello` instead of `bin/hello`.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed.
-    - `build/verify.log` showed:
-      - `[INIT] Registered /bin/hello from boot module`
-      - `[ELF] spawn path='/bin/hello' -> pid=4`
-      - `[APP] register pid=4 task='hello' app='hello' type=1 perms=0x1`
-      - `[HELLO] Hello from /bin/hello on YamOS ABI=1 pid=4 argc=2`
-      - `[HELLO] argv[0]=/bin/hello`
-      - `[HELLO] argv[1]=--boot-probe`
-      - `[HELLO] envp[0]=YAMOS_BOOT=1`
-      - `[HELLO] envp[1]=YAMOS_USER=root`
-      - `[INIT] VFS spawn hello -> pid=4`
-- Added first exit/wait lifecycle hardening:
-  - `sys_exit()` now routes through scheduler-owned `sched_exit_current()`.
-  - User tasks with parents become `TASK_ZOMBIE` instead of immediately
-    becoming `TASK_DEAD`.
-  - `sched_waitpid()` reaps zombie children, removes them from the parent child
-    table, decrements task accounting for reaped zombies, and returns encoded
-    Unix-style exit status `(exit_code & 0xff) << 8`.
-  - `SYS_WAITPID` now uses a syscall-layer wrapper that copies the encoded
-    status back to user memory through the SMAP-aware `copy_to_user()` helper
-    instead of letting scheduler code dereference a user pointer.
-  - `waitpid(..., WNOHANG)` first slice returns 0 when no child is ready.
-  - libc now exposes `wait()`, `WNOHANG`, `WEXITSTATUS(status)`, and
-    `WIFEXITED(status)`.
-  - PID 1 now waits for the `/bin/hello` boot probe and logs the exit status.
-  - `src/os/apps/hello.c` now verifies the public process ABI by spawning a
-    child `hello` from Ring 3 with `spawnve()` and reaping it with `waitpid()`.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed.
-    - `build/verify.log` showed:
-      - `[HELLO] spawn child -> pid=5`
-      - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
-      - `[SYS] task 'hello' exit(0)`
-      - `[SCHED] reaped child pid=4 status=0x0 parent=1`
-      - `[INIT] waitpid hello -> pid=4 status=0x0 exit=0`
-- Added first persistent app storage/install slice:
-  - VFS now promotes `/usr/local` to the primary writable FAT32 volume when a
-    block-backed FAT32 disk is available.
-  - FAT32-backed `sys_write()` now preserves file offset by rewriting the full
-    file image when writing beyond offset 0; this fixes chunked writes
-    overwriting earlier bytes.
-  - Executable resolver now requires readable ELF magic before accepting a
-    candidate path, preventing false positives from open-only descriptors.
-  - PID 1 installs the sample app to `/usr/local/bin/hello-local` and launches
-    it by bare name through the executable resolver.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed.
-    - `build/verify.log` showed:
-      - `[VFS] Promoted /usr/local to persistent FAT32 volume vd0`
-      - `[INIT] Installed persistent sample app /usr/local/bin/hello-local`
-      - `[ELF] spawn path='/usr/local/bin/hello-local' -> pid=5`
-      - `[HELLO] argv[0]=/usr/local/bin/hello-local`
-      - `[HELLO] envp[1]=YAMOS_APP_SOURCE=/usr/local/bin`
-      - `[INIT] waitpid hello-local -> pid=5 status=0x0 exit=0`
-- Hardened VFS `open()` existence semantics:
-  - `sys_open()` now checks path existence before allocating a file descriptor.
-  - Missing paths fail unless `O_CREAT` is supplied.
-  - RAMFS and FAT32 still create regular files with `O_CREAT`; `O_TRUNC`
-    truncates only after existence/create checks.
-  - Initrd remains read-only and cannot create missing files.
-  - `/dev` opens only entries accepted by `devfs_exists()`.
-  - `/proc` opens only known pseudo-files: `cpuinfo`, `meminfo`, `version`,
-    `uptime`, and `loadavg`.
-  - This removes the earlier generic false-positive fd behavior that forced
-    executable resolution to defend against non-existent candidate paths.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed.
-    - `build/verify.log` still showed VFS spawn, user-space spawn/wait, FAT32
-      `/usr/local/bin/hello-local`, DHCP/DNS/TCP, and HTTP evidence.
-- Added kernel-backed file metadata ABI slice:
-  - Public ABI now reserves `SYS_STAT` 78 and `SYS_FSTAT` 79; `SYS_MAX` is 80.
-  - Added `yam_stat_t` to the kernel public syscall header and the user SDK
-    syscall mirror. The typedef is guarded with `YAM_STAT_T_DEFINED` because
-    user apps can include both `libyam/syscall.h` and `kernel/api/syscall.h`.
-  - VFS implements `sys_stat(path, out)` and `sys_fstat(fd, out)`.
-  - Metadata currently reports file type, user read/write/execute bits, size,
-    block size, and block count for initrd, RAMFS, FAT32, `/dev`, `/proc`,
-    mount points, and synthetic mount-parent directories like `/usr`.
-  - libc `stat()`, `lstat()`, and `fstat()` now call the kernel metadata ABI
-    instead of guessing in user space.
-  - `src/os/apps/hello.c` now probes `stat()` and `fstat()` for `/bin/hello`
-    and `/usr/local/bin/hello-local` from Ring 3.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed.
-    - `build/verify.log` showed:
-      - `[HELLO] stat /bin/hello mode=0100400 size=103504`
-      - `[HELLO] fstat /bin/hello mode=0100400 size=103504`
-      - `[HELLO] stat /usr/local/bin/hello-local mode=0100600 size=103504`
-      - `[HELLO] fstat /usr/local/bin/hello-local mode=0100600 size=103504`
-      - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
-      - `[HTTP] GET http://ansnew.com/ -> 797 bytes`
-- Added kernel-backed `ftruncate()` file resizing slice:
-  - Public ABI now includes `SYS_FTRUNCATE` 80; `SYS_MAX` is 81.
-  - VFS implements `sys_ftruncate(fd, length)` for RAMFS and FAT32 regular
-    files.
-  - RAMFS uses `ramfs_resize()` to shrink or zero-extend existing file data.
-  - FAT32 uses the existing full-file image write path to shrink or zero-extend
-    file contents and flush block-backed volumes.
-  - libc `ftruncate()` now calls `SYS_FTRUNCATE` instead of returning ENOSYS.
-  - `src/os/apps/hello.c` now probes `/tmp/hello-truncate.txt` by writing six
-    bytes, checking `fstat()`, truncating to two bytes, and checking `fstat()`
-    again from Ring 3.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed.
-    - `build/verify.log` showed:
-      - `[HELLO] fstat /tmp/hello-truncate.txt before=6`
-      - `[HELLO] ftruncate /tmp/hello-truncate.txt size=2`
-      - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
-      - `[HTTP] GET http://ansnew.com/ -> 797 bytes`
-- Added kernel-backed `rename()` VFS slice:
-  - Public ABI now includes `SYS_RENAME` 81; `SYS_MAX` is 82.
-  - VFS implements `sys_rename(oldpath, newpath)` for same-mount paths.
-  - RAMFS renames nodes in place and updates directory subtree names.
-  - FAT32 regular-file rename currently uses copy-to-new-path then unlink-old;
-    FAT32 directory rename and atomic replace semantics remain future work.
-  - libc `rename()` now calls `SYS_RENAME` instead of returning ENOSYS.
-  - `src/os/apps/hello.c` now probes `/tmp/hello-rename.tmp` ->
-    `/tmp/hello-rename.txt` from Ring 3 and checks the renamed file size.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed.
-    - `build/verify.log` showed the rename probe in all three `hello` runs:
-      - `[HELLO] rename /tmp/hello-rename.txt size=6`
-      - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
-      - `[INIT] waitpid hello-local -> pid=6 status=0x0 exit=0`
-      - `[HTTP] GET http://ansnew.com/ -> 797 bytes`
-- Added first dirfd-aware `*at` path syscall slice:
-  - Public ABI now includes:
-    - `SYS_OPENAT` 82
-    - `SYS_FSTATAT` 83
-    - `SYS_MKDIRAT` 84
-    - `SYS_UNLINKAT` 85
-    - `SYS_RENAMEAT` 86
-    - `SYS_MAX` is 87.
-  - `src/cpu/syscall.c` resolves relative paths against the supplied directory
-    file descriptor when the fd points to a VFS directory, or against cwd when
-    `dirfd == AT_FDCWD`.
-  - libc wrappers now route `openat`, `fstatat`, `mkdirat`, `unlinkat`, and
-    `renameat` through the kernel. Fuller flag semantics remain future work;
-    `unlinkat(..., AT_REMOVEDIR)` still returns failure because directory
-    removal is not yet separated from recursive ramfs unlink semantics.
-  - `src/os/apps/hello.c` probes the feature by opening `/tmp` as a directory
-    fd, creating `hello-at.tmp` with `openat`, checking it with `fstatat`,
-    renaming it to `hello-at.txt` with `renameat`, and checking again.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed.
-    - `build/verify.log` showed the probe in all three `hello` runs:
-      - `[HELLO] openat/fstatat /tmp/hello-at.tmp size=2`
-      - `[HELLO] renameat /tmp/hello-at.txt size=2`
-      - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
-      - `[HTTP] GET http://ansnew.com/ -> 797 bytes`
-- Added VFS `O_APPEND` write semantics:
-  - `sys_write()` now checks `file_t.flags & O_APPEND` before regular VFS
-    writes and moves the file offset to current EOF using `sys_stat()`.
-  - This applies to RAMFS and FAT32-backed regular file writes, including libc
-    append modes such as `fopen(path, "a")`.
-  - `src/os/apps/hello.c` now probes `/tmp/hello-append.txt` by writing one
-    byte normally, reopening with `O_APPEND`, writing another byte, and checking
-    the final size from Ring 3.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed.
-    - `build/verify.log` showed the append probe in all three `hello` runs:
-      - `[HELLO] append /tmp/hello-append.txt size=2`
-      - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
-      - `[HTTP] GET http://ansnew.com/ -> 797 bytes`
-- Fixed `lseek(..., SEEK_END)` to use VFS metadata:
-  - `sys_lseek()` now calls `sys_fstat()` for `SEEK_END` instead of only
-    knowing RAMFS sizes and falling back to the current offset for other
-    filesystems.
-  - This makes EOF seeking work for initrd, RAMFS, FAT32, `/proc`, and other
-    paths covered by the metadata ABI.
-  - `src/os/apps/hello.c` now logs `lseek(fd, 0, SEEK_END)` for its own
-    executable.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed.
-    - `build/verify.log` showed:
-      - `[HELLO] stat /bin/hello mode=0100400 size=117472`
-      - `[HELLO] seek_end /bin/hello offset=117472`
-      - `[HELLO] seek_end /usr/local/bin/hello-local offset=117472`
-      - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
-      - `[HTTP] GET http://ansnew.com/ -> 798 bytes`
-- Added VFS `O_CREAT | O_EXCL` exclusive-create semantics:
-  - `sys_open()` now rejects open when the target already exists and both
-    `O_CREAT` and `O_EXCL` are present.
-  - This supports basic lock-file and exclusive temporary-file creation
-    patterns expected by build tools and package managers.
-  - `src/os/apps/hello.c` now probes `/tmp/hello-excl.txt` by creating it once
-    with `O_CREAT | O_EXCL`, then confirming a second exclusive create fails.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed.
-    - `build/verify.log` showed the probe in all three `hello` runs:
-      - `[HELLO] o_excl /tmp/hello-excl.txt second_open_failed`
-      - `[HELLO] waitpid child -> pid=5 status=0x0 exit=0`
-      - `[HTTP] GET http://ansnew.com/ -> 798 bytes`
+---------------------------------------
+- App registry: 64 slots, spinlock-protected. Records PID, task name,
+  YamGraph node, app type, permissions, name, publisher, version, desc.
+- Native SDK: src/os/lib/libyam/app.h — yam_os_info(), yam_app_register(),
+  yam_app_query(), yam_spawn(), yam_spawn_args(), yam_spawn_env().
+- libc spawn wrappers: spawn(), spawnv(), spawnve(); execve() = ENOSYS.
+- ELF spawn: elf_spawn_path_argv_envp(); bare-name resolver: /bin,
+  /usr/local/bin, /opt/yamos/packages, /home/root/bin.
+- Exit/wait: TASK_ZOMBIE → sched_waitpid() reap; SYS_WAITPID copies
+  encoded status to user via copy_to_user(); WNOHANG supported.
+- /bin/hello: boot-probe ELF; exercises stat, fstat, ftruncate, rename,
+  O_APPEND, O_EXCL, *at dirfd calls, spawn+waitpid from Ring 3.
+- authd: registers as YamOS service (type=2, perm=IPC) before YamGraph IPC.
+- FAT32 install: PID 1 writes /usr/local/bin/hello-local persistently.
 
 Current Desktop/GUI State
--------------------------
-- Current owner direction: pause user-level application tooling work and focus
-  on GUI improvement plus OS-level Wi-Fi/Bluetooth/audio/status foundations.
-- Polished the compositor-level first-boot setup UI:
-  - Dedicated full-screen setup state, no dock/menubar behind it.
-  - Wider two-column setup panel with YamOS identity/sidebar.
-  - Larger highlighted input fields for computer name, username, password.
-  - Create Account and Bypass buttons.
-  - Setup mouse hit-testing updated for the new layout.
-- Polished the login UI:
-  - Larger centered glass panel.
-  - Clear welcome header, computer name, username/password fields, sign-in
-    button styling, and Ctrl+Shift+Y bypass text.
-  - Login field mouse hit-testing updated for the new layout.
-- Improved window chrome:
-  - Titlebar height is now 36px.
-  - Window title is left-aligned.
-  - Controls moved to standard right-side buttons:
-    minimize, maximize/restore, close.
-  - Focused windows get a blue titlebar accent line.
-  - `wl_surface_t` now tracks `maximized`, `restore_x`, and `restore_y`.
-  - Maximize scales app content to a large desktop frame while keeping the
-    original app buffer, and input coordinates are mapped back to app space.
-  - Dragging is disabled while maximized; restore returns to previous position.
-  - Window menu now exposes Maximize / Restore.
-- Build and boot verification after desktop changes:
-  - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-    passed.
-  - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-    passed.
-  - `build/verify.log` confirmed compositor startup:
-    - `[WAYLAND] Compositor initialized at 1280x800 (Mode: FIRST-BOOT SETUP)`
-    - `[WAYLAND] Compositor task started.`
-  - Final ISO remains at `build/yamkernel.iso` after this GUI pass.
-- Added compositor-native File Manager:
-  - `src/os/services/compositor/wl_file_manager.c`
-  - launches from the dock launcher and File menu
-  - browses `/home/root`, `/tmp`, `/var`, and `/`
-  - lists files/folders through `sys_readdir`
-  - creates folders through `sys_mkdir`
-  - creates text files through `sys_open(O_CREAT | O_TRUNC | O_RDWR)`
-  - opens text files into a built-in editor surface
-  - saves text through VFS write
-  - deletes ramfs entries through `sys_unlink`
-  - uses in-session ramfs storage only; persistence still requires block
-    storage and mounted writable filesystem.
-- Terminal file commands now route to the same VFS:
-  - `ls [path]`
-  - `cat <path>`
-  - `mkdir <path>`
-  - `touch <path>`
-  - `rm <path>`
-  - `write <path> <text>`
-- Verification after File Manager/VFS work:
-  - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-    passed.
-  - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-    passed.
-  - `build/verify.log` showed VFS mounts and compositor startup:
-    - `[VFS] Ready: 8 mount points active`
-    - `[WAYLAND] Compositor initialized at 1280x800 (Mode: FIRST-BOOT SETUP)`
-    - `[WAYLAND] Compositor task started.`
-- Additional GUI polish pass:
-  - Added reusable drawing primitives in `src/os/services/compositor/wl_draw.c/.h`:
-    - `wl_draw_rect_outline`
-    - `wl_draw_rounded_rect`
-    - `wl_draw_rounded_outline`
-    - `wl_draw_vgradient`
-  - Window compositor now draws dark drop-shadow layers behind non-maximized
-    windows and adds a small app indicator dot in the titlebar.
-  - Setup screen uses rounded panels/buttons/fields instead of only flat
-    rectangles.
-  - File Manager now uses a more professional app shell:
-    - vertical navigation rail with selected state
-    - rounded toolbar buttons
-    - bordered rounded file list panel
-    - alternating rows and selected row treatment
-    - compact type badges for directories/text files
-    - editor view gradient background and bordered text area
-  - Verified again after the GUI polish:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"` passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify` passed.
-- Browser app modernization:
-  - Replaced the old fake/offline `wl_browser.c` with a real compositor-native
-    browser shell.
-  - Uses kernel `http_get()` from `src/net/http.c` for plain HTTP fetch over
-    DNS/TCP.
-  - UI now includes:
-    - tab strip/title area
-    - back/forward/reload controls
-    - focused address bar
-    - Go button
-    - loading/progress state
-    - response status metadata
-    - browser status bar
-  - Supports URL normalization from `ansnew.com` to `http://ansnew.com`.
-  - Tracks small back/forward history.
-  - Parses host/path for `http://host/path`.
-  - Rejects `https://` clearly because TLS/certificate service is not present.
-  - Extracts HTTP body, title tag, and simple HTML text by stripping tags and
-    preserving coarse block breaks.
-  - Initial suggestions include `http://ansnew.com/` and `http://neverssl.com/`.
-  - This is not Mozilla-class yet; missing: TLS, certificates, JavaScript, CSS
-    layout, images, DOM, fonts, sandboxed renderer processes, cache, cookies.
-  - Verification after browser work:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"` passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify` passed.
-    - verify log still shows e1000, DHCP, DNS, TCP, and HTTP client startup.
-- Browser renderer follow-up after owner reported it only showed HTTP response:
-  - Hardened header/body separation in `body_start()`.
-  - Searches for `<!doctype`, `<!DOCTYPE`, `<html`, and `<HTML` if blank-line
-    header delimiter is missing.
-  - Added HTTP status-code parsing.
-  - Added `Location` header parsing and follows up to 2 plain-HTTP redirects.
-  - Rejects non-HTTP redirect targets until TLS exists.
-  - HTML-to-text now skips accidental `HTTP/` header text, decodes common
-    entities, wraps long lines, and inserts block breaks for headings,
-    paragraphs, list items, divs, and sections.
-  - Browser content panel now separates the document badge/status/URL from the
-    rendered body so it does not look like raw response output.
-  - Rebuilt and verified:
-    - `make iso` passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed and showed `[HTTP] GET http://ansnew.com/ -> 797 bytes`.
-- Static browser renderer follow-up after owner asked for markup/CSS/JS
-  rendering:
-  - Added a small render-tree layer in
-    `src/os/services/compositor/wl_browser.c`.
-  - Classifies HTML content into typed nodes for headings, paragraphs, list
-    items, links, and pre/code blocks.
-  - Skips script/style bodies instead of displaying them as page text.
-  - Draws typed static blocks with basic visual styling instead of dumping one
-    raw text buffer.
-  - This is a serious first browser-engine slice, but not a Mozilla-class
-    engine yet. Still missing: DOM tree, CSS parser/cascade/layout, JavaScript
-    VM/event loop, image decoding, font shaping, TLS/certificates, storage,
-    cache/cookies, process sandboxing, and navigation security model.
-  - Verification after static renderer:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed and showed e1000, DHCP, DNS, TCP, and
-      `[HTTP] GET http://ansnew.com/ -> 797 bytes`.
-- Browser-vs-Firefox correction pass:
-  - Owner correctly said YamBrowser still looks like a toy versus Firefox.
-  - Added `BROWSER_FIREFOX_GAP.md` with a blunt feature comparison and next
-    production steps.
-  - Expanded `wl_browser.c` buffers so larger HTTP responses can be retained:
-    `PAGE_MAX=12288`, `TEXT_MAX=8192`, `RENDER_MAX=192`,
-    `RENDER_TEXT=192`.
-  - Added case-insensitive common tag matching.
-  - Added attribute extraction for simple `alt`, `src`, `value`, and
-    `placeholder` values.
-  - Added static render nodes for image placeholders, buttons, and form/input
-    placeholders.
-  - HTTP error/status pages with a response body now still render through the
-    document paint path instead of showing only raw status/fallback text.
-  - Added a startup browser document that honestly lists what works now and
-    what is still missing for Firefox-class browsing.
-  - Fixed a real TCP kernel bug: `tcp_receive()` no longer auto-sends FIN and
-    closes immediately when the remote sends FIN in ESTABLISHED state. It now
-    leaves the socket in `SOCK_STATE_CLOSE_WAIT` so HTTP/browser code can drain
-    buffered response bytes. `tcp_close()` now sends FIN from CLOSE_WAIT.
-  - Verification after this pass:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed.
-    - `build/verify.log` showed:
-      - `[DHCP] ACK! IP=10.0.2.15 GW=10.0.2.2 DNS=10.0.2.3`
-      - `[TCP] Connected to 104.20.23.154:80`
-      - `[HTTP] GET http://ansnew.com/ -> 797 bytes`
-- Browser layout/scroll/style pass:
-  - Added browser document viewport constants and scroll state:
-    `DOC_TOP`, `DOC_BOTTOM`, `DOC_VIEW_H`, `document_scroll`,
-    `document_height`.
-  - Added per-node style fields: fg, bg, flags.
-  - Added simple inline CSS color/background sniffing for `style="color: ..."`
-    and `style="background/background-color: ..."` with hex and common color
-    names.
-  - Added node layout-height calculation and a scrollable render path.
-  - Added a right-side scrollbar when document content is taller than the
-    viewport.
-  - Keyboard behavior:
-    - Up/Down scroll when the address bar is not focused.
-    - PageUp/PageDown scroll by viewport.
-    - Up/Down still navigate history while the address bar is focused.
-  - Wheel events scroll when compositor input provides `REL_WHEEL`.
-  - This is still not a full CSS/layout engine, but it removes the clipped
-    single-screen static paint limitation and starts separating node style,
-    layout height, viewport, and paint.
-  - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-    passed after this pass.
-  - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-    passed after this pass and showed `[HTTP] GET http://ansnew.com/ -> 797 bytes`.
-- OS capability / socket ABI pass:
-  - Owner asked for YamOS to become capable of installing and handling browser
-    engines, programming languages, and real x86_64 OS workloads.
-  - Added first real fd-backed TCP socket ABI instead of private kernel-only
-    network helpers.
-  - Public syscall ABI now includes:
-    - `SYS_SOCKET` 70
-    - `SYS_BIND` 71
-    - `SYS_CONNECT` 72
-    - `SYS_LISTEN` 73
-    - `SYS_ACCEPT` 74
-    - `SYS_SENDTO` 75
-    - `SYS_RECVFROM` 76
-    - `SYS_MAX` 77
-  - `YAM_OS_FLAG_SOCKET_ABI` added to `yam_os_info_t.flags`.
-  - `src/cpu/syscall.c` now wraps TCP sockets as normal `file_t` descriptors:
-    - `socket(AF_INET, SOCK_STREAM, 0/IPPROTO_TCP)` allocates a TCP socket and
-      fd-backed `file_t`.
-    - `connect()` copies user `sockaddr_in`, converts network byte order, and
-      calls `tcp_connect`.
-    - `bind()` records the local port.
-    - `listen()` calls `tcp_listen`.
-    - `accept()` wraps accepted TCP sockets as new file descriptors.
-    - socket `read/write/close/poll` route through file operations.
-  - `src/net/tcp.c` added `tcp_available(fd)` for socket poll/readiness.
-  - Removed stale fake socket syscall numbers from `src/net/net_socket.h`; the
-    ABI source of truth is `src/kernel/api/syscall.h`.
-  - `src/os/lib/libc/sys/socket.h` now uses the real syscall numbers and routes
-    `send()` through `SYS_WRITE_FD` and `recv()` through `SYS_READ`.
-  - `sendto/recvfrom` ABI numbers are reserved and currently return `-1` until
-    fd-backed UDP datagram sockets are implemented.
-  - Updated `KERNEL_CAPABILITY_MATRIX.md`, README.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed and showed e1000, DHCP, DNS, TCP, and
-      `[HTTP] GET http://ansnew.com/ -> 797 bytes`.
-- GUI radio/quick-settings pass:
-  - Added kernel status/control headers for Wi-Fi and Bluetooth:
-    - `src/drivers/net/iwlwifi.h`
-    - `src/drivers/bluetooth/hci_usb.h`
-  - `iwlwifi.c` now maintains adapter/radio/firmware/scan/connection state and
-    exposes `iwlwifi_get_status()`, `iwlwifi_set_radio_enabled()`,
-    `iwlwifi_scan()`, and `iwlwifi_connect_default()`.
-  - `hci_usb.c` now maintains Bluetooth controller/radio/backend/scan/pairing
-    state and exposes `hci_get_status()`, `hci_set_radio_enabled()`,
-    `hci_scan()`, and `hci_connect_default()`.
-  - Driver manager inventory now includes an `iwlwifi` PCI wireless-network
-    class driver record.
-  - Desktop menubar now includes Wi-Fi and Bluetooth status chips when space
-    allows, with warning colors when the radio is on but hardware/firmware
-    transport is missing.
-  - Quick Settings is expanded into a desktop-style network/radio/sound sheet:
-    wired DHCP status, Wi-Fi tile, Bluetooth tile, Scan/Connect/Pair buttons,
-    and sound volume/mute controls.
-  - Click handling updates real kernel driver state. This is honest state, not
-    fake connectivity: QEMU still uses e1000 wired networking; real Wi-Fi needs
-    firmware/MAC/802.11 work, and Bluetooth needs USB HCI transport/pairing.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed.
-    - `build/verify.log` showed:
-      - `[DRIVER] manager initialized: 7 built-in driver records`
-      - `[wlan0] No Intel wireless NIC present (firmware blob required)`
-      - `[hci0] Bluetooth HCI service initialized; USB transport/backend pending`
-      - `[WAYLAND] Compositor initialized at 1280x800`
-      - `[HTTP] GET http://ansnew.com/ -> 798 bytes`
-- Split radio settings GUI pass:
-  - Owner corrected that radio controls should not all live in one crowded
-    panel. Direction: use multiple GUI surfaces when the feature deserves it.
-  - Added `src/os/services/compositor/wl_radio_settings.c`.
-  - Added separate compositor-native windows:
-    - `wl_wifi_settings_task()` / "Wi-Fi Settings"
-    - `wl_bluetooth_settings_task()` / "Bluetooth Settings"
-  - Quick Settings is compact again: Ethernet summary, Wi-Fi/Bluetooth fast
-    toggles, Wi-Fi Settings and BT Settings launch buttons, and audio mute/
-    volume controls.
-  - The File menu can launch Wi-Fi Settings and Bluetooth Settings directly.
-  - Wi-Fi Settings shows radio status, adapter/firmware blocker, known network
-    placeholder, Scan, Connect, and Turn on/off controls.
-  - Bluetooth Settings shows radio status, controller/USB-HCI blocker, nearby
-    device placeholder, Scan, Pair, and Turn on/off controls.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed and still showed driver inventory, e1000/DHCP/DNS/TCP/HTTP, and
-      compositor boot evidence.
-- Split Network/Sound settings GUI pass:
-  - Continued the "separate surfaces for real settings" direction.
-  - Expanded `src/os/services/compositor/wl_radio_settings.c` into a small
-    device-settings surface family:
-    - `wl_network_settings_task()` / "Ethernet Settings"
-    - `wl_wifi_settings_task()` / "Wi-Fi Settings"
-    - `wl_bluetooth_settings_task()` / "Bluetooth Settings"
-    - `wl_sound_settings_task()` / "Sound Settings"
-  - Settings sidebar now has Ethernet, Wi-Fi, Bluetooth, and Sound sections.
-  - Ethernet Settings shows e1000 link/DHCP state, IPv4, gateway, DNS, MAC,
-    driver mode, and a DHCP Renew button wired to `dhcp_start()`.
-  - Sound Settings shows output-device status, volume bar, volume +/- buttons,
-    and mute/unmute controls wired to the kernel audio mixer state.
-  - This pass originally kept Quick Settings compact, but that path was later
-    superseded by the Obsolete Quick Settings removal below.
-  - File menu now launches Ethernet Settings and Sound Settings too.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed and showed driver inventory, virtio/FAT32, e1000, DHCP, DNS, TCP,
-      HTTP, and compositor boot evidence.
-- Standalone device settings correction:
-  - Owner clarified separate should mean separate windows, not one shared
-    settings window with a sidebar/tabs for Bluetooth, Wi-Fi, Ethernet, etc.
-  - `wl_radio_settings.c` still hosts the implementation file, but the UX now
-    treats Ethernet, Wi-Fi, Bluetooth, and Sound as standalone windows.
-  - Removed in-window cross-device navigation from the settings sidebar.
-  - Each window now shows a simple standalone identity panel and only controls
-    its own device category.
-  - Cross-device launching remains outside the windows via the top-bar chips
-    and menus, not via any shared Quick Settings panel.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed and showed driver inventory, virtio/FAT32, e1000, DHCP, DNS, TCP,
-      HTTP, and compositor boot evidence.
-- Tray chip direct settings correction:
-  - Owner clarified that the top-bar "quick settings" behavior was still
-    wrong because clicking a chip should open that chip's own options directly.
-  - Top-bar status chips now launch separate windows directly:
-    - Sound chip -> `wl_sound_settings_task()`
-    - Ethernet chip -> `wl_network_settings_task()` / "Ethernet Settings"
-    - Wi-Fi chip -> `wl_wifi_settings_task()`
-    - Bluetooth chip -> `wl_bluetooth_settings_task()`
-    - Clock remains Calendar.
-  - Removed the old generic tray click path that opened one shared quick
-    settings surface for all device categories.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed and showed driver inventory, virtio/FAT32, e1000, DHCP, DNS, TCP,
-      HTTP, and compositor boot evidence.
-- Obsolete Quick Settings removal:
-  - Removed the dead shared Quick Settings popover renderer and input handler.
-  - Top-bar chips no longer have any shared settings panel path in the
-    compositor; they only launch their own standalone settings windows.
-  - Removed obsolete quick-settings-only helpers from compositor render/input.
-  - Removed the stale `quick_settings_open` compositor state field.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed and showed driver inventory, virtio/FAT32, e1000, DHCP, DNS, TCP,
-      HTTP, and compositor boot evidence.
-- Display Settings GUI pass:
-  - Added `src/os/services/compositor/wl_display_settings.c`.
-  - Added `wl_display_settings_task()` / "Display Settings".
-  - Opens from the View menu.
-  - Shows compositor resolution, framebuffer stride, scale mode, focused
-    surface title, and active/minimized surface count.
-  - Provides buttons for debug-overlay toggle and framebuffer refresh.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed and showed driver inventory, virtio/FAT32, e1000, DHCP, DNS, TCP,
-      HTTP, and compositor boot evidence.
-- Settings single-instance/focus pass:
-  - User-facing wired network window was renamed from Network Settings to
-    Ethernet Settings so it no longer reads like a shared network bucket.
-  - `src/os/services/compositor/compositor_input.c` now uses a small
-    open-or-focus helper for Ethernet, Wi-Fi, Bluetooth, Sound, and Display
-    settings launches.
-  - Clicking a top-bar chip or menu item for an already-open settings window
-    now focuses that existing window instead of spawning duplicate copies.
-  - If that settings window was minimized, it is restored before focus.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed and showed driver inventory, virtio/FAT32, e1000, DHCP, DNS, TCP,
-      HTTP, and boot evidence.
-- Standalone settings layout polish:
-  - `src/os/services/compositor/wl_radio_settings.c` no longer draws a shared
-    left sidebar/identity strip for Ethernet, Wi-Fi, Bluetooth, and Sound.
-  - Each settings window now uses a direct standalone layout: title header,
-    device-specific status card, details card, and controls in that same
-    category only.
-  - Updated input hit regions for the moved controls:
-    - Ethernet DHCP Renew
-    - Wi-Fi toggle/scan/connect
-    - Bluetooth toggle/scan/pair
-    - Sound volume down/up/mute
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed and showed driver inventory, virtio/FAT32, e1000, DHCP, DNS, TCP,
-      HTTP, and boot evidence.
-- Launcher settings integration:
-  - `src/os/services/compositor/compositor_render.c` now draws the dock
-    launcher as a wider two-column panel:
-    - left column: Terminal, Browser, Calculator, File Manager, Driver Probe
-    - right column: Ethernet, Wi-Fi, Bluetooth, Sound, Display settings
-  - `src/os/services/compositor/compositor_input.c` routes launcher settings
-    clicks through the same open-or-focus helper used by tray/menu launches, so
-    settings shortcuts focus existing windows instead of creating duplicates.
-  - Lock, Restart, and Shutdown controls were moved to the bottom of the wider
-    launcher and their input hit regions were updated.
-  - Verification:
-    - `wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"`
-      passed.
-    - `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`
-      passed and showed driver inventory, virtio/FAT32, e1000, DHCP, DNS, TCP,
-      HTTP, and boot evidence.
-- Wi-Fi/Bluetooth connection blocker pass:
-  - Owner reported Wi-Fi/Bluetooth connection issues.
-  - `src/drivers/net/iwlwifi.h/.c` now return explicit operation results from
-    radio toggle, scan, and connect:
-    - OK
-    - radio off
-    - no supported adapter
-    - firmware / 802.11 MAC pending
-  - `src/drivers/bluetooth/hci_usb.h/.c` now return explicit operation results
-    from radio toggle, scan, and pair/connect:
-    - OK
-    - radio off
-    - no controller
-    - USB HCI transport/backend pending
-  - Both driver status structs now carry `last_error`.
-  - Wi-Fi/Bluetooth settings disable impossible scan/connect/pair buttons and
-    show the exact blocker after a click instead of making the action look like
-    it silently failed.
-  - Kernel shell `top`/`net` reporting now uses the same driver state instead
-    of saying wlan0 is generically "Service Ready".
-  - Verification:
-    - `git diff --check` passed with only CRLF warnings.
-    - Full `make iso` / boot verify was not run in this turn because the WSL
-      build escalation was rejected by the environment usage limit.
+--------------------------
+- Compositor: Wayland-style kernel-space, 1280x800, DRM scanout.
+- States: SETUP → LOGIN → DESKTOP → VTTY.
+- Multi-user: YAM_MAX_USERS=8; yam_user_account_t (username, password hash,
+  display_name, admin, active); current_user[32] tracks logged-in user.
+- Login: validates via wl_password_hash; yam_channel_t authd fallback.
+- Setup: creates accounts for setup_user, root, guest; persists via FAT32.
+- Home dir: /home/<username> created by sys_mkdir at setup/login time for
+  each account; skip-setup creates /home/root + /home/guest.
+- File Manager (wl_file_manager.c):
+  - Opens in /home/<current_user> (resolved from comp->current_user at launch).
+  - Sidebar: Home (user-specific), Users (/home), Root (/), Temp, System, Volumes.
+  - Browse, search, sort (name/type/size), breadcrumb address bar, history nav.
+  - New file (O_CREAT|O_TRUNC), new folder (mkdir), delete (unlink), open/edit,
+    save text, keyboard navigation (Up/Down/PgUp/PgDn/Enter/Backspace).
+  - Text editor mode: read, edit, save back to VFS.
+- Browser (wl_browser.c): real HTTP via http_get(); typed render-tree (headings,
+  paragraphs, lists, links, pre/code); scrollable viewport; HTTPS rejected until
+  TLS ready; redirect follow (plain HTTP, up to 2 hops).
+- Settings windows (standalone, open-or-focus): Ethernet, Wi-Fi, Bluetooth,
+  Sound, Display. Top-bar chips open respective window directly.
+- DRM: drm_page_flip_damage() (dirty-rect updates), drm_set_mode() (Bochs VBE
+  I/O port modesetting; live 1024x768 ↔ 1920x1080 toggle).
+- Launcher: two-column grid (apps + settings); single-instance focus helper.
+- Window chrome: 36px titlebar, minimize/maximize/restore/close, drop-shadow,
+  maximize scales content + remaps input coords.
+- IPC: YamGraph channels; authd bidirectional auth flow.
 
-Best Next Kernel/Driver Work
-----------------------------
-- Implement virtio-blk first for QEMU persistent storage, then AHCI SATA.
-- Make discovered block devices register through src/drivers/block/block.c.
-- Add partition table parsing (MBR/GPT) after the first block driver works.
-- Mount a real writable filesystem from a block device instead of ramfs.
-- Improve PMM/VMM diagnostics and per-process memory accounting.
-- Add socket syscalls after kernel TCP/UDP paths stabilize.
-- Add interrupt-driven NIC RX/TX instead of polling-only networking.
-- Extend driver manager from inventory binding to real probe/start/stop hooks.
+Phase Roadmap
+-------------
+Phase 1 (Core Foundation)    — COMPLETE
+Phase 2 (Performance/HW)     — COMPLETE
+  - LRU block cache, AHCI SATA driver, FAT32 persistent volumes.
+  - DRM damage tracking, Bochs VBE runtime modesetting.
+Phase 3 (Connected Ecosystem) — IN PROGRESS
+  [DONE] Non-blocking socket ABI: SOCK_NONBLOCK, select(), fcntl(F_SETFL).
+  [DONE] File Manager multi-user: opens in logged-in user's home dir.
+  [TODO] Full TLS/HTTPS handshake (beyond ClientHello probe).
+  [TODO] ypkg package manager.
+  [TODO] Thread ABI + futex hardening for userspace.
+  [TODO] Signal delivery + mask/handler semantics.
+  [TODO] epoll / io_uring foundations.
+
+Build Verification (latest passing)
+------------------------------------
+- make iso: PASS
+- verify.log shows: PCI/driver inventory, FAT32 vd0 mount, VFS promotion,
+  e1000 init, DHCP ACK, DNS resolve, TCP connect, HTTP GET.
+
+Cleanup Notes
+-------------
+- Removed: language-runtime placeholders, fake userspace stubs, legacy demo
+  ELF apps, Wayland demo client, scheduler heartbeat demo.
+- Makefile packages: yamkernel.elf, wallpaper.bin, logo.bin, authd.elf, hello.elf.
+- No vendor/ folder; limine.h lives at src/include/limine.h.
+- No src/os/lib/libgui; tools/stb_image.h kept for tools/img2raw.c.
+- No empty authd/shell service directories.
+- Scratch files (scratch_fat32.py, scratch_vfs.py, scratch_update_elf.py) removed.
 
 Do Not Repeat
 -------------
-- Do not add language-runtime-specific source trees, placeholder apps, or fake
-  package installers unless the owner explicitly reverses this direction.
-- Do not claim language installation support.
-- Keep future work kernel/driver/memory/storage focused.
-
-Cleanup State
--------------
-- Removed dead language-runtime placeholder source and the empty runtime-port
-  directory.
-- Removed active compositor/docs references to that placeholder path.
-- Keep libc/POSIX headers and implementations: they are OS-level compatibility
-  infrastructure, not runtime baggage.
-- Removed inactive/demo/fake userspace modules and stubs:
-  - legacy ELF Terminal/Browser/Calculator/Test app sources
-  - fake userspace OS driver stubs under src/os/drivers/
-  - scheduler heartbeat demo and tiny ring-3 demo program
-  - Wayland demo client
-- Makefile and limine.conf now package only:
-  - yamkernel.elf
-  - wallpaper.bin
-  - logo.bin
-  - authd.elf
-- From-scratch `make iso` passed after cleanup.
-- `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify` passed
-  after cleanup; debug evidence still shows PCI, driver manager, block core,
-  e1000, DHCP, DNS, TCP, and HTTP working.
-- Keep build/, object files, ISO staging, and logs out of source control; they
-  are generated and can be removed with `make clean`.
-- Moved the only vendor header, limine.h, into src/include/limine.h and removed
-  the vendor/ folder.
-- Removed unused src/os/lib/libgui and its stb_image copy. Keep tools/stb_image.h
-  because tools/img2raw.c needs it for boot asset conversion.
-- Removed empty src/os/services/authd and src/os/services/shell directories.
+- Do not add language-runtime stubs or fake package installers.
+- Do not run raw qemu-system-x86_64 directly; use test.ps1 helpers.
+- Do not paper over missing kernel infra with app-level theater.

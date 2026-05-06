@@ -249,6 +249,12 @@ static void finish_first_boot_setup(void) {
     }
     KINFO("SETUP", "Computer '%s' initialized; first user '%s' created",
           g_compositor.computer_name, g_compositor.current_user);
+    /* Ensure home directory exists for each account */
+    char home[64];
+    for (u32 i = 0; i < g_compositor.user_count; i++) {
+        ksnprintf(home, sizeof(home), "/home/%s", g_compositor.users[i].username);
+        sys_mkdir(home, 0755);
+    }
 }
 
 static void skip_first_boot_setup(void) {
@@ -268,6 +274,9 @@ static void skip_first_boot_setup(void) {
         return;
     }
     KINFO("SETUP", "First-boot setup skipped and persisted; using root/password and guest/guest");
+    /* Ensure home dirs exist for default accounts */
+    sys_mkdir("/home/root", 0755);
+    sys_mkdir("/home/guest", 0755);
 }
 
 static char *setup_focused_field(void) {
@@ -456,6 +465,12 @@ void wl_compositor_process_input(void) {
                         
                         if (success) {
                             KINFO("AUTH", "Access GRANTED for '%s'. Transitioning to DESKTOP...", g_compositor.current_user);
+                            /* Ensure home directory exists for this user */
+                            {
+                                char home[64];
+                                ksnprintf(home, sizeof(home), "/home/%s", g_compositor.current_user);
+                                sys_mkdir(home, 0755);
+                            }
                             g_compositor.state = COMPOSITOR_STATE_DESKTOP;
                             KINFO("AUTH", "Desktop ready. Apps are launched from the dock or File menu.");
                         } else {
