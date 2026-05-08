@@ -131,5 +131,8 @@ i64  elf_spawn_path_argv_envp(const char *path, int argc,
 i64  elf_spawn_resolved_argv_envp(const char *name, int argc,
                                   const char *const argv[],
                                   const char *const envp[]);
+i64  elf_exec_resolved_argv_envp(const char *name, int argc,
+                                 const char *const argv[],
+                                 const char *const envp[]);
 
 #endif /* _FS_ELF_H */

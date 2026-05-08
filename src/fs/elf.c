@@ -24,6 +24,7 @@ extern void enter_user_mode_ldso(u64 rip, u64 rsp) NORETURN;
 #define USER_STACK_SIZE  (USER_STACK_PAGES * PAGE_SIZE)
 #define USER_STACK_TOP   (USER_STACK_BASE + USER_STACK_SIZE)
 #define USER_STACK_GUARD_HIGH USER_STACK_TOP
+#define USER_ELF_DYN_BASE     0x0000000000400000ULL
 
 /* Per-process bootstrap: switch to its page table and jump to user mode */
 typedef struct {
@@ -524,6 +525,251 @@ static u64 build_initial_stack_ldso(u64 *pml4, const char *name, int argc,
   return sp;
 }
 
+static bool allocate_user_stack(u64 *user_pml4) {
+  for (u32 i = 0; i < USER_STACK_PAGES; i++) {
+    u64 va = USER_STACK_BASE + i * PAGE_SIZE;
+    u64 phys = pmm_alloc_page();
+    if (!phys) {
+      kprintf_color(0xFFFF3333, "[ELF] OOM allocating user stack\n");
+      return false;
+    }
+    memset(vmm_phys_to_virt(phys), 0, PAGE_SIZE);
+    vmm_map_page(user_pml4, va, phys,
+                 VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_WRITE |
+                     VMM_FLAG_NX);
+  }
+  kprintf("[ELF] user stack guards low=0x%lx high=0x%lx\n",
+          USER_STACK_GUARD_LOW, USER_STACK_GUARD_HIGH);
+  return true;
+}
+
+typedef struct {
+  u64 *pml4;
+  u64 entry;
+  u64 rsp;
+  u64 argc;
+  u64 argv;
+  u64 envp;
+  u64 brk_start;
+  bool ldso_entry;
+} elf_exec_image_t;
+
+static i64 elf_prepare_static_image(const void *file_data, usize file_size,
+                                    const char *name, int argc,
+                                    const char *const argv[],
+                                    const char *const envp[],
+                                    elf_exec_image_t *out) {
+  if (!out) return -1;
+  memset(out, 0, sizeof(*out));
+
+  if (!file_data || file_size < sizeof(elf64_ehdr_t)) {
+    kprintf_color(0xFFFF3333, "[ELF] exec: file too small\n");
+    return -1;
+  }
+
+  const elf64_ehdr_t *ehdr = (const elf64_ehdr_t *)file_data;
+  const u8 *base = (const u8 *)file_data;
+
+  if (ehdr->e_magic != ELF_MAGIC || ehdr->e_class != 2 ||
+      ehdr->e_machine != 0x3E) {
+    kprintf_color(0xFFFF3333, "[ELF] exec: invalid x86_64 ELF\n");
+    return -1;
+  }
+  if (ehdr->e_type != ET_EXEC && ehdr->e_type != ET_DYN) {
+    kprintf_color(0xFFFF3333, "[ELF] exec: unsupported e_type=%u\n",
+                  ehdr->e_type);
+    return -1;
+  }
+  if (ehdr->e_phentsize != sizeof(elf64_phdr_t) ||
+      ehdr->e_phoff + (u64)ehdr->e_phnum * ehdr->e_phentsize > file_size) {
+    kprintf_color(0xFFFF3333, "[ELF] exec: program headers outside file\n");
+    return -1;
+  }
+
+  u64 *user_pml4 = vmm_create_user_pml4();
+  if (!user_pml4) {
+    kprintf_color(0xFFFF3333, "[ELF] exec: failed to create user PML4\n");
+    return -1;
+  }
+
+  u64 load_bias = (ehdr->e_type == ET_DYN) ? USER_ELF_DYN_BASE : 0;
+  if (!elf_map_pt_loads(user_pml4, ehdr, base, load_bias)) {
+    vmm_destroy_user_pml4(user_pml4);
+    return -1;
+  }
+
+  u64 load_base = load_bias + elf_min_load_vaddr(ehdr, base);
+  if (!elf_apply_relocations(user_pml4, ehdr, base, file_size, load_base,
+                             load_bias)) {
+    vmm_destroy_user_pml4(user_pml4);
+    return -1;
+  }
+
+  if (!allocate_user_stack(user_pml4)) {
+    vmm_destroy_user_pml4(user_pml4);
+    return -1;
+  }
+
+  u64 argv_user = 0;
+  u64 envp_user = 0;
+  u64 user_rsp = build_initial_stack(user_pml4, name, argc, argv, envp,
+                                     &argv_user, &envp_user);
+  if (!user_rsp) {
+    vmm_destroy_user_pml4(user_pml4);
+    return -1;
+  }
+
+  out->pml4 = user_pml4;
+  out->entry = load_bias + ehdr->e_entry;
+  out->rsp = user_rsp;
+  out->argc = (argc <= 0) ? 1 : (argc > 16 ? 16 : (u64)argc);
+  out->argv = argv_user;
+  out->envp = envp_user;
+  out->brk_start = elf_align_up(elf_max_load_end(ehdr, base, load_bias),
+                                PAGE_SIZE) + PAGE_SIZE;
+  out->ldso_entry = false;
+  return 0;
+}
+
+static i64 elf_prepare_dynamic_image(const void *file_data, usize file_size,
+                                     const char *name, int argc,
+                                     const char *const argv[],
+                                     const char *const envp[],
+                                     const char *execfn,
+                                     elf_exec_image_t *out) {
+  if (!out) return -1;
+  memset(out, 0, sizeof(*out));
+
+  if (!file_data || file_size < sizeof(elf64_ehdr_t)) return -1;
+
+  const elf64_ehdr_t *ehdr = (const elf64_ehdr_t *)file_data;
+  const u8 *base = (const u8 *)file_data;
+  if (ehdr->e_magic != ELF_MAGIC || ehdr->e_class != 2 ||
+      ehdr->e_machine != 0x3E ||
+      (ehdr->e_type != ET_EXEC && ehdr->e_type != ET_DYN)) {
+    return -1;
+  }
+  if (ehdr->e_phentsize != sizeof(elf64_phdr_t) ||
+      ehdr->e_phoff + (u64)ehdr->e_phnum * ehdr->e_phentsize > file_size)
+    return -1;
+
+  char interp_path[256];
+  interp_path[0] = 0;
+  const elf64_phdr_t *interp_ph = elf_find_phdr(ehdr, base, PT_INTERP);
+  if (!interp_ph || interp_ph->p_filesz == 0 ||
+      interp_ph->p_offset + interp_ph->p_filesz > file_size) {
+    return -1;
+  }
+
+  usize il = (usize)interp_ph->p_filesz;
+  if (il >= sizeof(interp_path)) il = sizeof(interp_path) - 1;
+  memcpy(interp_path, base + interp_ph->p_offset, il);
+  interp_path[il] = 0;
+  for (usize j = 0; j < il && interp_path[j]; j++) {
+    if (interp_path[j] == '\n' || interp_path[j] == '\r')
+      interp_path[j] = 0;
+  }
+  if (!interp_path[0]) return -1;
+
+  usize interp_sz = 0;
+  u8 *interp_buf = elf_read_whole_file(interp_path, &interp_sz);
+  if (!interp_buf || interp_sz < sizeof(elf64_ehdr_t)) {
+    kprintf_color(0xFFFF3333, "[ELF] exec: could not read interpreter '%s'\n",
+                  interp_path);
+    kfree(interp_buf);
+    return -1;
+  }
+
+  const elf64_ehdr_t *ieh = (const elf64_ehdr_t *)(void *)interp_buf;
+  if (ieh->e_magic != ELF_MAGIC || ieh->e_class != 2 ||
+      ieh->e_machine != 0x3E || ieh->e_type != ET_DYN ||
+      ieh->e_phentsize != sizeof(elf64_phdr_t) ||
+      ieh->e_phoff + (u64)ieh->e_phnum * ieh->e_phentsize > interp_sz) {
+    kprintf_color(0xFFFF3333,
+                  "[ELF] exec: interpreter '%s' is not valid ET_DYN ELF\n",
+                  interp_path);
+    kfree(interp_buf);
+    return -1;
+  }
+
+  u64 *user_pml4 = vmm_create_user_pml4();
+  if (!user_pml4) {
+    kfree(interp_buf);
+    return -1;
+  }
+
+  u64 main_bias = (ehdr->e_type == ET_DYN) ? USER_ELF_DYN_BASE : 0;
+  if (!elf_map_pt_loads(user_pml4, ehdr, base, main_bias)) {
+    vmm_destroy_user_pml4(user_pml4);
+    kfree(interp_buf);
+    return -1;
+  }
+
+  u64 main_load_base = main_bias + elf_min_load_vaddr(ehdr, base);
+  if (!elf_apply_relocations(user_pml4, ehdr, base, file_size,
+                             main_load_base, main_bias)) {
+    vmm_destroy_user_pml4(user_pml4);
+    kfree(interp_buf);
+    return -1;
+  }
+
+  u64 max_main = elf_max_load_end(ehdr, base, main_bias);
+  u64 interp_bias = elf_align_up(max_main + ELF_INTERP_GAP_BYTES, PAGE_SIZE);
+
+  if (!elf_map_pt_loads(user_pml4, ieh, interp_buf, interp_bias)) {
+    vmm_destroy_user_pml4(user_pml4);
+    kfree(interp_buf);
+    return -1;
+  }
+
+  u64 interp_min = elf_min_load_vaddr(ieh, interp_buf);
+  u64 interp_load_base = interp_bias + interp_min;
+  if (!elf_apply_relocations(user_pml4, ieh, interp_buf, interp_sz,
+                             interp_load_base, interp_bias)) {
+    vmm_destroy_user_pml4(user_pml4);
+    kfree(interp_buf);
+    return -1;
+  }
+
+  u64 at_phdr = 0;
+  if (!elf_phdr_runtime_addr(ehdr, base, main_bias, &at_phdr)) {
+    vmm_destroy_user_pml4(user_pml4);
+    kfree(interp_buf);
+    return -1;
+  }
+
+  if (!allocate_user_stack(user_pml4)) {
+    vmm_destroy_user_pml4(user_pml4);
+    kfree(interp_buf);
+    return -1;
+  }
+
+  u64 user_rsp = build_initial_stack_ldso(
+      user_pml4, name, argc, argv, envp, execfn ? execfn : name, at_phdr,
+      ehdr->e_phentsize, ehdr->e_phnum, main_bias + ehdr->e_entry,
+      interp_load_base);
+  if (!user_rsp) {
+    vmm_destroy_user_pml4(user_pml4);
+    kfree(interp_buf);
+    return -1;
+  }
+
+  out->pml4 = user_pml4;
+  out->entry = interp_bias + ieh->e_entry;
+  out->rsp = user_rsp;
+  out->argc = (argc <= 0) ? 1 : (argc > 16 ? 16 : (u64)argc);
+  out->argv = 0;
+  out->envp = 0;
+  out->brk_start = elf_align_up(max_main, PAGE_SIZE) + PAGE_SIZE;
+  out->ldso_entry = true;
+
+  kprintf_color(0xFF88DDFF,
+                "[ELF] exec PT_INTERP '%s' bias=0x%lx entry=0x%lx\n",
+                interp_path, interp_bias, out->entry);
+  kfree(interp_buf);
+  return 0;
+}
+
 i64 elf_spawn_argv_envp(const void *file_data, usize file_size, const char *name,
                         int argc, const char *const argv[],
                         const char *const envp[]) {
@@ -694,6 +940,8 @@ i64 elf_spawn_argv_envp(const void *file_data, usize file_size, const char *name
         return -1;
       }
       t->pml4 = user_pml4;
+      t->brk_start = elf_align_up(max_main, PAGE_SIZE) + PAGE_SIZE;
+      t->brk_current = t->brk_start;
 
       kprintf_color(0xFF00FF88,
                     "[ELF] User process '%s' spawned via ld.so (id=%lu "
@@ -771,6 +1019,9 @@ i64 elf_spawn_argv_envp(const void *file_data, usize file_size, const char *name
         return -1;
     }
     t->pml4 = user_pml4;
+    t->brk_start = elf_align_up(elf_max_load_end(ehdr, base, 0), PAGE_SIZE) +
+                   PAGE_SIZE;
+    t->brk_current = t->brk_start;
 
     kprintf_color(0xFF00FF88, "[ELF] User process '%s' spawned (id=%lu entry=0x%lx)\n",
                   name, t->id, ehdr->e_entry);
@@ -953,6 +1204,96 @@ i64 elf_spawn_resolved_argv_envp(const char *name, int argc,
     for (int i = 1; i < capped; i++) fallback[i] = argv[i];
     fallback[capped] = NULL;
     return elf_spawn_path_argv_envp(resolved, capped, fallback, envp);
+}
+
+i64 elf_exec_resolved_argv_envp(const char *name, int argc,
+                                const char *const argv[],
+                                const char *const envp[]) {
+    char resolved[256];
+    if (!elf_resolve_executable(name, resolved, sizeof(resolved))) {
+        kprintf("[ELF] exec resolve executable '%s' failed\n",
+                name ? name : "(null)");
+        return -1;
+    }
+
+    const char *exec_argv[17];
+    if (argc <= 0 || !argv) {
+        exec_argv[0] = resolved;
+        exec_argv[1] = NULL;
+        argc = 1;
+    } else {
+        int capped = argc > 16 ? 16 : argc;
+        exec_argv[0] = resolved;
+        for (int i = 1; i < capped; i++) exec_argv[i] = argv[i];
+        exec_argv[capped] = NULL;
+        argc = capped;
+    }
+
+    usize size = 0;
+    u8 *buf = elf_read_whole_file(resolved, &size);
+    if (!buf) return -1;
+
+    const elf64_ehdr_t *ehdr = (const elf64_ehdr_t *)(void *)buf;
+    const bool has_interp =
+        size >= sizeof(*ehdr) && ehdr->e_magic == ELF_MAGIC &&
+        ehdr->e_class == 2 && ehdr->e_phentsize == sizeof(elf64_phdr_t) &&
+        ehdr->e_phoff + (u64)ehdr->e_phnum * ehdr->e_phentsize <= size &&
+        elf_find_phdr(ehdr, buf, PT_INTERP) != NULL;
+
+    elf_exec_image_t img;
+    i64 rc = has_interp
+                 ? elf_prepare_dynamic_image(buf, size, elf_basename(resolved),
+                                             argc, exec_argv, envp, resolved,
+                                             &img)
+                 : elf_prepare_static_image(buf, size, elf_basename(resolved),
+                                            argc, exec_argv, envp, &img);
+    if (rc < 0) {
+        kfree(buf);
+        return rc;
+    }
+
+    task_t *cur = sched_current();
+    if (!cur) {
+        vmm_destroy_user_pml4(img.pml4);
+        kfree(buf);
+        return -1;
+    }
+
+    if (cur->thread_group && cur->thread_group != cur->id) {
+        kprintf_color(0xFFFFAA33,
+                      "[ELF] exec blocked from non-leader thread pid=%lu tgid=%lu\n",
+                      cur->id, cur->thread_group);
+        vmm_destroy_user_pml4(img.pml4);
+        kfree(buf);
+        return -38;
+    }
+
+    u64 *old_pml4 = cur->pml4;
+    cur->pml4 = img.pml4;
+    vmm_destroy_task_vmas(cur);
+    cur->brk_start = img.brk_start;
+    cur->brk_current = img.brk_start;
+    cur->signal_pending = 0;
+    cur->sig_mask = 0;
+    for (u32 i = 0; i < 32; i++) cur->sig_handlers[i] = NULL;
+    cur->tls_base = 0;
+    cur->thread_group = 0;
+    memset(cur->name, 0, sizeof(cur->name));
+    strncpy(cur->name, elf_basename(resolved), sizeof(cur->name) - 1);
+
+    u64 phys = vmm_virt_hhdm_to_phys(img.pml4);
+    __asm__ volatile("mov %0, %%cr3" :: "r"(phys) : "memory");
+    if (old_pml4 && old_pml4 != img.pml4) {
+        vmm_destroy_user_pml4(old_pml4);
+    }
+
+    kprintf_color(0xFF00FF88,
+                  "[ELF] execve '%s' pid=%lu entry=0x%lx rsp=0x%lx argc=%lu\n",
+                  resolved, cur->id, img.entry, img.rsp, img.argc);
+    kfree(buf);
+    if (img.ldso_entry)
+        enter_user_mode_ldso(img.entry, img.rsp);
+    enter_user_mode(img.entry, img.rsp, img.argc, img.argv, img.envp);
 }
 
 i64 elf_spawn_path_argv(const char *path, int argc, const char *const argv[]) {

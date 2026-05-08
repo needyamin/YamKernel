@@ -929,6 +929,32 @@ void fd_free(int fd) {
     if (t) t->fd_table[fd] = NULL;
 }
 
+static void file_release(file_t *f) {
+    if (!f) return;
+    if (f->ref_count > 1) {
+        f->ref_count--;
+        return;
+    }
+    if (f->fops && f->fops->close) f->fops->close(f);
+    kfree(f);
+}
+
+void vfs_task_retain_fds(task_t *t) {
+    if (!t) return;
+    for (int i = 0; i < 128; i++) {
+        if (t->fd_table[i]) t->fd_table[i]->ref_count++;
+    }
+}
+
+void vfs_task_close_fds(task_t *t) {
+    if (!t) return;
+    for (int i = 0; i < 128; i++) {
+        file_t *f = t->fd_table[i];
+        t->fd_table[i] = NULL;
+        file_release(f);
+    }
+}
+
 static int fd_alloc_from(file_t *file, int start) {
     task_t *t = sched_current();
     if (!t) return -1;
@@ -1310,12 +1336,7 @@ int sys_close(int fd) {
     file_t *f = fd_get(fd);
     if (!f) return -1;
     fd_free(fd);
-    if (f->ref_count > 1) {
-        f->ref_count--;
-        return 0;
-    }
-    if (f->fops && f->fops->close) f->fops->close(f);
-    kfree(f);
+    file_release(f);
     return 0;
 }
 

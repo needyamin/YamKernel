@@ -64,6 +64,8 @@ extern void *g_authd_module;
 extern usize g_authd_module_size;
 extern void *g_hello_module;
 extern usize g_hello_module_size;
+extern void *g_exec_test_module;
+extern usize g_exec_test_module_size;
 
 static bool init_write_file(const char *path, const void *data, usize size) {
     int fd = sys_open(path, 0x40 | 0x200 | 0x2);
@@ -102,6 +104,13 @@ void init_task(void *arg) {
         }
         kprintf_color(0xFF888888,
                       "[INIT] Skipping hello auto-run during boot (userspace stability mode)\n");
+    }
+    if (g_exec_test_module) {
+        initrd_register("/bin/exec-test", g_exec_test_module,
+                        g_exec_test_module_size, false);
+        kprintf_color(0xFF00FF88,
+                      "[INIT] Registered /bin/exec-test from boot module (%lu bytes)\n",
+                      (u64)g_exec_test_module_size);
     }
 
     /* Mount default filesystems */

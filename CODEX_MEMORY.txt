@@ -1,10 +1,10 @@
-YamOS Codex Memory — read first every session; keep this file lean.
+YamOS Codex Memory - read first every session; keep this file lean.
 
 Positioning
 -----------
-YamOS is an exceptional (not “experimental toy”) x86_64 OS: YamKernel graph hybrid,
-Limine boot, YamGraph resource graph, kernel-first desktop/services. Marketing tone:
-ambitious engineering, honest gaps—see README “Not Complete Yet”.
+YamOS is an exceptional, ambitious x86_64 OS: YamKernel graph hybrid,
+Limine boot, YamGraph resource graph, kernel-first desktop/services. Tone:
+ambitious engineering with honest gaps. See README "Not Complete Yet".
 
 Repo / build
 ------------
@@ -12,11 +12,13 @@ Root: C:\laragon\www\YamOS  |  WSL: /mnt/c/laragon/www/YamOS
 Build: wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"
 Verify: powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify
 Artifacts: build/yamkernel.iso  |  build/verify.log
+Current environment caveat: this session's Windows host reports no "Ubuntu" WSL
+distro and no native make/gcc/clang, so recent changes are source-reviewed only.
 
 Rules
 -----
-- Kernel/OS foundations before app theater: no fake runtimes, stub installers, or
-  userland papering over missing kernel ABI.
+- Kernel/OS foundations before app theater: no fake runtimes, stub installers,
+  or userland papering over missing kernel ABI.
 - If a feature needs kernel support, implement kernel first.
 - Do not run raw qemu-system-x86_64; use test.ps1 helpers.
 
@@ -24,29 +26,42 @@ Architecture (primary paths)
 ----------------------------
 main/shell/init: src/kernel/main.c, src/kernel/shell.c, src/os/bin/init.c
 ELF/VFS/syscalls: src/fs/elf.c, src/fs/vfs.c, src/cpu/syscall.c,
-  ABI header src/kernel/api/syscall.h (SYS_MAX=94; syscall numbers + OS flags)
+  ABI header src/kernel/api/syscall.h (SYS_MAX=95; syscall numbers + OS flags)
 Poll: src/fs/poll.h, sys_poll in vfs.c
 Drivers: src/drivers/ (pci.c, driver_manager, block, e1000, xhci, ahci, virtio-blk)
 Net: src/net/  |  Mem: src/mem/  |  Compositor: src/os/services/compositor/
 Apps: src/os/services/app_registry/  |  libyam: src/os/lib/libyam/  |  libc: src/os/lib/libc/
 
-Current capability (summary — detail drifts; verify in tree)
--------------------------------------------------------------
-- QEMU path: PCI inventory, FAT32 block-backed mounts under /mnt, VFS promotion of
-  persistent dirs when vd0 present, e1000 + DHCP/DNS/TCP/HTTP verified in verify.log.
+Current capability (summary - detail drifts; verify in tree)
+------------------------------------------------------------
+- QEMU path: PCI inventory, FAT32 block-backed mounts under /mnt, VFS promotion
+  of persistent dirs when vd0 present, e1000 + DHCP/DNS/TCP/HTTP.
 - TLS: store bootstrap + ClientHello probe; full HTTPS handshake not done.
+- execve foundation in progress: SYS_EXECVE routes to elf_exec_resolved_argv_envp,
+  static ELF exec works in source, PT_INTERP exec maps main+interpreter, builds
+  auxv stack, and enters via enter_user_mode_ldso. Needs build/boot tests, more
+  relocations, TLS program-header support, and real dynamic-linker tests.
+- Process/memory cleanup improved: vmm_destroy_user_pml4 walks full user page
+  tables and uses pmm_page_unref for mapped pages; execve frees replaced pml4.
+  task_t has per-process brk_start/brk_current; spawn/exec seed brk from ELF end;
+  sys_brk is no longer global and shrink unmaps heap pages.
+- FD lifetime improved: fork/thread creation retain copied fd_table entries;
+  waitpid reaping closes child fd table and releases VMA metadata, non-shared
+  pml4, FPU state, and task object. Kernel stack free, FD_CLOEXEC, full thread
+  group cleanup, and YamGraph-node cleanup still pending.
 - Threads/signals/futex/pthread pieces and SYS_SELECT/SYS_FCNTL nonblocking I/O:
   see syscall.h + Phase notes in README.
 - Desktop: compositor-native Wayland-style UI, multi-user, File Manager, browser
-  (plain HTTP path), settings windows—see README “Current Desktop Behavior”.
-- Major gaps: execve/dynamic linker, full TLS, portable Linux userspace, browser-
-  class stack—README lists foundations still required.
+  plain-HTTP path, and settings windows. See README "Current Desktop Behavior".
+- Major gaps: complete dynamic linker/TLS ABI, full signals, full TLS/HTTPS,
+  portable Linux userspace, browser-class stack.
 
 Roadmap (compressed)
 --------------------
-Phases 1–2 complete; Phase 3 in progress. Open work includes full TLS/HTTPS,
-ypkg, sigframe/ucontext, ELF dynamic linker, execve/fork/Unix sockets,
-virtio-gpu/Mesa path, libc port, eventual Chromium-class browser—see README table.
+Phases 1-2 complete; Phase 3 in progress. Current local plan in plan.txt starts
+with process ABI: execve, PT_INTERP, memory/fd lifetime, then TLS program
+headers, sigframe/ucontext, fuller dynamic linker, full TLS/HTTPS, ypkg,
+fork/Unix sockets, virtio-gpu/Mesa path, libc port, eventual Chromium-class browser.
 
 Agent usage note
 ----------------

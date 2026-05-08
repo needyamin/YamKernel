@@ -12,6 +12,7 @@
 
 static u64 g_hhdm_offset = 0;
 static u64 g_next_kernel_stack = 0xFFFFE10000000000ULL;
+#define USER_BRK_DEFAULT 0x400000ULL
 
 /* ---- Helpers ---- */
 void *vmm_phys_to_virt(u64 phys) { return (void *)(phys + g_hhdm_offset); }
@@ -280,37 +281,61 @@ bool vmm_handle_cow_fault(u64 *pml4, u64 fault_addr) {
     return true;
 }
 
+static void release_user_mapping(u64 entry, bool huge) {
+    if (!(entry & VMM_FLAG_PRESENT)) return;
+    if (entry & VMM_FLAG_DONT_FREE) return;
+
+    u64 phys = entry & (huge ? 0x000FFFFFFFE00000ULL : 0x000FFFFFFFFFF000ULL);
+    if (!phys) return;
+    pmm_page_unref(phys);
+}
+
+static inline u64 page_align_up(u64 x) {
+    return (x + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+}
+
+static void free_pt(u64 *pt) {
+    for (int i = 0; i < 512; i++) {
+        release_user_mapping(pt[i], false);
+    }
+}
+
 static void free_pd(u64 *pd) {
     for (int i = 0; i < 512; i++) {
-        if (pd[i] & VMM_FLAG_PRESENT) {
-            if (!(pd[i] & VMM_FLAG_HUGE) && !(pd[i] & VMM_FLAG_DONT_FREE)) {
-                u64 phys = pd[i] & 0x000FFFFFFFFFF000ULL;
-                pmm_free_page(phys);
-            }
+        if (!(pd[i] & VMM_FLAG_PRESENT)) continue;
+
+        u64 phys = pd[i] & 0x000FFFFFFFFFF000ULL;
+        if (pd[i] & VMM_FLAG_HUGE) {
+            release_user_mapping(pd[i], true);
+            continue;
         }
+
+        u64 *pt = (u64 *)vmm_phys_to_virt(phys);
+        free_pt(pt);
+        pmm_free_page(phys);
     }
 }
 
 static void free_pdpt(u64 *pdpt) {
     for (int i = 0; i < 512; i++) {
-        if (pdpt[i] & VMM_FLAG_PRESENT) {
-            u64 phys = pdpt[i] & 0x000FFFFFFFFFF000ULL;
-            u64 *pd = (u64 *)vmm_phys_to_virt(phys);
-            free_pd(pd);
-            pmm_free_page(phys);
-        }
+        if (!(pdpt[i] & VMM_FLAG_PRESENT)) continue;
+
+        u64 phys = pdpt[i] & 0x000FFFFFFFFFF000ULL;
+        u64 *pd = (u64 *)vmm_phys_to_virt(phys);
+        free_pd(pd);
+        pmm_free_page(phys);
     }
 }
 
 void vmm_destroy_user_pml4(u64 *pml4) {
     if (!pml4) return;
     for (int i = 0; i < 256; i++) {
-        if (pml4[i] & VMM_FLAG_PRESENT) {
-            u64 phys = pml4[i] & 0x000FFFFFFFFFF000ULL;
-            u64 *pdpt = (u64 *)vmm_phys_to_virt(phys);
-            free_pdpt(pdpt);
-            pmm_free_page(phys);
-        }
+        if (!(pml4[i] & VMM_FLAG_PRESENT)) continue;
+
+        u64 phys = pml4[i] & 0x000FFFFFFFFFF000ULL;
+        u64 *pdpt = (u64 *)vmm_phys_to_virt(phys);
+        free_pdpt(pdpt);
+        pmm_free_page(phys);
     }
     pmm_free_page(vmm_virt_hhdm_to_phys(pml4));
 }
@@ -426,28 +451,50 @@ u64 sys_brk(u64 new_brk) {
     task_t *t = sched_current();
     if (!t) return 0;
 
-    /* Program break defaults to end of loaded segments + some gap */
-    static u64 current_brk = 0x400000ULL; /* Default 4MB */
-    if (new_brk == 0) return current_brk;
-    if (new_brk < 0x400000ULL) return current_brk; /* Don't allow shrinking below base */
+    if (t->brk_start == 0) {
+        t->brk_start = USER_BRK_DEFAULT;
+        t->brk_current = USER_BRK_DEFAULT;
+    }
+    if (new_brk == 0) return t->brk_current;
+    if (new_brk < t->brk_start) return t->brk_current;
 
-    u64 old_brk = current_brk;
+    u64 old_brk = t->brk_current;
     if (new_brk > old_brk) {
-        /* Grow: map new pages */
-        u64 start = (old_brk + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-        u64 end = (new_brk + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+        u64 start = page_align_up(old_brk);
+        u64 end = page_align_up(new_brk);
         if (t->pml4) {
             for (u64 va = start; va < end; va += PAGE_SIZE) {
+                if (vmm_virt_to_phys(t->pml4, va)) continue;
                 u64 phys = pmm_alloc_page();
-                if (!phys) return current_brk;
+                if (!phys) return t->brk_current;
                 vmm_map_page(t->pml4, va, phys,
                     VMM_FLAG_PRESENT | VMM_FLAG_WRITE | VMM_FLAG_USER | VMM_FLAG_NX);
                 memset(vmm_phys_to_virt(phys), 0, PAGE_SIZE);
             }
         }
+    } else if (new_brk < old_brk && t->pml4) {
+        u64 start = page_align_up(new_brk);
+        u64 end = page_align_up(old_brk);
+        for (u64 va = start; va < end; va += PAGE_SIZE) {
+            u64 phys = vmm_virt_to_phys(t->pml4, va);
+            if (!phys) continue;
+            vmm_unmap_page(t->pml4, va);
+            pmm_page_unref(phys & ~0xFFFULL);
+        }
     }
-    current_brk = new_brk;
-    return current_brk;
+    t->brk_current = new_brk;
+    return t->brk_current;
+}
+
+void vmm_destroy_task_vmas(task_t *t) {
+    if (!t) return;
+    vma_t *v = (vma_t *)t->vma_head;
+    while (v) {
+        vma_t *next = v->next;
+        kfree(v);
+        v = next;
+    }
+    t->vma_head = NULL;
 }
 
 /* ---- Demand Paging ---- */

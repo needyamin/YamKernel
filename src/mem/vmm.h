@@ -48,6 +48,7 @@
 #define VMA_FLAG_HUGEPAGE   0x40   /* Use 2MB huge pages */
 
 struct file;
+struct task;
 
 typedef struct vma {
     u64         start;
@@ -94,6 +95,7 @@ void *sys_mmap(void *addr, usize length, u32 prot, u32 flags, int fd, usize offs
 int   sys_munmap(void *addr, usize length);
 int   sys_mprotect(void *addr, usize length, u32 prot);
 u64   sys_brk(u64 new_brk);
+void  vmm_destroy_task_vmas(struct task *t);
 
 /* Demand paging: called from #PF handler to lazily allocate pages */
 bool vmm_handle_page_fault(u64 fault_addr, u64 error_code);

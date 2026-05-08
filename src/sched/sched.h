@@ -84,6 +84,8 @@ typedef struct task {
     struct file  *fd_table[128];
     char          cwd[256];
     struct vma   *vma_head;
+    u64           brk_start;
+    u64           brk_current;
     u64          *pml4;
 
     /* Cgroup */

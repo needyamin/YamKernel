@@ -74,6 +74,7 @@ WALLPAPER_BIN := $(BUILD_DIR)/wallpaper.bin
 # User-space OS services
 AUTHD_ELF   := $(BUILD_DIR)/authd.elf
 HELLO_ELF   := $(BUILD_DIR)/hello.elf
+EXEC_TEST_ELF := $(BUILD_DIR)/exec-test.elf
 # User-space libc
 LIBC_DIR := src/os/lib/libc
 LIBC_SRCS := $(LIBC_DIR)/stdio.c $(LIBC_DIR)/stdlib.c $(LIBC_DIR)/string.c $(LIBC_DIR)/ctype.c $(LIBC_DIR)/posix.c $(LIBC_DIR)/time.c $(LIBC_DIR)/wchar.c $(LIBC_DIR)/pthread.c $(LIBC_DIR)/signal.c
@@ -153,6 +154,11 @@ $(HELLO_ELF): src/os/apps/hello.c src/os/apps/user.ld $(LIBC_OBJS)
 	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/hello.c $(LIBC_OBJS)
 	@echo "[APP]  $@"
 
+$(EXEC_TEST_ELF): src/os/apps/exec_test.c src/os/apps/user.ld $(LIBC_OBJS)
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) -nostdlib -Wl,-T,src/os/apps/user.ld -o $@ src/os/apps/exec_test.c $(LIBC_OBJS)
+	@echo "[APP]  $@"
+
 $(DISK_IMG):
 	@mkdir -p $(dir $@)
 	truncate -s 32M $@
@@ -169,7 +175,7 @@ $(DISK_IMG):
 #  ISO Creation (Limine-based bootable ISO)
 # ============================================================================
 
-$(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN) $(AUTHD_ELF) $(HELLO_ELF)
+$(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN) $(AUTHD_ELF) $(HELLO_ELF) $(EXEC_TEST_ELF)
 	@echo "[ISO]  Building bootable ISO..."
 	@rm -rf $(ISO_DIR)
 	@mkdir -p $(ISO_DIR)/boot/limine
@@ -182,6 +188,7 @@ $(KERNEL_ISO): $(KERNEL_ELF) $(LOGO_BIN) $(WALLPAPER_BIN) $(AUTHD_ELF) $(HELLO_E
 	cp $(WALLPAPER_BIN) $(ISO_DIR)/boot/wallpaper.bin
 	cp $(AUTHD_ELF) $(ISO_DIR)/boot/authd.elf
 	cp $(HELLO_ELF) $(ISO_DIR)/boot/hello.elf
+	cp $(EXEC_TEST_ELF) $(ISO_DIR)/boot/exec-test.elf
 	
 	# Copy limine config
 	cp limine.conf $(ISO_DIR)/boot/limine/limine.conf

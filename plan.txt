@@ -1,0 +1,147 @@
+YamOS major implementation plan
+===============================
+
+Goal
+----
+
+Make YamOS feel powerful by strengthening the kernel and ABI foundations that
+modern software expects: real process replacement, dynamic loading, threads,
+signals, filesystems, TLS, package management, and multi-core execution.
+
+Rule
+----
+
+Do not fake capability in userland. If an app/runtime/package/browser needs a
+kernel feature, implement the kernel/ABI feature first and expose honest errors
+until it works.
+
+Phase 1: Real process replacement
+---------------------------------
+
+Status: started.
+
+Implement true execve for static ELF programs first.
+
+Tasks:
+- Add an ELF exec path that loads a new image into a fresh user address space.
+- Preserve the current task identity, fd table, cwd, parent/child relation, and
+  scheduler state.
+- Replace the current task pml4, reset user image state, and jump to the new
+  entry point without returning on success.
+- Return ENOSYS or another honest failure for dynamic/PT_INTERP exec until the
+  loader path is ready.
+- Add a user test program that calls execve("/bin/hello", argv, envp).
+- Wire the test program into the build/initrd and boot probe.
+
+Why this matters:
+execve is the core Unix process primitive. Without it, shells, installers,
+language runtimes, build tools, and service supervisors cannot behave normally.
+
+Phase 2: Dynamic ELF loader path
+--------------------------------
+
+Implement PT_INTERP, shared-library mapping, relocations, auxv, and TLS segment
+support well enough to run a small dynamically linked libc program.
+
+Tasks:
+- Promote ELF loading code into reusable "prepare image" helpers.
+- Support PT_INTERP during exec, not only spawn.
+- Add enough relocation support for the chosen small libc/dynamic linker.
+- Populate auxv with AT_PHDR, AT_PHENT, AT_PHNUM, AT_ENTRY, AT_BASE, AT_RANDOM,
+  AT_PAGESZ, and AT_EXECFN.
+- Add TLS program-header support and per-thread TLS initialization.
+
+Phase 3: Threads and signals
+----------------------------
+
+Make pthread/futex/signal behavior robust enough for real ports.
+
+Tasks:
+- Harden SYS_THREAD_CREATE/SYS_THREAD_EXIT lifetime and ownership.
+- Implement sigaction, sigprocmask, sigreturn, user signal frames, and restart
+  behavior for interrupted syscalls.
+- Define per-process vs per-thread signal targeting.
+- Stress test pthread mutexes, condvars, TLS keys, joins, exits, and signals.
+
+Phase 4: Filesystem and mmap compatibility
+------------------------------------------
+
+Build the file semantics modern tools require.
+
+Tasks:
+- Implement permissions with uid/gid/mode checks.
+- Add symlink/readlink, rmdir, file locks, richer stat metadata, and better
+  /dev and /proc behavior.
+- Implement file-backed mmap with MAP_PRIVATE/MAP_SHARED behavior.
+- Add corruption and persistence tests for FAT32-backed mounts.
+
+Phase 5: Networking and TLS
+---------------------------
+
+Move from early networking to real application networking.
+
+Tasks:
+- Complete socket options, shutdown, getpeername/getsockname, UDP fd support,
+  Unix sockets, and stronger poll/select readiness.
+- Harden TCP timeouts, retransmission, close states, and error reporting.
+- Finish mbedTLS HTTPS with certificate-chain validation, hostname checks,
+  secure randomness, and a real root store.
+
+Phase 6: Package manager
+------------------------
+
+Turn ypkg from a capability slice into an ecosystem foundation.
+
+Tasks:
+- Define signed repository metadata.
+- Verify metadata and package payload signatures.
+- Maintain an installed package database with file ownership.
+- Implement dependency resolution, install, upgrade, uninstall, rollback, and
+  transaction recovery.
+
+Phase 7: Multi-core and hardware expansion
+------------------------------------------
+
+Use modern hardware safely.
+
+Tasks:
+- Audit scheduler locks, address-space switching, run queue ownership, and TLB
+  shootdowns.
+- Enable multi-core task scheduling only after the audit passes.
+- Add virtio-net, virtio-gpu, NVMe, audio, Wi-Fi, and Bluetooth in that order of
+  foundation value.
+
+Current implementation slice
+----------------------------
+
+Start with static execve:
+
+1. Add elf_exec_resolved_argv_envp(). Status: implemented.
+2. Wire SYS_EXECVE to it. Status: implemented.
+3. Add PT_INTERP exec support. Status: first implementation added. execve now
+   maps the main ELF, maps the interpreter, builds a Linux-style argc/argv/envp
+   and auxv stack, and enters the loader through enter_user_mode_ldso().
+4. Add a focused execve boot/user test. Status: implemented as /bin/exec-test.
+5. Make old-image teardown CoW/refcount aware. Status: implemented in
+   vmm_destroy_user_pml4(), and execve now releases the replaced pml4.
+6. Build and fix compile/runtime issues. Status: blocked locally because the
+   Windows environment has no configured WSL distro and no native make/gcc/clang.
+7. Make sys_brk per-process instead of global. Status: implemented. task_t now
+   tracks brk_start/brk_current, exec/spawn seed the break from ELF load end,
+   and shrinking brk unmaps released heap pages.
+8. Reap child process memory on waitpid. Status: partially implemented.
+   waitpid now releases child VMA metadata, non-shared user pml4, FPU state,
+   and the task object. Kernel stack free support is still missing.
+9. Add fd-table lifetime handling. Status: implemented. fork/thread creation now
+   retains copied file descriptors, and waitpid reaping closes the child fd
+   table so files/sockets can release their backing resources.
+
+Known follow-up from this slice
+-------------------------------
+
+- Add an automated boot probe that runs /bin/exec-test and checks that
+  /bin/hello runs in the same PID after exec.
+- Harden PT_INTERP exec with more relocation types, TLS program-header support,
+  and real dynamic-linker/runtime tests.
+- Add remaining process-exit cleanup for kernel stacks, FD_CLOEXEC semantics,
+  thread groups, and YamGraph nodes.

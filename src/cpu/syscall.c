@@ -381,9 +381,10 @@ static int copy_user_string_vector(u64 uargv, const char *fallback,
     if (!argv || max_argc <= 0) return 0;
     memset(argv, 0, (usize)max_argc * sizeof(char *));
     if (!uargv) {
+        if (!fallback) return 0;
         argv[0] = (char *)kmalloc(256);
         if (!argv[0]) return 0;
-        strncpy(argv[0], fallback ? fallback : "app", 255);
+        strncpy(argv[0], fallback, 255);
         argv[0][255] = 0;
         return 1;
     }
@@ -400,9 +401,10 @@ static int copy_user_string_vector(u64 uargv, const char *fallback,
         copy_user_string(argv[argc], 256, uptr);
     }
     if (argc == 0) {
+        if (!fallback) return 0;
         argv[0] = (char *)kmalloc(256);
         if (!argv[0]) return 0;
-        strncpy(argv[0], fallback ? fallback : "app", 255);
+        strncpy(argv[0], fallback, 255);
         argv[0][255] = 0;
         argc = 1;
     }
@@ -410,11 +412,19 @@ static int copy_user_string_vector(u64 uargv, const char *fallback,
 }
 
 static i64 sys_execve_user(u64 upath, u64 uargv, u64 uenvp) {
-    (void)upath;
-    (void)uargv;
-    (void)uenvp;
-    kprintf("[EXECVE] stub: replace current process image not implemented (Track B2)\n");
-    return -38;
+    char path[256];
+    char *argv[16];
+    char *envp[16];
+    copy_user_string(path, sizeof(path), upath);
+    if (!path[0]) return -1;
+    int argc = copy_user_string_vector(uargv, path, argv, 16);
+    int envc = copy_user_string_vector(uenvp, NULL, envp, 16);
+    i64 rc = elf_exec_resolved_argv_envp(path, argc,
+                                         (const char *const *)argv,
+                                         envc > 0 ? (const char *const *)envp : NULL);
+    free_user_string_vector(argv, argc);
+    free_user_string_vector(envp, envc);
+    return rc;
 }
 
 static i64 sys_spawn_user(u64 upath, u64 uargv, u64 uenvp) {

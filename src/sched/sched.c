@@ -10,6 +10,7 @@
 #include "../mem/slab.h"
 #include "../mem/vmm.h"
 #include "../mem/pmm.h"
+#include "../fs/vfs.h"
 #include "../lib/spinlock.h"
 #include "../lib/kprintf.h"
 #include "../lib/string.h"
@@ -155,6 +156,8 @@ task_t *sched_spawn(const char *name, void (*entry)(void *), void *arg, u8 prio)
     t->need_resched = 0;
     t->start_tick = this_cpu()->ticks;
     t->rss_pages = 0;
+    t->brk_start = 0x400000ULL;
+    t->brk_current = t->brk_start;
     t->cgroup = NULL;
     memset(t->name, 0, sizeof(t->name));
     for (u32 i = 0; i < sizeof(t->name) - 1 && name[i]; i++) t->name[i] = name[i];
@@ -270,6 +273,8 @@ void sched_init(void) {
     boot->cpu_affinity = ~0ULL;
     boot->name[0] = 'b'; boot->name[1] = 's'; boot->name[2] = 'p';
     strncpy(boot->cwd, "/", sizeof(boot->cwd) - 1);
+    boot->brk_start = 0x400000ULL;
+    boot->brk_current = boot->brk_start;
 
     u32 fpu_sz_boot = cpuid_get_info()->xsave_size;
     if (fpu_sz_boot == 0) fpu_sz_boot = 512;
@@ -506,6 +511,8 @@ i64 sys_fork(void) {
     u64 stack_offset = parent->rsp - (u64)parent->stack;
     child->rsp = (u64)child->stack + stack_offset;
 
+    vfs_task_retain_fds(child);
+
     /* Add child to parent */
     if (parent->child_count < MAX_CHILDREN)
         parent->children[parent->child_count++] = child;
@@ -536,12 +543,23 @@ i64 sched_waitpid(i64 pid, i32 *status, u32 options) {
                 i64 ret = (i64)child->id;
                 if (child->state == TASK_ZOMBIE && total_tasks > 0) total_tasks--;
                 child->state = TASK_DEAD;
+                vmm_destroy_task_vmas(child);
+                if (child->pml4 && child->pml4 != cur->pml4) {
+                    vmm_destroy_user_pml4(child->pml4);
+                    child->pml4 = NULL;
+                }
+                if (child->fpu_state) {
+                    kfree(child->fpu_state);
+                    child->fpu_state = NULL;
+                }
+                vfs_task_close_fds(child);
                 /* Remove from children list */
                 cur->children[i] = cur->children[cur->child_count - 1];
                 cur->children[cur->child_count - 1] = NULL;
                 cur->child_count--;
                 kprintf("[SCHED] reaped child pid=%ld status=0x%x parent=%lu\n",
                         ret, wait_status, cur->id);
+                kmem_cache_free(task_cache, child);
                 return ret;
             }
         }
@@ -685,6 +703,8 @@ task_t *sched_thread_create(const char *name, u64 entry, u64 stack_top, u64 arg,
     *--sp = 0x202;              /* rflags (for context_switch's popfq) */
     
     child->rsp = (u64)sp;
+
+    vfs_task_retain_fds(child);
 
     /* Add child to parent */
     if (parent->child_count < MAX_CHILDREN)

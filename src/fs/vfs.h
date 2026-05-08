@@ -12,6 +12,7 @@
 struct file;
 struct inode;
 struct dentry;
+struct task;
 
 typedef struct file_operations {
     isize (*read)(struct file *file, void *buf, usize count);
@@ -66,6 +67,8 @@ void vfs_unmount(const char *mount_point);
 int fd_alloc(file_t *file);
 file_t *fd_get(int fd);
 void fd_free(int fd);
+void vfs_task_retain_fds(struct task *t);
+void vfs_task_close_fds(struct task *t);
 
 int    sys_open(const char *pathname, u32 flags);
 int    sys_close(int fd);
