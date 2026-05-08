@@ -217,6 +217,8 @@ typedef struct {
     u64 lifetime_vma_lists_destroyed;
     u64 lifetime_fd_tables_closed;
     u64 lifetime_graph_nodes_destroyed;
+    u64 lifetime_orphans_detached;
+    u64 lifetime_detached_tasks_reaped;
 } yam_sched_info_t;
 
 typedef struct {

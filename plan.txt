@@ -8,11 +8,12 @@ Date: 2026-05-09
 Scope: process ABI, execve, fd lifetime, task cleanup, mmap, signals, threads,
 and the next steps that make YamOS feel powerful in current years.
 
-Local verification caveat:
-The current Windows environment cannot run the normal verify path because the
-configured "Ubuntu" WSL distro is missing, and no native make/gcc/clang toolchain
-is available. Recent kernel changes are source-reviewed but still need a real
-build and boot run.
+Local verification status:
+The normal verify path is available in this session. On 2026-05-09,
+`powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify` built the
+kernel/ISO and bounded QEMU boot reached userspace. The remaining gap is not
+basic compilation; it is runtime proof for /bin/exec-test behavior and
+orphan/deferred cleanup counters under targeted task-exit scenarios.
 
 Core rule
 ---------
@@ -30,11 +31,11 @@ What the investigation found
    main ELF plus interpreter, builds argv/envp/auxv, seeds brk, switches pml4,
    and jumps into user mode.
 
-2. The exec path is powerful but not proven.
-   It needs compile fixes, boot testing, and failure-path testing. The code
-   should prove that success never returns, failure keeps the old process alive,
-   PID/cwd/fd table behavior is preserved correctly, and old mappings are
-   released safely.
+2. The exec path is powerful but not fully proven.
+   The current slice compiles and boots to userspace, but still needs targeted
+   exec-test and failure-path testing. The code should prove that success never
+   returns, failure keeps the old process alive, PID/cwd/fd table behavior is
+   preserved correctly, and old mappings are released safely.
 
 3. Dynamic linking is still shallow.
    The loader path has auxv and PT_INTERP structure, but relocation support is
@@ -50,10 +51,13 @@ What the investigation found
    waitpid reaping now releases child VMA metadata, non-shared user pml4, FPU
    state, fd table resources, kernel stack pages, YamGraph task nodes, and the
    task object. Forked tasks now receive cloned VMA metadata and their own
-   YamGraph node instead of inheriting the parent's node by memcpy. Missing
-   pieces remain: build/boot proof, orphan cleanup, and correct full
-   process-vs-thread ownership. Scheduler lifetime/cleanup counters are now
-   exposed through SYS_SCHED_INFO and the terminal `sched` command.
+   YamGraph node instead of inheriting the parent's node by memcpy. Basic
+   build/boot proof now passes; missing pieces remain: targeted cleanup-counter
+   boot tests and correct full process-vs-thread ownership. Scheduler lifetime
+   and cleanup counters are now exposed through SYS_SCHED_INFO and the terminal
+   `sched` command. Orphan handling now detaches children from exiting parents
+   and queues parentless dead tasks for deferred cleanup once they are no longer
+   active.
 
 6. FD lifetime is now real enough for exec work.
    fork/thread creation retains copied fd_table entries. waitpid closes child
@@ -101,13 +105,13 @@ Gate 0: Restore build and boot verification
 -------------------------------------------
 
 Goal:
-Get the normal verify path running again, then compile and boot the current
-source before adding more large features.
+Keep the normal verify path green, then use it for targeted process-lifetime
+runtime checks before adding more large features.
 
 Tasks:
-- Re-enable an Ubuntu WSL distro or provide an equivalent Linux build toolchain.
-- Run: powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify
-- Fix compile errors from the recent exec/fd/process lifetime work.
+- Run: powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify.
+- Fix compile errors from the recent exec/fd/process lifetime work if they
+  reappear.
 - Boot with the project helper, not raw qemu, and capture serial logs.
 - Promote build/boot failures into plan items instead of guessing.
 
@@ -117,6 +121,8 @@ Exit criteria:
 - Boot reaches userspace.
 - /bin/hello still runs.
 - /bin/exec-test is present in initrd.
+Status: achieved for basic bounded boot on 2026-05-09; targeted exec/orphan
+runtime assertions remain in later gates.
 
 Gate 1: Process lifetime closure
 --------------------------------
@@ -142,6 +148,13 @@ Tasks:
   VMA-list destruction, fd-table closure, and YamGraph node destruction. The
   counters are printed by sched_print_stats(), copied through SYS_SCHED_INFO,
   and visible in the compositor terminal with `sched`.
+- Define and implement orphan/dead-task cleanup for tasks that cannot be reaped
+  through the current parent waitpid path. Status: first source-level path
+  implemented. Exiting parents detach children; already-dead children and
+  parentless dead tasks are queued for deferred reaping; forced-dead runqueue
+  tasks are unlinked and cleaned instead of just dropping the task count. Shared
+  thread address spaces are retained conservatively until full thread-group
+  teardown exists.
 - Split "process-owned" resources from "thread-owned" resources:
   - process-owned: pml4, fd table references, cwd, brk, process signal state
   - thread-owned: kernel stack, user stack ownership, FPU state, tls_base,
@@ -151,8 +164,9 @@ Tasks:
 
 Exit criteria:
 - Reaping a process releases pml4, VMAs, fds, FPU state, kernel stack, YamGraph
-  node, and task object exactly once. Source path implemented; boot verification
-  still required.
+  node, and task object exactly once. Source path implemented; basic build/boot
+  passes, but targeted repeated fork/exec/wait counter verification is still
+  required.
 - Reaping a thread does not destroy the shared process address space. Source
   path now avoids destroying shared pml4/VMA metadata; thread-group semantics
   still need stronger policy.
@@ -277,17 +291,20 @@ Tasks:
 Immediate next implementation order
 -----------------------------------
 
-1. Fix the local build environment or run the verify command on a machine with
-   the Ubuntu WSL distro/toolchain installed.
-2. Compile and boot the current source.
-3. Fix all compile errors from the exec/fd/process cleanup slice.
-4. Build/boot verify the source-level process lifetime cleanup just added:
+1. Keep the current verify path green:
+   powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify
+2. Boot-run /bin/exec-test and capture whether exec succeeds, preserves PID/cwd,
+   and honors FD_CLOEXEC.
+3. Boot-run the terminal `sched` command before and after /bin/exec-test or a
+   fork/exec/wait loop and confirm cleanup counters move as expected.
+4. Stress the source-level process lifetime cleanup just added:
    vmm_free_kernel_stack(), centralized task cleanup, fork VMA metadata clone,
    and YamGraph task-node destruction.
-5. Boot-run the terminal `sched` command before and after /bin/exec-test or a
-   fork/exec/wait loop and confirm cleanup counters move as expected.
-6. Define and implement orphan/dead-task cleanup for tasks that cannot be
-   reaped through the current parent waitpid path.
+5. Boot-test orphan/deferred cleanup by forcing a task exit/kill path whose
+   parent does not call waitpid, then check `orphans` and `detached_reaped` in
+   the terminal `sched` output.
+6. Finish thread-group ownership rules so process-leader exit can tear down or
+   preserve shared address spaces deliberately instead of conservatively.
 7. Add /bin/exec-test boot assertions for same PID, cwd, fd inheritance, and
    FD_CLOEXEC.
 8. Only then continue PT_TLS and dynamic-loader relocation work.

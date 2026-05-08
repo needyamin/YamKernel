@@ -283,6 +283,12 @@ static void cmd_sched(void) {
               info.lifetime_task_objects_freed, info.total_switches);
     term_puts(line, COL_FG);
     term_newline();
+
+    ksnprintf(line, sizeof(line), "orphans: detached=%lu detached_reaped=%lu",
+              info.lifetime_orphans_detached,
+              info.lifetime_detached_tasks_reaped);
+    term_puts(line, COL_FG);
+    term_newline();
 }
 
 static void cmd_history(void) {

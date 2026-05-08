@@ -42,6 +42,7 @@ static const u32 nice_to_weight[40] = {
 
 /* Per-CPU run queues */
 static runqueue_t per_cpu_rq[MAX_CPUS];
+static task_t    *active_tasks[MAX_CPUS];
 static task_t    *sleep_head;
 static spinlock_t sleep_lock = SPINLOCK_INIT;
 static u64        next_id = 1;
@@ -57,8 +58,64 @@ static u64        lifetime_user_pml4s_destroyed = 0;
 static u64        lifetime_vma_lists_destroyed = 0;
 static u64        lifetime_fd_tables_closed = 0;
 static u64        lifetime_graph_nodes_destroyed = 0;
+static u64        lifetime_orphans_detached = 0;
+static u64        lifetime_detached_tasks_reaped = 0;
+static task_t    *deferred_reap_head = NULL;
+static spinlock_t deferred_reap_lock = SPINLOCK_INIT;
 
 #define TASK_GRAPH_NODE_INVALID ((u32)~0u)
+
+static bool sched_task_is_active(task_t *t) {
+    if (!t) return false;
+    for (u32 cpu = 0; cpu < MAX_CPUS; cpu++) {
+        if (active_tasks[cpu] == t) return true;
+    }
+    return false;
+}
+
+static bool sched_task_in_runqueue(task_t *t) {
+    if (!t) return false;
+    for (u32 cpu = 0; cpu < MAX_CPUS; cpu++) {
+        runqueue_t *rq = &per_cpu_rq[cpu];
+        u64 f = spin_lock_irqsave(&rq->lock);
+        for (u32 i = 0; i < rq->count; i++) {
+            if (rq->tasks[i] == t) {
+                spin_unlock_irqrestore(&rq->lock, f);
+                return true;
+            }
+        }
+        spin_unlock_irqrestore(&rq->lock, f);
+    }
+    return false;
+}
+
+static void sched_drop_task_count(task_t *t) {
+    if (!t || !t->accounted) return;
+    if (total_tasks > 0) total_tasks--;
+    t->accounted = 0;
+}
+
+static void sched_queue_deferred_reap(task_t *t) {
+    if (!t || t->reap_queued) return;
+    t->reap_queued = 1;
+    u64 f = spin_lock_irqsave(&deferred_reap_lock);
+    t->wait_next = deferred_reap_head;
+    deferred_reap_head = t;
+    spin_unlock_irqrestore(&deferred_reap_lock, f);
+}
+
+static void sched_unlink_from_parent(task_t *t) {
+    if (!t || !t->parent) return;
+    task_t *parent = t->parent;
+    for (u32 i = 0; i < parent->child_count; i++) {
+        if (parent->children[i] != t) continue;
+        parent->children[i] = parent->children[parent->child_count - 1];
+        parent->children[parent->child_count - 1] = NULL;
+        parent->child_count--;
+        break;
+    }
+    t->parent = NULL;
+}
 
 static void sched_destroy_task_resources(task_t *t,
                                          bool destroy_address_space,
@@ -105,6 +162,78 @@ static void sched_destroy_task_resources(task_t *t,
     if (free_object && task_cache) {
         lifetime_task_objects_freed++;
         kmem_cache_free(task_cache, t);
+    }
+}
+
+static bool sched_task_owns_address_space(task_t *t) {
+    return t && t->pml4 && t->thread_group == 0;
+}
+
+static void sched_reap_detached_dead_task(task_t *t, const char *reason) {
+    if (!t || t == this_cpu()->current || sched_task_is_active(t) ||
+        sched_task_in_runqueue(t)) {
+        sched_queue_deferred_reap(t);
+        return;
+    }
+
+    sched_unlink_from_parent(t);
+    sched_drop_task_count(t);
+    t->state = TASK_DEAD;
+    t->reap_queued = 0;
+    t->wait_next = NULL;
+    lifetime_tasks_reaped++;
+    lifetime_detached_tasks_reaped++;
+    kprintf("[SCHED] cleanup dead task pid=%lu reason=%s\n",
+            t->id, reason ? reason : "deferred");
+    sched_destroy_task_resources(t, sched_task_owns_address_space(t), true, true);
+}
+
+static void sched_reap_deferred_dead_tasks(void) {
+    task_t *list = NULL;
+    u64 f = spin_lock_irqsave(&deferred_reap_lock);
+    list = deferred_reap_head;
+    deferred_reap_head = NULL;
+    spin_unlock_irqrestore(&deferred_reap_lock, f);
+
+    while (list) {
+        task_t *next = list->wait_next;
+        list->wait_next = NULL;
+        list->reap_queued = 0;
+        if (sched_task_is_active(list)) {
+            sched_queue_deferred_reap(list);
+        } else {
+            sched_reap_detached_dead_task(list, "deferred");
+        }
+        list = next;
+    }
+}
+
+static void sched_orphan_children(task_t *parent) {
+    if (!parent || parent->child_count == 0) return;
+
+    bool shared_address_space = false;
+    for (u32 i = 0; i < parent->child_count; i++) {
+        task_t *child = parent->children[i];
+        if (!child) continue;
+        if (parent->pml4 && child->pml4 == parent->pml4)
+            shared_address_space = true;
+        child->parent = NULL;
+        lifetime_orphans_detached++;
+        if (child->state == TASK_ZOMBIE || child->state == TASK_DEAD) {
+            child->state = TASK_DEAD;
+            sched_drop_task_count(child);
+            if (!sched_task_in_runqueue(child))
+                sched_queue_deferred_reap(child);
+        }
+        parent->children[i] = NULL;
+    }
+    parent->child_count = 0;
+
+    if (shared_address_space) {
+        kprintf("[SCHED] pid=%lu exited with live shared-address children; retaining pml4 for thread-group cleanup\n",
+                parent->id);
+        parent->pml4 = NULL;
+        parent->vma_head = NULL;
     }
 }
 
@@ -278,6 +407,7 @@ task_t *sched_spawn(const char *name, void (*entry)(void *), void *arg, u8 prio)
     spin_unlock_irqrestore(&rq->lock, f);
 
     total_tasks++;
+    t->accounted = 1;
     lifetime_tasks_created++;
     kprintf("[SCHED] spawn '%s' id=%lu cpu=%u nice=%d w=%u rq_ready=%u rq_load=%lu\n",
             t->name, t->id, target_cpu, t->nice, t->weight, rq->count, rq->load_weight);
@@ -296,11 +426,13 @@ void sched_exit_current(i32 code) {
     task_t *cur = sched_current();
     if (!cur) return;
     cur->exit_code = code;
+    sched_orphan_children(cur);
     cur->state = cur->parent ? TASK_ZOMBIE : TASK_DEAD;
-    if (!cur->parent && total_tasks > 0) total_tasks--;
+    if (!cur->parent) {
+        sched_drop_task_count(cur);
+        sched_queue_deferred_reap(cur);
+    }
 }
-
-task_t *active_tasks[MAX_CPUS];
 
 void sched_kill_task(u64 id) {
     if (id == 0 || id == 1 || id == 2) return; /* don't kill init tasks */
@@ -308,8 +440,8 @@ void sched_kill_task(u64 id) {
         /* 1. Check if it's currently running on this CPU */
         task_t *active = active_tasks[cpu];
         if (active && active->id == id) {
-            active->state = TASK_DEAD;
-            /* Note: We rely on the timer interrupt to context switch it out */
+            active->signal_pending |= (1 << SIGKILL);
+            active->need_resched = 1;
         }
         
         /* 2. Check if it's waiting in the runqueue */
@@ -317,7 +449,7 @@ void sched_kill_task(u64 id) {
         u64 f = spin_lock_irqsave(&rq->lock);
         for (u32 i = 0; i < rq->count; i++) {
             if (rq->tasks[i]->id == id) {
-                rq->tasks[i]->state = TASK_DEAD;
+                rq->tasks[i]->signal_pending |= (1 << SIGKILL);
             }
         }
         spin_unlock_irqrestore(&rq->lock, f);
@@ -359,6 +491,7 @@ void sched_init(void) {
     this_cpu()->idle    = boot;
     active_tasks[0]     = boot;
     total_tasks = 1;
+    boot->accounted = 1;
     lifetime_tasks_created = 1;
 
     kprintf_color(0xFF00FF88, "[SCHED] Multi-Queue CFS v0.3.0 init OK (nice range %d..%d)\n",
@@ -423,19 +556,33 @@ static void switch_to(task_t *next) {
 void sched_yield(void) {
     if (!sched_enabled) return;
     cli();
+    sched_reap_deferred_dead_tasks();
     u32 cpu = 0; /* BSP for now */
     runqueue_t *rq = &per_cpu_rq[cpu];
     spin_lock(&rq->lock);
     task_t *cur = this_cpu()->current;
     task_t *next = rq_pick_next(rq);
+    task_t *dead_picked[16];
+    u32 dead_count = 0;
     
     /* Skip tasks that were killed while waiting in the queue */
     while (next && next->state == TASK_DEAD) {
-        total_tasks--;
+        if (next->reap_queued) {
+            next = rq_pick_next(rq);
+            continue;
+        }
+        if (dead_count < 16) dead_picked[dead_count++] = next;
+        else sched_queue_deferred_reap(next);
         next = rq_pick_next(rq);
     }
     
-    if (!next) { spin_unlock(&rq->lock); sti(); return; }
+    if (!next) {
+        spin_unlock(&rq->lock);
+        for (u32 i = 0; i < dead_count; i++)
+            sched_reap_detached_dead_task(dead_picked[i], "runqueue-dead");
+        sti();
+        return;
+    }
     if (cur && cur->state == TASK_RUNNING) {
         cur->vol_switches++;
         cur->slice_ticks = 0;
@@ -443,6 +590,8 @@ void sched_yield(void) {
         rq_insert(rq, cur);
     }
     spin_unlock(&rq->lock);
+    for (u32 i = 0; i < dead_count; i++)
+        sched_reap_detached_dead_task(dead_picked[i], "runqueue-dead");
     switch_to(next);
     sti();
 }
@@ -500,8 +649,8 @@ void sched_tick(void) {
     /* Check signals on current task */
     if (cur && cur->signal_pending) {
         if (cur->signal_pending & (1 << SIGKILL)) {
-            cur->state = TASK_DEAD;
-            total_tasks--;
+            sched_exit_current(128 + SIGKILL);
+            cur->need_resched = 1;
         } else if (cur->signal_pending & (1 << SIGSTOP)) {
             cur->state = TASK_STOPPED;
             cur->signal_pending &= ~(1 << SIGSTOP);
@@ -565,6 +714,8 @@ i64 sys_fork(void) {
     child->vol_switches = child->invol_switches = 0;
     child->slice_ticks = 0;
     child->need_resched = 0;
+    child->accounted = 0;
+    child->reap_queued = 0;
     child->stack = NULL;
     child->fpu_state = NULL;
     child->pml4 = NULL;
@@ -572,6 +723,8 @@ i64 sys_fork(void) {
     child->graph_node = TASK_GRAPH_NODE_INVALID;
     child->next = NULL;
     child->wait_next = NULL;
+    child->tls_base = 0;
+    child->thread_group = 0;
 
     /* Allocate new kernel stack */
     child->stack = (u8 *)vmm_alloc_kernel_stack(SCHED_STACK_SIZE);
@@ -627,6 +780,7 @@ i64 sys_fork(void) {
     rq_insert(rq, child);
     spin_unlock_irqrestore(&rq->lock, f);
     total_tasks++;
+    child->accounted = 1;
     lifetime_tasks_created++;
     lifetime_processes_forked++;
 
@@ -646,7 +800,7 @@ i64 sched_waitpid(i64 pid, i32 *status, u32 options) {
                 i32 wait_status = (child->exit_code & 0xFF) << 8;
                 if (status) *status = wait_status;
                 i64 ret = (i64)child->id;
-                if (child->state == TASK_ZOMBIE && total_tasks > 0) total_tasks--;
+                sched_drop_task_count(child);
                 child->state = TASK_DEAD;
                 bool owns_address_space = child->pml4 && child->pml4 != cur->pml4;
                 /* Remove from children list */
@@ -668,6 +822,14 @@ i64 sched_waitpid(i64 pid, i32 *status, u32 options) {
 
 i64 sys_kill(u64 pid, u32 sig) {
     if (sig >= SIG_MAX) return -1;
+    for (int c = 0; c < MAX_CPUS; c++) {
+        task_t *active = active_tasks[c];
+        if (active && active->id == pid) {
+            active->signal_pending |= (1 << sig);
+            active->need_resched = 1;
+            return 0;
+        }
+    }
     /* Search all run queues */
     for (int c = 0; c < MAX_CPUS; c++) {
         runqueue_t *rq = &per_cpu_rq[c];
@@ -706,6 +868,8 @@ void sched_print_stats(void) {
             lifetime_kernel_stacks_freed, lifetime_user_pml4s_destroyed,
             lifetime_vma_lists_destroyed, lifetime_fd_tables_closed,
             lifetime_graph_nodes_destroyed);
+    kprintf("  Orphans: detached=%lu detached_reaped=%lu\n",
+            lifetime_orphans_detached, lifetime_detached_tasks_reaped);
     for (int c = 0; c < MAX_CPUS; c++) {
         if (per_cpu_rq[c].count > 0 || c == 0) {
             kprintf("  CPU%d: %u ready, min_vrt=%lu\n",
@@ -731,6 +895,8 @@ void sched_get_info(sched_info_t *out) {
     out->lifetime_vma_lists_destroyed = lifetime_vma_lists_destroyed;
     out->lifetime_fd_tables_closed = lifetime_fd_tables_closed;
     out->lifetime_graph_nodes_destroyed = lifetime_graph_nodes_destroyed;
+    out->lifetime_orphans_detached = lifetime_orphans_detached;
+    out->lifetime_detached_tasks_reaped = lifetime_detached_tasks_reaped;
 
     for (int c = 0; c < MAX_CPUS; c++) {
         runqueue_t *rq = &per_cpu_rq[c];
@@ -771,6 +937,8 @@ task_t *sched_thread_create(const char *name, u64 entry, u64 stack_top, u64 arg,
     child->vol_switches = child->invol_switches = 0;
     child->slice_ticks = 0;
     child->need_resched = 0;
+    child->accounted = 0;
+    child->reap_queued = 0;
     child->tls_base = tls_base;
     child->thread_group = parent->thread_group ? parent->thread_group : parent->id;
     child->stack = NULL;
@@ -847,6 +1015,7 @@ task_t *sched_thread_create(const char *name, u64 entry, u64 stack_top, u64 arg,
     rq_insert(rq, child);
     spin_unlock_irqrestore(&rq->lock, f);
     total_tasks++;
+    child->accounted = 1;
     lifetime_tasks_created++;
     lifetime_threads_created++;
 

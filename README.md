@@ -15,22 +15,22 @@ browser engines and language runtimes as-is. These are required foundations:
 
 - persistent root/system volume
 - full POSIX/Linux syscall compatibility
-- full `execve` and a stronger process model
+- fully proven `execve` semantics and a stronger process/thread model
 - dynamic linker / shared libraries
 - threads and signals
 - real permissions/users/security
 - TLS/HTTPS + certificate store
-- nonblocking sockets, `select`/`epoll`
+- `epoll`, fuller socket options, and Unix-domain sockets
 - package manager/downloader
 - full browser engine support
 - language runtime porting layer
 - real hardware driver coverage beyond the current QEMU-focused path
 
-Important missing surfaces include full process replacement (`execve`), dynamic
-linking, pthread/TLS, signals, file permissions, file-backed `mmap`,
-nonblocking sockets with `select`/`epoll`, PTYs/termios, TLS/certificates,
-package signatures, browser-engine storage/sandboxing, and broader hardware
-drivers.
+Important missing or incomplete surfaces include fully tested process
+replacement (`execve`) semantics, dynamic linking, pthread/thread-group
+teardown, full TLS program-header support, signals, file permissions,
+file-backed `mmap`, `epoll`, PTYs/termios, TLS/certificates, package
+signatures, browser-engine storage/sandboxing, and broader hardware drivers.
 
 ## What Is In This Repo
 
@@ -39,15 +39,15 @@ drivers.
 | Boot | Stable | Limine BIOS/UEFI ISO, YamBoot menu, framebuffer splash, module loading. |
 | CPU | In-tree | GDT/IDT/TSS, CPUID, MSRs, SYSCALL/SYSRET, NX/SMEP/SMAP/UMIP/WP, APIC/IOAPIC, PIT/RTC, HPET discovery, TSC capability reporting. |
 | SMP | Partial | Limine starts AP cores; APs initialize and park. Local APIC IPI primitives exist; scheduler currently uses CPU 0 only. |
-| Memory | In-tree | Zone-aware PMM, VMM, heap, slab, CoW/fork support, `brk`, `mmap`, `mprotect`, kernel/user stack guards, TLB shootdown hooks. |
-| Scheduler | In-tree | CFS-style scheduler, wait queues, mutexes, futexes, cgroups, OOM, idle/power hooks. |
-| Syscalls | In-tree | File, process, memory, scheduler, Wayland, driver, AI, touch, YamGraph IPC, OS info, app registry, TCP sockets, VFS ELF spawn, user-space `waitpid` status copy-out, `stat`/`fstat`, `ftruncate`, `rename`, first `*at` path calls, `unlink`, `readdir`, `select()` (backed by `poll`), and `fcntl(F_SETFL/F_GETFL)` for non-blocking I/O. |
+| Memory | In-tree | Zone-aware PMM, VMM, heap, slab, CoW/fork support, per-task `brk`, anonymous `mmap`, `mprotect`, kernel/user stack guards, full user page-table destruction for process cleanup, and TLB shootdown hooks. |
+| Scheduler | In-tree | CFS-style scheduler, wait queues, mutexes, futexes, cgroups, OOM, idle/power hooks, task lifetime cleanup counters, deferred orphan/dead-task reaping, and conservative shared-address-space retention until full thread-group teardown lands. |
+| Syscalls | In-tree | File, process, memory, scheduler, Wayland, driver, AI, touch, YamGraph IPC, OS info, app registry, TCP sockets, VFS ELF spawn, first `execve`/PT_INTERP path, user-space `waitpid` status copy-out, `stat`/`fstat`, `ftruncate`, `rename`, first `*at` path calls, `unlink`, `readdir`, `select()` (backed by `poll`), `fcntl()` descriptor/non-blocking pieces, and `SYS_SCHED_INFO` cleanup counters. |
 | Filesystems | In-tree | VFS with initrd root, writable ramfs mounts, devfs, procfs, per-process cwd, relative paths, `openat`-style dirfd resolution, open existence checks, `O_APPEND` writes, metadata-backed `SEEK_END`, directory listing, delete, rename, create/truncate/ftruncate, basic file metadata, FAT32 read/write/unlink driver code, 1MB LRU block cache with dirty tracking, block core with QEMU virtio-blk and AHCI disk registration, MBR/GPT FAT32 discovery, auto-mounted block FAT32 volumes under `/mnt`, and per-user `/home/<username>` directory auto-creation at login. |
 | Networking | In-tree | e1000 path plus ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP state-machine with non-blocking connect/recv/accept (`EAGAIN`/`EINPROGRESS`), `SOCK_NONBLOCK`, fd-backed TCP socket ABI, plain HTTP, certificate-store bootstrap, and bounded TLS ClientHello probe. |
 | USB/Input | In-tree | XHCI controller path, USB core, HID, keyboard, mouse, evdev, touch, gestures. |
 | PCI/Drivers | In-tree | Bridge-aware PCI scan, command/status helpers, safe BAR sizing, MSI/MSI-X capability discovery, AHCI SATA storage driver, and driver inventory binding. |
 | Desktop | In-tree | Wayland-style compositor with multi-user support (up to 8 accounts, per-user home dirs auto-created at login); polished first-boot setup/login; File Manager (user-home-aware, sidebar with Home/Users/Root/Temp/System/Volumes, address bar, search, sort, new file/folder, text editor); calendar/time/status bar; standalone Ethernet/Wi-Fi/Bluetooth/Sound/Display settings windows; DRM damage tracking (dirty rectangles); Bochs VBE runtime resolution modesetting; top menu; dock/taskbar; standard window controls; maximize/restore; VTTY mode. |
-| Userland | In-tree | Static Ring 3 ELF apps/services for `authd` and `/bin/hello`, libc/libyam syscall support, native app manifests, argv/envp-aware VFS-backed app spawn, and kernel app registry. Main desktop tools are compositor-native kernel services. |
+| Userland | In-tree | Static Ring 3 ELF apps/services for `authd`, `/bin/hello`, and `/bin/exec-test`, libc/libyam syscall support, native app manifests, argv/envp-aware VFS-backed app spawn, first exec smoke-test coverage, and kernel app registry. Main desktop tools are compositor-native kernel services. |
 | AI/ML | In-tree | Tensor allocation and accelerator abstraction syscalls. |
 
 ## Current Desktop Behavior
@@ -69,6 +69,7 @@ drivers.
 - Display Settings opens from the View menu and shows compositor/framebuffer resolution, stride, active surface count, focused window, plus refresh and debug-overlay controls.
 - Terminal file commands now use the same VFS: `ls`, `cat`, `mkdir`, `touch`, `rm`, and `write /home/root/file.txt text`.
 - Terminal can launch the sample static ELF app with `run /bin/hello arg...` or direct `hello arg...`.
+- Terminal `sched` shows scheduler lifetime/cleanup counters, including task-object frees, kernel-stack frees, pml4/VMA/fd/YamGraph cleanup, and orphan/deferred reaping counters.
 - Terminal supports `cd` and `pwd`; VFS paths now resolve relative to each task's current working directory.
 - App windows use right-side minimize, maximize/restore, and close controls; minimized apps restore from the dock.
 - The visible Terminal is `src/os/services/compositor/wl_terminal.c`.
@@ -106,6 +107,7 @@ Build outputs:
 - `build/yamkernel.iso`
 - `build/authd.elf`
 - `build/hello.elf`
+- `build/exec-test.elf`
 - raw splash assets under `build/logo.bin` and `build/wallpaper.bin`
 
 ## Architecture
@@ -162,8 +164,8 @@ src/os/services/          compositor and OS services
 - `src/os/lib/libyam/app.h` exposes the native app SDK: `yam_os_info()`, `yam_app_register()`, `yam_app_query()`, and `yam_spawn()`.
 - `src/os/services/app_registry/` records Ring 3 app/service manifests in the kernel with PID, YamGraph node, app type, requested permissions, name, publisher, version, and description.
 - `authd` now registers itself as a native YamOS service before using YamGraph IPC.
-- `/bin/hello` is packaged as `hello.elf`, registered into initrd, and launched through the argv/envp-aware VFS-backed ELF spawn path. Bare executable names resolve through `/bin`, `/usr/local/bin`, `/opt/yamos/packages`, and `/home/root/bin`.
-- Userland now has TCP socket ABI with `socket`, `bind`, `connect`, `listen`, `accept`, `send`, `recv`, `sendto`, and `recvfrom`. Non-blocking I/O is supported via `SOCK_NONBLOCK`, `fcntl(fd, F_SETFL, O_NONBLOCK)`, and `select()` with a 128-fd `fd_set`. `EAGAIN`/`EINPROGRESS` are returned on non-blocking operations with no data.
+- `/bin/hello` is packaged as `hello.elf`, registered into initrd, and launched through the argv/envp-aware VFS-backed ELF spawn path. `/bin/exec-test` is packaged as `exec-test.elf` for the first process-replacement checks. Bare executable names resolve through `/bin`, `/usr/local/bin`, `/opt/yamos/packages`, and `/home/root/bin`.
+- Userland now has TCP socket ABI with `socket`, `bind`, `connect`, `listen`, `accept`, `send`, and `recv`; `sendto`/`recvfrom` syscall numbers exist but still return honest failure until UDP/fd semantics are completed. Non-blocking I/O is supported via `SOCK_NONBLOCK`, `fcntl(fd, F_SETFL, O_NONBLOCK)`, and `select()` with a 128-fd `fd_set`. `EAGAIN`/`EINPROGRESS` are returned on non-blocking operations with no data.
 
 ## Boot Flow
 
@@ -177,6 +179,7 @@ src/os/services/          compositor and OS services
 
 ## Runtime Notes
 
+- Current verification command: `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify`. The latest local run built `build/yamkernel.iso` and bounded-QEMU boot reached userspace, mounted VFS/FAT32 paths, initialized e1000 DHCP, registered `/bin/exec-test`, and reached compositor heartbeat. This is a smoke test; targeted exec/orphan cleanup runtime assertions are still pending.
 - Safe Mode skips several driver/subsystem init paths for easier boot triage.
 - `YAM_PREEMPTIVE` and `YAM_WAYLAND` are enabled in `src/kernel/main.c`.
 - `YAM_DEMO_TASKS` is disabled by default.
@@ -196,14 +199,17 @@ src/os/services/          compositor and OS services
 - `open(path, O_CREAT | O_EXCL, ...)` now fails if the path already exists, enabling basic lock-file and exclusive-create patterns.
 - QEMU runs attach `build/yamos-fat32.disk` as `vd0`; YamOS auto-mounts FAT32-compatible virtio disks at `/mnt/vd0`, exposes mounted volumes in `/mnt`, and promotes `/home`, `/var`, and `/usr/local` to the FAT32 disk when available.
 - The `/bin/hello` boot probe now validates the public app process path by spawning another `hello` from Ring 3 and reaping it through libc `waitpid()`.
+- First `execve` work is in tree: `SYS_EXECVE` routes to the ELF loader, static process replacement exists, PT_INTERP maps a main ELF plus interpreter, argv/envp/auxv stack setup exists, replaced address spaces are destroyed, and FD_CLOEXEC descriptors are closed on exec. It still needs targeted boot assertions for same PID, cwd, fd inheritance, failure behavior, and dynamic-loader/TLS details.
+- Process lifetime cleanup now frees reaped child fd tables, VMA metadata, non-shared pml4s, FPU state, kernel stacks, YamGraph task nodes, and task objects. Forked tasks clone VMA metadata and get their own YamGraph nodes. Parentless dead tasks can be queued for deferred cleanup, and forced-dead runqueue tasks are cleaned instead of only decrementing counters. Shared thread address spaces are retained conservatively until full thread-group teardown exists.
 - AP cores are initialized and can receive kernel IPIs, but full multi-core task scheduling remains disabled until address-space switching and run-queue ownership are audited.
 - TSC-deadline is detected when the CPU exposes it. The current timer path still uses the calibrated periodic APIC timer unless a later platform-specific timer switch is added.
 - CPU exceptions print register state, and the panic path has a register-frame variant for fatal exception debugging.
 - Phase 2 (Performance & Hardware Foundation) complete: The storage stack has been refactored from monolithic memory mapping to a page-based LRU block cache, and the display stack now supports hardware-accelerated 2D damage tracking and runtime resolution modesetting.
 - Phase 3 (Connected Ecosystem) in progress:
   - **Non-blocking socket ABI complete** — `SOCK_NONBLOCK`, `fcntl(F_SETFL/F_GETFL)` (SYS_FCNTL=93), and `select()` (SYS_SELECT=92) are live. TCP `connect`/`recv`/`accept` return `EAGAIN`/`EINPROGRESS` when non-blocking. Userland `fd_set` (128-bit, 2×u64) and `FD_ZERO/SET/CLR/ISSET` macros in `libc/sys/socket.h`.
+  - **Process ABI hardening in progress** — first `execve`, PT_INTERP loading, FD_CLOEXEC, per-task `brk`, task cleanup counters, kernel-stack freeing, fork VMA metadata cloning, and deferred orphan cleanup are in source and pass basic build/boot smoke verification.
   - **Multi-user file manager** — File Manager opens in `/home/<current_user>`, resolved from the compositor session at launch. Home dirs (`/home/<username>`) are created by `sys_mkdir` automatically at first-boot setup, skip-setup, and at every successful login.
-  - Next: Full TLS/HTTPS handshake, ypkg package manager, thread/signal ABI hardening.
+  - Next: Targeted `/bin/exec-test` assertions, orphan cleanup counter tests, thread-group teardown, PT_TLS/dynamic-loader smoke tests, full TLS/HTTPS handshake, and ypkg package manager.
 
 ## Documentation
 

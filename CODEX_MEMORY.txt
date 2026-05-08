@@ -12,8 +12,9 @@ Root: C:\laragon\www\YamOS  |  WSL: /mnt/c/laragon/www/YamOS
 Build: wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"
 Verify: powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify
 Artifacts: build/yamkernel.iso  |  build/verify.log
-Current environment caveat: this session's Windows host reports no "Ubuntu" WSL
-distro and no native make/gcc/clang, so recent changes are source-reviewed only.
+Current verification: this session's verify path works through WSL Ubuntu. The
+latest verify built the ISO and bounded-QEMU boot reached userspace; deeper
+exec-test/orphan-counter runtime checks are still pending.
 
 Rules
 -----
@@ -39,8 +40,9 @@ Current capability (summary - detail drifts; verify in tree)
 - TLS: store bootstrap + ClientHello probe; full HTTPS handshake not done.
 - execve foundation in progress: SYS_EXECVE routes to elf_exec_resolved_argv_envp,
   static ELF exec works in source, PT_INTERP exec maps main+interpreter, builds
-  auxv stack, and enters via enter_user_mode_ldso. Needs build/boot tests, more
-  relocations, TLS program-header support, and real dynamic-linker tests.
+  auxv stack, and enters via enter_user_mode_ldso. Basic build/boot now passes;
+  needs targeted exec assertions, more relocations, TLS program-header support,
+  and real dynamic-linker tests.
 - Process/memory cleanup improved: vmm_destroy_user_pml4 walks full user page
   tables and uses pmm_page_unref for mapped pages; execve frees replaced pml4.
   task_t has per-process brk_start/brk_current; spawn/exec seed brk from ELF end;
@@ -53,9 +55,12 @@ Current capability (summary - detail drifts; verify in tree)
   exec. Process lifetime cleanup now has vmm_free_kernel_stack(), a centralized
   scheduler task-resource cleanup helper, forked-task VMA metadata cloning, fork
   YamGraph node creation, and waitpid reaping that frees kernel stacks and
-  destroys task YamGraph nodes. Scheduler lifetime/cleanup counters are exposed
-  through SYS_SCHED_INFO and the compositor terminal `sched` command. Full
-  thread-group/orphan cleanup still pending.
+  destroys task YamGraph nodes. This source slice builds and boots to userspace.
+  Scheduler lifetime/cleanup counters are exposed through SYS_SCHED_INFO and the
+  compositor terminal `sched` command. Orphan handling now detaches children from
+  exiting parents and queues parentless dead tasks for deferred cleanup after
+  they are no longer active. Full thread-group ownership/teardown still pending;
+  shared thread address spaces are retained conservatively.
 - Threads/signals/futex/pthread pieces and SYS_SELECT/SYS_FCNTL nonblocking I/O:
   see syscall.h + Phase notes in README.
 - Desktop: compositor-native Wayland-style UI, multi-user, File Manager, browser

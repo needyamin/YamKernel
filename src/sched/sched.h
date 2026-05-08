@@ -63,6 +63,8 @@ typedef struct task {
     u64           invol_switches; /* Involuntary context switches */
     u32           slice_ticks;  /* Ticks consumed in current time slice */
     u8            need_resched; /* Timer asked this task to yield soon */
+    u8            accounted;    /* Included in total_tasks */
+    u8            reap_queued;  /* On deferred dead-task cleanup list */
     u64           start_tick;   /* When task was created */
     u64           rss_pages;    /* Resident set size (pages) */
 
@@ -140,6 +142,8 @@ typedef struct {
     u64 lifetime_vma_lists_destroyed;
     u64 lifetime_fd_tables_closed;
     u64 lifetime_graph_nodes_destroyed;
+    u64 lifetime_orphans_detached;
+    u64 lifetime_detached_tasks_reaped;
 } sched_info_t;
 
 /* Public API */

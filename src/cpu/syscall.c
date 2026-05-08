@@ -172,6 +172,8 @@ static i64 sys_sched_info(u64 uout) {
     out.lifetime_vma_lists_destroyed = info.lifetime_vma_lists_destroyed;
     out.lifetime_fd_tables_closed = info.lifetime_fd_tables_closed;
     out.lifetime_graph_nodes_destroyed = info.lifetime_graph_nodes_destroyed;
+    out.lifetime_orphans_detached = info.lifetime_orphans_detached;
+    out.lifetime_detached_tasks_reaped = info.lifetime_detached_tasks_reaped;
 
     bool smap = (read_cr4() & CR4_SMAP) != 0;
     if (smap) __asm__ volatile ("stac");
