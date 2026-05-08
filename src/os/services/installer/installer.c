@@ -1,4 +1,5 @@
 #include "installer.h"
+#include "../ypkg/ypkg.h"
 #include "fs/vfs.h"
 #include "lib/kprintf.h"
 #include "lib/string.h"
@@ -9,11 +10,26 @@
 #define INSTALLER_HTTP_CACHE_PROBE                                             \
   "/var/cache/yamos/downloads/kernel-net-probe.txt"
 
+/*
+ * Embedded manifest (HTTPS payload + SHA-256). Payload is https://example.com/
+ * home page; hash matches a snapshot — update payload_sha256 if the site body
+ * changes.
+ */
+#define KERNEL_NET_MANIFEST                                                    \
+  "YAMOSYPKG1\n"                                                             \
+  "name=kernel-net\n"                                                        \
+  "version=1\n"                                                              \
+  "payload_url=https://example.com/\n"                                       \
+  "payload_sha256=fb91d75a6bb430787a61b0aec5e374f580030f2878e1613eab5ca6310f7bbb9a\n"
+
 typedef struct {
   const char *name;
   const char *display_name;
   const char *official_url;
   const char *install_path;
+  const char *manifest_https_host;
+  const char *manifest_https_path;
+  char last_detail[160];
   u32 state;
   u32 last_error;
   u32 progress;
@@ -24,7 +40,10 @@ static installer_package_t g_packages[] = {
         .name = "kernel-net",
         .display_name = "Kernel Network Stack",
         .official_url = "https://ansnew.com/",
-        .install_path = "/var/cache/yamos/downloads/kernel-net-probe.txt",
+        .install_path = "/var/cache/yamos/downloads/kernel-net.payload",
+        .manifest_https_host = INSTALLER_HTTP_PROBE_HOST,
+        .manifest_https_path = "/.well-known/yamos/kernel-net.ypkg",
+        .last_detail = "",
         .state = YAM_INSTALL_STATE_AVAILABLE,
         .last_error = YAM_INSTALL_ERR_NONE,
         .progress = 0,
@@ -199,13 +218,23 @@ static void probe_runtime_tls(void) {
   if (g_runtime_tls_probe_done || !g_runtime_tcp_probe_ok)
     return;
   g_runtime_tls_probe_done = true;
-  int rc = tls_probe_host(INSTALLER_HTTP_PROBE_HOST);
-  if (rc == 0) {
+
+  char buf[1536];
+  usize len = 0;
+  int rc = https_get(INSTALLER_HTTP_PROBE_HOST, INSTALLER_HTTP_PROBE_PATH, buf,
+                     sizeof(buf), &len);
+  if (rc == 0 && len >= 12 && strncmp(buf, "HTTP/", 5) == 0) {
     g_runtime_tls_probe_ok = true;
-    kprintf("[INSTALLER] tls probe ok: outbound TLS ServerHello reachable\n");
-  } else {
-    kprintf("[INSTALLER] tls probe blocked rc=%d\n", rc);
+    kprintf("[INSTALLER] https probe ok: TLS HTTP GET %s\n",
+            INSTALLER_HTTP_PROBE_HOST);
+    return;
   }
+
+  kprintf("[INSTALLER] https GET blocked rc=%d len=%lu — tls_probe fallback\n", rc,
+          len);
+  int pr = tls_probe_host(INSTALLER_HTTP_PROBE_HOST);
+  if (pr == 0)
+    kprintf("[INSTALLER] tls record probe ok (no full HTTPS GET)\n");
 }
 
 static void fill_status(installer_package_t *pkg, yam_installer_status_t *out) {
@@ -228,7 +257,18 @@ static void fill_status(installer_package_t *pkg, yam_installer_status_t *out) {
   copy_text(out->display_name, sizeof(out->display_name), pkg->display_name);
   copy_text(out->official_url, sizeof(out->official_url), pkg->official_url);
   copy_text(out->install_path, sizeof(out->install_path), pkg->install_path);
-  copy_text(out->message, sizeof(out->message), blocker_text(missing));
+  if (missing != 0 && pkg->state != YAM_INSTALL_STATE_INSTALLED)
+    copy_text(out->message, sizeof(out->message), blocker_text(missing));
+  else if (pkg->last_detail[0])
+    copy_text(out->message, sizeof(out->message), pkg->last_detail);
+  else
+    copy_text(out->message, sizeof(out->message), blocker_text(missing));
+}
+
+void installer_refresh_probes(void) {
+  probe_runtime_tcp();
+  probe_runtime_http();
+  probe_runtime_tls();
 }
 
 void installer_init(void) {
@@ -262,6 +302,7 @@ int installer_request(const char *package, yam_installer_status_t *out) {
   yam_installer_status_t st;
   fill_status(pkg, &st);
   if (st.missing) {
+    pkg->last_detail[0] = 0;
     pkg->state = YAM_INSTALL_STATE_BLOCKED;
     pkg->last_error = YAM_INSTALL_ERR_MISSING_CAPABILITY;
     pkg->progress = 0;
@@ -271,11 +312,37 @@ int installer_request(const char *package, yam_installer_status_t *out) {
     return -3;
   }
 
-  pkg->state = YAM_INSTALL_STATE_READY_TO_DOWNLOAD;
+  pkg->last_detail[0] = 0;
+  pkg->state = YAM_INSTALL_STATE_DOWNLOADING;
   pkg->last_error = YAM_INSTALL_ERR_NONE;
-  pkg->progress = 5;
+  pkg->progress = 25;
   fill_status(pkg, out);
-  kprintf("[INSTALLER] request package=%s ready for secure downloader url=%s\n",
-          pkg->name, pkg->official_url);
+
+  pkg->state = YAM_INSTALL_STATE_INSTALLING;
+  pkg->progress = 60;
+
+  u32 yerr = YAM_INSTALL_ERR_NONE;
+  char ymsg[160];
+  int yrc = ypkg_install(
+      pkg->manifest_https_host, pkg->manifest_https_path, KERNEL_NET_MANIFEST,
+      pkg->install_path, &yerr, ymsg, sizeof(ymsg));
+  if (yrc != 0) {
+    copy_text(pkg->last_detail, sizeof(pkg->last_detail), ymsg);
+    pkg->state = YAM_INSTALL_STATE_FAILED;
+    pkg->last_error = yerr ? yerr : YAM_INSTALL_ERR_DOWNLOAD;
+    pkg->progress = 0;
+    fill_status(pkg, out);
+    kprintf("[INSTALLER] ypkg failed package=%s err=%u msg='%s'\n", pkg->name,
+            pkg->last_error, ymsg);
+    return -4;
+  }
+
+  copy_text(pkg->last_detail, sizeof(pkg->last_detail), "installed");
+  pkg->state = YAM_INSTALL_STATE_INSTALLED;
+  pkg->last_error = YAM_INSTALL_ERR_NONE;
+  pkg->progress = 100;
+  fill_status(pkg, out);
+  kprintf("[INSTALLER] package=%s installed path=%s\n", pkg->name,
+          pkg->install_path);
   return 0;
 }

@@ -5,6 +5,7 @@
 #include "kernel/api/syscall.h"
 
 void installer_init(void);
+void installer_refresh_probes(void);
 int installer_status(const char *package, yam_installer_status_t *out);
 int installer_request(const char *package, yam_installer_status_t *out);
 

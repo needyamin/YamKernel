@@ -1,6 +1,6 @@
 # YamOS
 
-YamOS is an experimental x86_64 operating system built around **YamKernel**, a graph-based hybrid kernel. It boots with Limine, brings up a modern kernel core, and layers a small desktop/userland on top of YamGraph, a live resource graph where tasks, memory, devices, files, channels, and capabilities are modeled as connected nodes.
+YamOS is an exceptional x86_64 operating system built around **YamKernel**, a graph-based hybrid kernel. It boots with Limine, brings up a modern kernel core, and layers a small desktop/userland on top of YamGraph, a live resource graph where tasks, memory, devices, files, channels, and capabilities are modeled as connected nodes.
 
 Current tree: **v0.5.0 development line** — Phase 3 (Connected Ecosystem) in progress.
 
@@ -26,7 +26,6 @@ browser engines and language runtimes as-is. These are required foundations:
 - language runtime porting layer
 - real hardware driver coverage beyond the current QEMU-focused path
 
-Missing compatibility details are tracked in `KERNEL_CAPABILITY_MATRIX.md`.
 Important missing surfaces include full process replacement (`execve`), dynamic
 linking, pthread/TLS, signals, file permissions, file-backed `mmap`,
 nonblocking sockets with `select`/`epoll`, PTYs/termios, TLS/certificates,
@@ -60,7 +59,7 @@ drivers.
   - `root / password`
   - `guest / guest`
 - Terminal, Browser, and Calculator currently launch as compositor-native apps for reliable drawing.
-- Browser now has a real plain-HTTP path through kernel DNS/TCP/HTTP, a modern toolbar/address bar, back/forward/reload controls, history, response status display, a scrollable static document paint layer, and first inline color/background style handling for headings, paragraphs, list items, links, pre/code blocks, buttons, form placeholders, and image placeholders. Full encrypted HTTPS page loading, JavaScript, full CSS layout, real image decoding, and Firefox-class multi-process rendering remain future work.
+- Browser (YamBrowser, MIT in-tree) loads **`about:yamos`** by default (built-in OSS info page); plain HTTP works through kernel DNS/TCP/HTTP with toolbar, history, and static HTML paint. Full HTTPS, JavaScript, full CSS layout, real images, and Firefox-class engines remain future work.
 - Calculator is a compositor-native desktop utility with standard/scientific modes, fixed-decimal arithmetic, memory register, history, keyboard input, and compositor clipboard copy/paste.
 - File Manager launches from the dock or File menu with a full Explorer-style shell: sidebar locations (Home for the current user, Users `/home`, Root, Temp, System, Volumes), back/forward/up navigation, editable address bar and search field, sortable details view (name/type/size), item details pane, new file/folder dialogs, file delete, and an integrated text editor. It opens in the logged-in user's own home directory (`/home/<username>`) and reads that path from the live compositor session on launch.
 - The desktop bar shows BDT calendar/time, wired network status from the kernel network interface, Wi-Fi radio state, Bluetooth radio state, and audio mixer state.
@@ -112,19 +111,27 @@ Build outputs:
 ## Architecture
 
 ```text
-+---------------------------- Ring 3 --------------------------------+
-| authd service | /bin/hello VFS ELF | libc + libyam wrappers      |
-+----------------------- SYSCALL / SYSRET ---------------------------+
-| File, process, memory, scheduler, Wayland, driver, AI, IPC, app ABI |
-+---------------------------- Ring 0 --------------------------------+
-| Scheduler | VFS | Net | USB | DRM/Compositor | cgroups | OOM | AI   |
-+-------------------------- YamGraph --------------------------------+
-| Nodes: tasks, memory, devices, files, channels, namespaces          |
-| Edges: owns, maps, depends, channel, capability                     |
-+----------------------- Memory / CPU / Boot ------------------------+
-| PMM | VMM | Heap | Slab | GDT/IDT | APIC | ACPI | Limine | YamBoot |
-+--------------------------------------------------------------------+
++------------------------------- Ring 3 ---------------------------------+
+| authd | /bin/hello | libc + libyam | future native apps/services       |
++-------------------- Syscall ABI (SYSCALL/SYSRET) ----------------------+
+| process | memory | VFS/file | sockets/net | poll/select | app registry  |
+| compositor/window | driver control | IPC/channel | AI accelerator       |
++------------------------------- Ring 0 ---------------------------------+
+| Scheduler/CFS | VFS + FAT32 + initrd + procfs/devfs | TCP/IP stack      |
+| PCI + block + e1000 + USB input | DRM + compositor | cgroups | OOM      |
++------------------------------- YamGraph --------------------------------+
+| Nodes: tasks, memory, devices, files, channels, namespaces              |
+| Edges: owns, maps, depends, channel, capability                         |
++-------------------------- Memory / CPU / Boot --------------------------+
+| PMM | VMM | Heap | Slab | GDT/IDT/TSS | APIC/IOAPIC | ACPI | Limine     |
+| YamBoot | framebuffer splash | module loading                            |
++-------------------------------------------------------------------------+
 ```
+
+Reading guide:
+- Ring 3 runs user-space services and apps through the public syscall ABI.
+- Ring 0 provides kernel scheduling, storage, networking, drivers, and compositor services.
+- YamGraph tracks ownership and capability relationships across runtime resources.
 
 ## Source Tree Highlights
 
@@ -137,7 +144,8 @@ src/mem/                  PMM, VMM, heap, slab, OOM
 src/sched/                scheduler, wait queues, cgroups, user entry
 src/fs/                   VFS, FAT32, initrd, ELF loader, poll
 src/ipc/                  IPC scaffolding
-src/net/                  ARP/IP/ICMP/UDP/TCP/DHCP/DNS stack, non-blocking socket layer, select/poll
+src/net/                  ARP/IP/ICMP/UDP/TCP/DHCP/DNS stack,
+                          non-blocking socket layer, select/poll
 src/drivers/              PCI, USB, input, serial, timer, video, DRM, net
 src/nexus/                YamGraph, channels, capabilities
 src/os/apps/              authd, hello sample app, and user linker script
@@ -155,7 +163,6 @@ src/os/services/          compositor and OS services
 - `src/os/services/app_registry/` records Ring 3 app/service manifests in the kernel with PID, YamGraph node, app type, requested permissions, name, publisher, version, and description.
 - `authd` now registers itself as a native YamOS service before using YamGraph IPC.
 - `/bin/hello` is packaged as `hello.elf`, registered into initrd, and launched through the argv/envp-aware VFS-backed ELF spawn path. Bare executable names resolve through `/bin`, `/usr/local/bin`, `/opt/yamos/packages`, and `/home/root/bin`.
-- See `APP_ARCHITECTURE.md` for the app model and the next steps toward installable developer apps.
 - Userland now has TCP socket ABI with `socket`, `bind`, `connect`, `listen`, `accept`, `send`, `recv`, `sendto`, and `recvfrom`. Non-blocking I/O is supported via `SOCK_NONBLOCK`, `fcntl(fd, F_SETFL, O_NONBLOCK)`, and `select()` with a 128-fd `fd_set`. `EAGAIN`/`EINPROGRESS` are returned on non-blocking operations with no data.
 
 ## Boot Flow
@@ -200,12 +207,11 @@ src/os/services/          compositor and OS services
 
 ## Documentation
 
-- `developer.html` - current architecture and subsystem reference.
-- `APP_ARCHITECTURE.md` - native app/service ABI and developer model.
-- `BROWSER_FIREFOX_GAP.md` - blunt comparison of YamBrowser against Firefox-class browser requirements.
-- `DEBUGGING.md` - build, QEMU, serial, GDB, and triage guide.
-- `future_plan.txt` - updated roadmap from the v0.4 tree toward v1.0.
-- `implementation_plan.md` and `task.md` - implementation planning/history.
+- `README.md` - Primary project status, architecture, and capability notes.
+- `developer.html` - Current architecture and subsystem reference.
+- `DEBUGGING.md` - Build, QEMU, serial, GDB, and triage guide.
+- `future_plan.txt` - Updated roadmap from the v0.4 tree toward v1.0.
+- `implementation_plan.md` and `task.md` - Implementation planning and history.
 
 ## License
 

@@ -23,7 +23,7 @@
 extern wl_compositor_t g_compositor;
 extern void *g_wallpaper_module;
 
-void wl_compositor_process_input(void);
+bool wl_compositor_process_input(void);
 void wl_compositor_render_frame(void);
 void wl_spawn_app_async(void *data, usize size, const char *name);
 

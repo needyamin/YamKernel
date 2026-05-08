@@ -61,7 +61,20 @@ typedef struct {
     u16 special;
 } PACKED e1000_tx_desc_t;
 
+typedef struct {
+    u64 tx_attempts;
+    u64 tx_ok;
+    u64 tx_ring_full_drop;
+    u64 tx_oversize_drop;
+    u64 tx_not_ready_drop;
+    u64 tx_timeouts;
+    u64 rx_packets;
+    u64 rx_bytes;
+    u64 rx_drops;
+} e1000_stats_t;
+
 void e1000_init(void);
 void e1000_poll(void);
+void e1000_get_stats(e1000_stats_t *out);
 
 #endif

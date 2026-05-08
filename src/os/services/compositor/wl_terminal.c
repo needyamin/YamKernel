@@ -10,9 +10,13 @@
 #include "../lib/kprintf.h"
 #include "../lib/string.h"
 #include "../net/net.h"
+#include "../drivers/net/e1000.h"
+#include "drivers/timer/pit.h"
 #include "fs/vfs.h"
 #include "fs/elf.h"
 #include "os/services/installer/installer.h"
+#include "mem/heap.h"
+#include "lib/spinlock.h"
 
 void wl_spawn_app_async(void *data, usize size, const char *name);
 
@@ -21,6 +25,8 @@ void wl_spawn_app_async(void *data, usize size, const char *name);
 #define TERM_ROWS  22
 #define TERM_W     (TERM_COLS * 8)   /* 576 px */
 #define TERM_H     (TERM_ROWS * 16)  /* 352 px */
+#define TERM_MIN_W 360
+#define TERM_MIN_H 220
 
 /* Colors */
 #define COL_BG       0xFF1A1A2E
@@ -54,6 +60,18 @@ static bool shift_held = false;
 static char history[16][128];
 static int history_count = 0;
 static int history_pos = 0;
+
+typedef struct {
+    char host[96];
+    int loops;
+    u32 worker_id;
+} netstress_job_t;
+
+static volatile int g_netstress_done = 0;
+static volatile int g_netstress_dns_ok = 0;
+static volatile int g_netstress_ping_ok = 0;
+static volatile int g_netstress_http_ok = 0;
+static spinlock_t g_netstress_lock = SPINLOCK_INIT;
 
 static void term_scroll(void) {
     for (int r = 0; r < TERM_ROWS - 1; r++) {
@@ -131,6 +149,16 @@ static int text_len(const char *s) {
     return n;
 }
 
+static int parse_int_simple(const char *s, int def) {
+    if (!s || !*s) return def;
+    int v = 0;
+    while (*s >= '0' && *s <= '9') {
+        v = v * 10 + (*s - '0');
+        s++;
+    }
+    return v > 0 ? v : def;
+}
+
 static void replace_input_line(const char *cmd) {
     while (input_len > 0) {
         input_len--;
@@ -160,9 +188,9 @@ static void cmd_help(void) {
     term_newline();
     term_puts("  run /bin/hello - Launch a VFS ELF app", COL_FG);
     term_newline();
-    term_puts("  ifconfig netstat - Network status", COL_FG);
+    term_puts("  ifconfig netstat netstats dns ping - Network status/tools", COL_FG);
     term_newline();
-    term_puts("  curl git - Preinstalled command diagnostics", COL_FG);
+    term_puts("  http https curl dns ping netstress git - Web/network commands", COL_FG);
     term_newline();
     term_puts("  installer status | install kernel-net", COL_FG);
     term_newline();
@@ -417,19 +445,254 @@ static void cmd_net_status(void) {
     }
 }
 
-static void cmd_curl(const char *args) {
-    term_puts("curl: installed command stub, backend not ready", COL_ERR);
+static void cmd_netstats(void) {
+    e1000_stats_t st;
+    memset(&st, 0, sizeof(st));
+    e1000_get_stats(&st);
+
+    char line[160];
+    term_puts("kernel net stats (e1000):", COL_PROMPT);
     term_newline();
-    if (args && *args) {
-        term_puts("url: ", COL_FG);
-        term_puts(args, COL_FG);
+
+    ksnprintf(line, sizeof(line), "tx: attempts=%lu ok=%lu timeout=%lu",
+              st.tx_attempts, st.tx_ok, st.tx_timeouts);
+    term_puts(line, COL_FG);
+    term_newline();
+
+    ksnprintf(line, sizeof(line), "tx drops: ring_full=%lu oversize=%lu not_ready=%lu",
+              st.tx_ring_full_drop, st.tx_oversize_drop, st.tx_not_ready_drop);
+    term_puts(line, (st.tx_ring_full_drop || st.tx_timeouts) ? COL_ERR : COL_FG);
+    term_newline();
+
+    ksnprintf(line, sizeof(line), "rx: packets=%lu bytes=%lu drops=%lu",
+              st.rx_packets, st.rx_bytes, st.rx_drops);
+    term_puts(line, st.rx_drops ? COL_ERR : COL_FG);
+    term_newline();
+}
+
+static bool parse_ipv4(const char *s, u32 *out_ip) {
+    if (!s || !*s || !out_ip) return false;
+    int a = 0, b = 0, c = 0, d = 0;
+    int dots = 0;
+    const char *p = s;
+    while (*p) {
+        if (*p == '.') {
+            dots++;
+            p++;
+            continue;
+        }
+        if (*p < '0' || *p > '9') return false;
+        int v = *p - '0';
+        if (dots == 0) a = a * 10 + v;
+        else if (dots == 1) b = b * 10 + v;
+        else if (dots == 2) c = c * 10 + v;
+        else if (dots == 3) d = d * 10 + v;
+        else return false;
+        p++;
+    }
+    if (dots != 3) return false;
+    if (a > 255 || b > 255 || c > 255 || d > 255) return false;
+    *out_ip = ((u32)a << 24) | ((u32)b << 16) | ((u32)c << 8) | (u32)d;
+    return true;
+}
+
+static bool resolve_host_or_ip(const char *arg, u32 *out_ip) {
+    if (parse_ipv4(arg, out_ip)) return true;
+    return dns_resolve(arg, out_ip) == 0;
+}
+
+static void cmd_dns(const char *host) {
+    if (!host || !*host) {
+        term_puts("dns: usage dns <host>", COL_ERR);
+        term_newline();
+        return;
+    }
+    u32 ip = 0;
+    if (dns_resolve(host, &ip) != 0) {
+        term_puts("dns: resolve failed", COL_ERR);
+        term_newline();
+        return;
+    }
+    char line[96];
+    ksnprintf(line, sizeof(line), "%s -> %u.%u.%u.%u", host,
+              (ip >> 24) & 255, (ip >> 16) & 255, (ip >> 8) & 255, ip & 255);
+    term_puts(line, COL_PROMPT);
+    term_newline();
+}
+
+static void cmd_ping(const char *target) {
+    if (!target || !*target) {
+        term_puts("ping: usage ping <host-or-ip>", COL_ERR);
+        term_newline();
+        return;
+    }
+    u32 ip = 0;
+    if (!resolve_host_or_ip(target, &ip)) {
+        term_puts("ping: target resolve failed", COL_ERR);
+        term_newline();
+        return;
+    }
+    int ok = 0;
+    for (u16 seq = 1; seq <= 4; seq++) {
+        int rc = icmp_ping(ip, seq, 1000);
+        if (rc == 0) {
+            ok++;
+            term_puts("reply", COL_PROMPT);
+        } else {
+            term_puts("timeout", COL_ERR);
+        }
         term_newline();
     }
-    cmd_net_status();
-    term_puts("missing: curl command ABI, encrypted HTTPS client, certificate validation", COL_ERR);
+    char sum[64];
+    ksnprintf(sum, sizeof(sum), "ping: %d/4 replies", ok);
+    term_puts(sum, ok ? COL_PROMPT : COL_ERR);
     term_newline();
-    kprintf("[CURL] blocked: args='%s' if_up=%d dhcp=%d ip=%lu\n",
-            args ? args : "", g_net_iface.is_up, g_net_iface.dhcp_done, g_net_iface.ip_addr);
+}
+
+static void cmd_http_get(const char *url, bool tls) {
+    if (!url || !*url) {
+        term_puts(tls ? "https: usage https <host>[/path]" : "http: usage http <host>[/path]", COL_ERR);
+        term_newline();
+        return;
+    }
+    char host[96];
+    char path[160];
+    int hi = 0;
+    const char *p = url;
+    while (*p && *p != '/' && hi + 1 < (int)sizeof(host)) host[hi++] = *p++;
+    host[hi] = 0;
+    if (!host[0]) {
+        term_puts("request: missing host", COL_ERR);
+        term_newline();
+        return;
+    }
+    if (*p == '/') copy_text(path, p, sizeof(path));
+    else copy_text(path, "/", sizeof(path));
+    static char out[8192];
+    usize out_len = 0;
+    int rc = tls ? https_get(host, path, out, sizeof(out), &out_len)
+                 : http_get(host, path, out, sizeof(out), &out_len);
+    if (rc < 0) {
+        term_puts(tls ? "https: request failed" : "http: request failed", COL_ERR);
+        term_newline();
+        return;
+    }
+    char line[96];
+    ksnprintf(line, sizeof(line), "%s://%s%s -> %lu bytes", tls ? "https" : "http", host, path, out_len);
+    term_puts(line, COL_PROMPT);
+    term_newline();
+    out[(out_len < sizeof(out) - 1) ? out_len : sizeof(out) - 1] = 0;
+    term_puts(out, COL_FG);
+    term_newline();
+}
+
+static void netstress_worker(void *arg) {
+    netstress_job_t *job = (netstress_job_t *)arg;
+    char out[1024];
+    usize out_len = 0;
+    u32 ip = 0;
+
+    for (int i = 0; i < job->loops; i++) {
+        if (dns_resolve(job->host, &ip) == 0) {
+            u64 f = spin_lock_irqsave(&g_netstress_lock);
+            g_netstress_dns_ok++;
+            spin_unlock_irqrestore(&g_netstress_lock, f);
+
+            if (icmp_ping(ip, (u16)((job->worker_id << 8) + (i & 0xff)), 800) == 0) {
+                f = spin_lock_irqsave(&g_netstress_lock);
+                g_netstress_ping_ok++;
+                spin_unlock_irqrestore(&g_netstress_lock, f);
+            }
+
+            if (http_get(job->host, "/", out, sizeof(out), &out_len) == 0) {
+                f = spin_lock_irqsave(&g_netstress_lock);
+                g_netstress_http_ok++;
+                spin_unlock_irqrestore(&g_netstress_lock, f);
+            }
+        }
+        task_sleep_ms(10);
+    }
+
+    u64 f = spin_lock_irqsave(&g_netstress_lock);
+    g_netstress_done++;
+    spin_unlock_irqrestore(&g_netstress_lock, f);
+    kfree(job);
+}
+
+static void cmd_netstress(char *args) {
+    int workers = 2;
+    int loops = 5;
+    char host[96];
+    copy_text(host, "example.com", sizeof(host));
+
+    if (args && *args) {
+        char *p = args;
+        while (*p == ' ') p++;
+        if (*p) {
+            workers = parse_int_simple(p, workers);
+            while (*p && *p != ' ') p++;
+            while (*p == ' ') p++;
+            if (*p) {
+                loops = parse_int_simple(p, loops);
+                while (*p && *p != ' ') p++;
+                while (*p == ' ') p++;
+                if (*p) copy_text(host, p, sizeof(host));
+            }
+        }
+    }
+    if (workers < 1) workers = 1;
+    if (workers > 8) workers = 8;
+    if (loops < 1) loops = 1;
+    if (loops > 40) loops = 40;
+
+    g_netstress_done = 0;
+    g_netstress_dns_ok = 0;
+    g_netstress_ping_ok = 0;
+    g_netstress_http_ok = 0;
+
+    char line[128];
+    ksnprintf(line, sizeof(line), "netstress: workers=%d loops=%d host=%s", workers, loops, host);
+    term_puts(line, COL_PROMPT);
+    term_newline();
+
+    for (int i = 0; i < workers; i++) {
+        netstress_job_t *job = (netstress_job_t *)kmalloc(sizeof(netstress_job_t));
+        if (!job) continue;
+        memset(job, 0, sizeof(*job));
+        copy_text(job->host, host, sizeof(job->host));
+        job->loops = loops;
+        job->worker_id = (u32)i;
+        sched_spawn("netstress", netstress_worker, job, 2);
+    }
+
+    int guard = 0;
+    while (g_netstress_done < workers && guard < 2000) {
+        task_sleep_ms(10);
+        guard++;
+    }
+
+    ksnprintf(line, sizeof(line), "netstress done: dns_ok=%d ping_ok=%d http_ok=%d expected=%d",
+              g_netstress_dns_ok, g_netstress_ping_ok, g_netstress_http_ok, workers * loops);
+    term_puts(line, (g_netstress_dns_ok > 0 && g_netstress_http_ok > 0) ? COL_PROMPT : COL_ERR);
+    term_newline();
+}
+
+static void cmd_curl(const char *args) {
+    if (!args || !*args) {
+        term_puts("curl: usage curl http://host/path | https://host/path", COL_ERR);
+        term_newline();
+        return;
+    }
+    if (strncmp(args, "http://", 7) == 0) {
+        cmd_http_get(args + 7, false);
+        return;
+    }
+    if (strncmp(args, "https://", 8) == 0) {
+        cmd_http_get(args + 8, true);
+        return;
+    }
+    term_puts("curl: only http:// and https:// supported", COL_ERR);
+    term_newline();
 }
 
 static void cmd_git(const char *args) {
@@ -479,13 +742,15 @@ static bool cmd_install_package(const char *package) {
                 package, st.missing, st.message);
         return false;
     }
-    kprintf("[INSTALLER] terminal install request package='%s' ready\n", package);
+    kprintf("[INSTALLER] terminal install request package='%s' ok state=%u\n", package,
+            st.state);
     return true;
 }
 
 static bool cmd_kernel_probe(void) {
+    installer_refresh_probes();
     yam_installer_status_t st;
-    int rc = installer_request("kernel-net", &st);
+    int rc = installer_status("kernel-net", &st);
     term_puts("kernel-net: probing kernel network/cache capability", COL_PROMPT);
     term_newline();
     term_puts("probe: ", COL_FG);
@@ -557,6 +822,20 @@ static void process_command(void) {
     } else if (strcmp(cmd, "ifconfig") == 0 || strcmp(cmd, "ip addr") == 0 ||
                strcmp(cmd, "netstat") == 0 || strcmp(cmd, "network") == 0) {
         cmd_net_status();
+    } else if (strcmp(cmd, "netstats") == 0) {
+        cmd_netstats();
+    } else if (strncmp(cmd, "dns ", 4) == 0) {
+        cmd_dns(cmd + 4);
+    } else if (strncmp(cmd, "ping ", 5) == 0) {
+        cmd_ping(cmd + 5);
+    } else if (strncmp(cmd, "http ", 5) == 0) {
+        cmd_http_get(cmd + 5, false);
+    } else if (strncmp(cmd, "https ", 6) == 0) {
+        cmd_http_get(cmd + 6, true);
+    } else if (strcmp(cmd, "netstress") == 0) {
+        cmd_netstress("");
+    } else if (strncmp(cmd, "netstress ", 10) == 0) {
+        cmd_netstress(cmd + 10);
     } else if (strcmp(cmd, "ps") == 0) {
         term_puts("  PID  NAME         STATE", COL_PROMPT);
         term_newline();
@@ -642,22 +921,30 @@ static void show_prompt(void) {
     term_puts("$ ", COL_FG);
 }
 
-static void draw_terminal(wl_surface_t *s) {
+static void draw_terminal(wl_surface_t *s, bool cursor_on) {
+    if (!s) return;
     /* Background */
-    wl_draw_rect(s, 0, 0, TERM_W, TERM_H, COL_BG);
+    wl_draw_rect(s, 0, 0, s->width, s->height, COL_BG);
+
+    int visible_cols = (int)(s->width / 8);
+    int visible_rows = (int)(s->height / 16);
+    if (visible_cols < 8) visible_cols = 8;
+    if (visible_cols > TERM_COLS) visible_cols = TERM_COLS;
+    if (visible_rows < 4) visible_rows = 4;
+    if (visible_rows > TERM_ROWS) visible_rows = TERM_ROWS;
 
     /* Render text buffer */
-    for (int r = 0; r < TERM_ROWS; r++) {
+    for (int r = 0; r < visible_rows; r++) {
         if (screen[r][0] != 0 || r == cur_row) {
             wl_draw_text(s, 0, r * 16, screen[r], screen_color[r], 0);
         }
     }
 
     /* Draw cursor (blinking block) */
-    static u32 blink = 0;
-    blink++;
-    if ((blink / 15) & 1) {
-        wl_draw_rect(s, cur_col * 8, cur_row * 16, 8, 16, COL_CURSOR);
+    if (cursor_on) {
+        if (cur_col < visible_cols && cur_row < visible_rows) {
+            wl_draw_rect(s, cur_col * 8, cur_row * 16, 8, 16, COL_CURSOR);
+        }
     }
 }
 
@@ -667,6 +954,7 @@ void wl_term_task(void *arg) {
 
     wl_surface_t *s = wl_surface_create("Terminal", 50, 50, TERM_W, TERM_H, sched_current()->id);
     if (!s) return;
+    wl_surface_set_constraints(s, true, TERM_MIN_W, TERM_MIN_H);
 
     /* Initialize screen */
     memset(screen, 0, sizeof(screen));
@@ -681,14 +969,21 @@ void wl_term_task(void *arg) {
     term_newline();
     show_prompt();
 
-    draw_terminal(s);
+    bool cursor_on = ((pit_uptime_ms() / 500) & 1) != 0;
+    draw_terminal(s, cursor_on);
     wl_surface_commit(s);
 
     u32 my_id = s->id;
+    bool last_cursor_on = cursor_on;
     while (s->state == WL_SURFACE_ACTIVE && s->id == my_id) {
         input_event_t ev;
+        bool dirty = false;
 
         while (wl_surface_pop_event(s, &ev)) {
+            if (ev.type == EV_RESIZE) {
+                dirty = true;
+                continue;
+            }
             if (ev.type == EV_KEY) {
                 u16 sc = ev.code;
 
@@ -703,6 +998,7 @@ void wl_term_task(void *arg) {
                 if (sc == 0x48 && history_count > 0) {
                     if (history_pos > 0) history_pos--;
                     replace_input_line(history[history_pos]);
+                    dirty = true;
                     continue;
                 }
                 if (sc == 0x50 && history_count > 0) {
@@ -713,6 +1009,7 @@ void wl_term_task(void *arg) {
                         history_pos = history_count;
                         replace_input_line("");
                     }
+                    dirty = true;
                     continue;
                 }
 
@@ -726,22 +1023,31 @@ void wl_term_task(void *arg) {
                     term_newline();
                     process_command();
                     show_prompt();
+                    dirty = true;
                 } else if (c == '\b') {
                     if (input_len > 0) {
                         input_len--;
                         term_putchar('\b', COL_FG);
+                        dirty = true;
                     }
                 } else if (c >= 32 && c < 127 && input_len < 126) {
                     input_buf[input_len++] = c;
                     term_putchar(c, COL_FG);
+                    dirty = true;
                 }
             }
         }
 
-        /* Always redraw for cursor blink */
-        draw_terminal(s);
-        wl_surface_commit(s);
+        cursor_on = ((pit_uptime_ms() / 500) & 1) != 0;
+        if (cursor_on != last_cursor_on) {
+            dirty = true;
+            last_cursor_on = cursor_on;
+        }
+        if (dirty) {
+            draw_terminal(s, cursor_on);
+            wl_surface_commit(s);
+        }
 
-        task_sleep_ms(33); /* ~30 fps */
+        task_sleep_ms(16);
     }
 }

@@ -13,6 +13,8 @@
 
 #define RADIO_W 560
 #define RADIO_H 460
+#define RADIO_MIN_W 560
+#define RADIO_MIN_H 460
 
 #define COL_BG      0xFFF4F7FB
 #define COL_PANEL   0xFFFFFFFF
@@ -50,6 +52,28 @@ static char wifi_action_msg[96] = "";
 static bool wifi_action_error = false;
 static char bt_action_msg[96] = "";
 static bool bt_action_error = false;
+static i32 radio_w = RADIO_W;
+static i32 radio_h = RADIO_H;
+static i32 panel_w = 512;
+static i32 right_btn_x = 408;
+static i32 toggle_x = 456;
+static i32 volume_bar_w = 440;
+static i32 mute_btn_x = 396;
+
+static void radio_update_layout(wl_surface_t *s) {
+    if (!s) return;
+    radio_w = (i32)s->width;
+    radio_h = (i32)s->height;
+    if (radio_w < RADIO_MIN_W) radio_w = RADIO_MIN_W;
+    if (radio_h < RADIO_MIN_H) radio_h = RADIO_MIN_H;
+    panel_w = radio_w - 48;
+    if (panel_w < 512) panel_w = 512;
+    right_btn_x = radio_w - 24 - 128;
+    toggle_x = radio_w - 24 - 56;
+    volume_bar_w = radio_w - 120;
+    if (volume_bar_w < 440) volume_bar_w = 440;
+    mute_btn_x = radio_w - 24 - 140;
+}
 
 static void draw_text_fit_radio(wl_surface_t *s, i32 x, i32 y, const char *text, i32 max_w, u32 color) {
     if (!text || max_w < 8) return;
@@ -126,9 +150,9 @@ static void draw_device_header(wl_surface_t *s, radio_panel_t panel) {
         accent = COL_SOUND;
     }
 
-    wl_draw_rect(s, 0, 0, RADIO_W, RADIO_H, COL_BG);
-    wl_draw_rect(s, 0, 0, RADIO_W, 72, COL_PANEL);
-    wl_draw_rect(s, 0, 71, RADIO_W, 1, COL_LINE);
+    wl_draw_rect(s, 0, 0, radio_w, radio_h, COL_BG);
+    wl_draw_rect(s, 0, 0, radio_w, 72, COL_PANEL);
+    wl_draw_rect(s, 0, 71, radio_w, 1, COL_LINE);
     wl_draw_rounded_rect(s, 24, 22, 10, 28, 5, accent);
     wl_draw_text(s, 48, 20, title, COL_TEXT, 0);
     draw_text_fit_radio(s, 48, 46, detail, 430, COL_MUTED);
@@ -145,6 +169,7 @@ static void draw_info_row(wl_surface_t *s, i32 x, i32 y, const char *label, cons
 }
 
 static void draw_network(wl_surface_t *s) {
+    radio_update_layout(s);
     draw_device_header(s, RADIO_NETWORK);
 
     char ip[32], gw[32], dns[32], mac[32], state[48];
@@ -158,109 +183,112 @@ static void draw_network(wl_surface_t *s) {
               g_net_iface.is_up ? "Link up" : "Link down",
               g_net_iface.dhcp_done ? "ready" : "pending");
 
-    wl_draw_rounded_rect(s, 24, 96, 512, 178, 10, COL_PANEL);
-    wl_draw_rounded_outline(s, 24, 96, 512, 178, 10, COL_LINE);
+    wl_draw_rounded_rect(s, 24, 96, panel_w, 178, 10, COL_PANEL);
+    wl_draw_rounded_outline(s, 24, 96, panel_w, 178, 10, COL_LINE);
     draw_info_row(s, 48, 120, "Status", state, g_net_iface.dhcp_done ? COL_GREEN : COL_WARN);
     draw_info_row(s, 48, 150, "IPv4 address", g_net_iface.dhcp_done ? ip : "No lease", g_net_iface.dhcp_done ? COL_TEXT : COL_WARN);
     draw_info_row(s, 48, 180, "Gateway", g_net_iface.dhcp_done ? gw : "Not set", COL_TEXT);
     draw_info_row(s, 48, 210, "DNS server", g_net_iface.dhcp_done ? dns : "Not set", COL_TEXT);
     draw_info_row(s, 48, 240, "MAC address", mac, COL_TEXT);
 
-    wl_draw_rounded_rect(s, 24, 302, 512, 64, 10, COL_PANEL);
-    wl_draw_rounded_outline(s, 24, 302, 512, 64, 10, COL_LINE);
+    wl_draw_rounded_rect(s, 24, 302, panel_w, 64, 10, COL_PANEL);
+    wl_draw_rounded_outline(s, 24, 302, panel_w, 64, 10, COL_LINE);
     wl_draw_text(s, 48, 322, "Driver", COL_MUTED, 0);
     wl_draw_text(s, 180, 322, "Intel e1000", COL_TEXT, 0);
     wl_draw_text(s, 48, 344, "Mode", COL_MUTED, 0);
     wl_draw_text(s, 180, 344, "DHCP via kernel net stack", COL_TEXT, 0);
 
-    draw_button(s, 24, 398, 128, "Renew DHCP", true, g_net_iface.is_up);
-    wl_draw_text(s, 172, 408, g_net_iface.is_up ? "Request a fresh wired lease." : "Wired link is down.", COL_MUTED, 0);
+    draw_button(s, 24, radio_h - 62, 128, "Renew DHCP", true, g_net_iface.is_up);
+    wl_draw_text(s, 172, radio_h - 52, g_net_iface.is_up ? "Request a fresh wired lease." : "Wired link is down.", COL_MUTED, 0);
 }
 
 static void draw_wifi(wl_surface_t *s) {
+    radio_update_layout(s);
     const iwlwifi_status_t *wifi = iwlwifi_get_status();
     bool usable = wifi->present && wifi->firmware_loaded;
     bool can_operate = wifi->radio_enabled && usable;
     draw_device_header(s, RADIO_WIFI);
 
-    wl_draw_rounded_rect(s, 24, 96, 512, 92, 10, COL_PANEL);
-    wl_draw_rounded_outline(s, 24, 96, 512, 92, 10, COL_LINE);
+    wl_draw_rounded_rect(s, 24, 96, panel_w, 92, 10, COL_PANEL);
+    wl_draw_rounded_outline(s, 24, 96, panel_w, 92, 10, COL_LINE);
     wl_draw_text(s, 48, 120, "Wi-Fi radio", COL_TEXT, 0);
     draw_text_fit_radio(s, 48, 146, wifi_status_line(wifi), 330, usable ? COL_GREEN : (wifi->radio_enabled ? COL_WARN : COL_MUTED));
-    draw_toggle(s, 456, 127, wifi->radio_enabled, usable);
+    draw_toggle(s, toggle_x, 127, wifi->radio_enabled, usable);
 
     wl_draw_text(s, 24, 214, "Known network", COL_MUTED, 0);
-    wl_draw_rounded_rect(s, 24, 240, 512, 82, 10, COL_PANEL);
-    wl_draw_rounded_outline(s, 24, 240, 512, 82, 10, COL_LINE);
+    wl_draw_rounded_rect(s, 24, 240, panel_w, 82, 10, COL_PANEL);
+    wl_draw_rounded_outline(s, 24, 240, panel_w, 82, 10, COL_LINE);
     wl_draw_text(s, 48, 262, wifi->ssid[0] ? wifi->ssid : "YamNet", COL_TEXT, 0);
     draw_text_fit_radio(s, 48, 286,
                         usable ? "Ready for scan/connect" : wifi->last_error,
                         430, usable ? COL_MUTED : COL_WARN);
 
     if (wifi_action_msg[0]) {
-        draw_text_fit_radio(s, 24, 332, wifi_action_msg, 512,
+        draw_text_fit_radio(s, 24, 332, wifi_action_msg, panel_w,
                             wifi_action_error ? COL_WARN : COL_GREEN);
     }
 
-    draw_button(s, 24, 360, 112, "Scan", false, can_operate);
-    draw_button(s, 152, 360, 128, "Connect", true, can_operate);
-    draw_button(s, 408, 360, 128, wifi->radio_enabled ? "Turn off" : "Turn on", false, true);
+    draw_button(s, 24, radio_h - 100, 112, "Scan", false, can_operate);
+    draw_button(s, 152, radio_h - 100, 128, "Connect", true, can_operate);
+    draw_button(s, right_btn_x, radio_h - 100, 128, wifi->radio_enabled ? "Turn off" : "Turn on", false, true);
 }
 
 static void draw_bluetooth(wl_surface_t *s) {
+    radio_update_layout(s);
     const hci_status_t *bt = hci_get_status();
     bool usable = bt->controller_present && bt->usb_backend_ready;
     bool can_operate = bt->radio_enabled && usable;
     draw_device_header(s, RADIO_BT);
 
-    wl_draw_rounded_rect(s, 24, 96, 512, 92, 10, COL_PANEL);
-    wl_draw_rounded_outline(s, 24, 96, 512, 92, 10, COL_LINE);
+    wl_draw_rounded_rect(s, 24, 96, panel_w, 92, 10, COL_PANEL);
+    wl_draw_rounded_outline(s, 24, 96, panel_w, 92, 10, COL_LINE);
     wl_draw_text(s, 48, 120, "Bluetooth radio", COL_TEXT, 0);
     draw_text_fit_radio(s, 48, 146, bt_status_line(bt), 330, usable ? COL_GREEN : (bt->radio_enabled ? COL_WARN : COL_MUTED));
-    draw_toggle(s, 456, 127, bt->radio_enabled, usable);
+    draw_toggle(s, toggle_x, 127, bt->radio_enabled, usable);
 
     wl_draw_text(s, 24, 214, "Nearby device", COL_MUTED, 0);
-    wl_draw_rounded_rect(s, 24, 240, 512, 82, 10, COL_PANEL);
-    wl_draw_rounded_outline(s, 24, 240, 512, 82, 10, COL_LINE);
+    wl_draw_rounded_rect(s, 24, 240, panel_w, 82, 10, COL_PANEL);
+    wl_draw_rounded_outline(s, 24, 240, panel_w, 82, 10, COL_LINE);
     wl_draw_text(s, 48, 262, bt->peer_name[0] ? bt->peer_name : "YamDevice", COL_TEXT, 0);
     draw_text_fit_radio(s, 48, 286,
                         usable ? "Ready for discovery/pairing" : bt->last_error,
                         430, usable ? COL_MUTED : COL_WARN);
 
     if (bt_action_msg[0]) {
-        draw_text_fit_radio(s, 24, 332, bt_action_msg, 512,
+        draw_text_fit_radio(s, 24, 332, bt_action_msg, panel_w,
                             bt_action_error ? COL_WARN : COL_GREEN);
     }
 
-    draw_button(s, 24, 360, 112, "Scan", false, can_operate);
-    draw_button(s, 152, 360, 128, "Pair", true, can_operate);
-    draw_button(s, 408, 360, 128, bt->radio_enabled ? "Turn off" : "Turn on", false, true);
+    draw_button(s, 24, radio_h - 100, 112, "Scan", false, can_operate);
+    draw_button(s, 152, radio_h - 100, 128, "Pair", true, can_operate);
+    draw_button(s, right_btn_x, radio_h - 100, 128, bt->radio_enabled ? "Turn off" : "Turn on", false, true);
 }
 
 static void draw_sound(wl_surface_t *s) {
+    radio_update_layout(s);
     const audio_status_t *audio = audio_get_status();
     draw_device_header(s, RADIO_SOUND);
 
-    wl_draw_rounded_rect(s, 24, 96, 512, 100, 10, COL_PANEL);
-    wl_draw_rounded_outline(s, 24, 96, 512, 100, 10, COL_LINE);
+    wl_draw_rounded_rect(s, 24, 96, panel_w, 100, 10, COL_PANEL);
+    wl_draw_rounded_outline(s, 24, 96, panel_w, 100, 10, COL_LINE);
     wl_draw_text(s, 48, 122, "Output", COL_TEXT, 0);
     draw_text_fit_radio(s, 48, 150,
                         audio->output_available ? audio->device_name : "No audio output device",
-                        430, audio->output_available ? COL_GREEN : COL_WARN);
+                        panel_w - 82, audio->output_available ? COL_GREEN : COL_WARN);
 
-    wl_draw_rounded_rect(s, 24, 226, 512, 114, 10, COL_PANEL);
-    wl_draw_rounded_outline(s, 24, 226, 512, 114, 10, COL_LINE);
+    wl_draw_rounded_rect(s, 24, 226, panel_w, 114, 10, COL_PANEL);
+    wl_draw_rounded_outline(s, 24, 226, panel_w, 114, 10, COL_LINE);
     wl_draw_text(s, 48, 252, "Volume", COL_TEXT, 0);
     char vol[32];
     ksnprintf(vol, sizeof(vol), "%u%%", audio->muted ? 0 : audio->volume_percent);
-    wl_draw_text(s, 464, 252, vol, COL_TEXT, 0);
-    wl_draw_rounded_rect(s, 48, 292, 440, 12, 6, 0xFFE2E8F0);
-    u32 fill = audio->muted ? 0 : (audio->volume_percent * 440) / 100;
+    wl_draw_text(s, radio_w - 96, 252, vol, COL_TEXT, 0);
+    wl_draw_rounded_rect(s, 48, 292, volume_bar_w, 12, 6, 0xFFE2E8F0);
+    u32 fill = audio->muted ? 0 : (audio->volume_percent * (u32)volume_bar_w) / 100;
     wl_draw_rounded_rect(s, 48, 292, fill, 12, 6, audio->muted ? 0xFF94A3B8 : COL_SOUND);
 
-    draw_button(s, 24, 374, 92, "-", false, true);
-    draw_button(s, 132, 374, 92, "+", true, true);
-    draw_button(s, 396, 374, 140, audio->muted ? "Unmute" : "Mute", false, true);
+    draw_button(s, 24, radio_h - 86, 92, "-", false, true);
+    draw_button(s, 132, radio_h - 86, 92, "+", true, true);
+    draw_button(s, mute_btn_x, radio_h - 86, 140, audio->muted ? "Unmute" : "Mute", false, true);
 }
 
 static bool hit(i32 mx, i32 my, i32 x, i32 y, i32 w, i32 h) {
@@ -270,15 +298,15 @@ static bool hit(i32 mx, i32 my, i32 x, i32 y, i32 w, i32 h) {
 static void handle_wifi_click(i32 x, i32 y) {
     const iwlwifi_status_t *wifi = iwlwifi_get_status();
     iwlwifi_op_result_t result = IWLWIFI_OP_OK;
-    if (hit(x, y, 456, 127, 56, 30) || hit(x, y, 408, 360, 128, 34)) {
+    if (hit(x, y, toggle_x, 127, 56, 30) || hit(x, y, right_btn_x, radio_h - 100, 128, 34)) {
         result = iwlwifi_set_radio_enabled(!wifi->radio_enabled);
         ksnprintf(wifi_action_msg, sizeof(wifi_action_msg), "%s",
                   wifi->radio_enabled ? iwlwifi_result_string(result) : "Wi-Fi radio is off");
-    } else if (hit(x, y, 24, 360, 112, 34)) {
+    } else if (hit(x, y, 24, radio_h - 100, 112, 34)) {
         result = iwlwifi_scan();
         ksnprintf(wifi_action_msg, sizeof(wifi_action_msg), "Scan: %s",
                   iwlwifi_result_string(result));
-    } else if (hit(x, y, 152, 360, 128, 34)) {
+    } else if (hit(x, y, 152, radio_h - 100, 128, 34)) {
         result = iwlwifi_connect_default();
         ksnprintf(wifi_action_msg, sizeof(wifi_action_msg), "Connect: %s",
                   iwlwifi_result_string(result));
@@ -291,15 +319,15 @@ static void handle_wifi_click(i32 x, i32 y) {
 static void handle_bt_click(i32 x, i32 y) {
     const hci_status_t *bt = hci_get_status();
     hci_op_result_t result = HCI_OP_OK;
-    if (hit(x, y, 456, 127, 56, 30) || hit(x, y, 408, 360, 128, 34)) {
+    if (hit(x, y, toggle_x, 127, 56, 30) || hit(x, y, right_btn_x, radio_h - 100, 128, 34)) {
         result = hci_set_radio_enabled(!bt->radio_enabled);
         ksnprintf(bt_action_msg, sizeof(bt_action_msg), "%s",
                   bt->radio_enabled ? hci_result_string(result) : "Bluetooth radio is off");
-    } else if (hit(x, y, 24, 360, 112, 34)) {
+    } else if (hit(x, y, 24, radio_h - 100, 112, 34)) {
         result = hci_scan();
         ksnprintf(bt_action_msg, sizeof(bt_action_msg), "Scan: %s",
                   hci_result_string(result));
-    } else if (hit(x, y, 152, 360, 128, 34)) {
+    } else if (hit(x, y, 152, radio_h - 100, 128, 34)) {
         result = hci_connect_default();
         ksnprintf(bt_action_msg, sizeof(bt_action_msg), "Pair: %s",
                   hci_result_string(result));
@@ -310,18 +338,18 @@ static void handle_bt_click(i32 x, i32 y) {
 }
 
 static void handle_network_click(i32 x, i32 y) {
-    if (hit(x, y, 24, 398, 128, 34) && g_net_iface.is_up) {
+    if (hit(x, y, 24, radio_h - 62, 128, 34) && g_net_iface.is_up) {
         dhcp_start();
         kprintf("[NETSET] DHCP renew requested from Ethernet Settings\n");
     }
 }
 
 static void handle_sound_click(i32 x, i32 y) {
-    if (hit(x, y, 24, 374, 92, 34)) {
+    if (hit(x, y, 24, radio_h - 86, 92, 34)) {
         audio_set_volume_percent(audio_volume_percent() >= 10 ? audio_volume_percent() - 10 : 0);
-    } else if (hit(x, y, 132, 374, 92, 34)) {
+    } else if (hit(x, y, 132, radio_h - 86, 92, 34)) {
         audio_set_volume_percent(audio_volume_percent() + 10);
-    } else if (hit(x, y, 396, 374, 140, 34)) {
+    } else if (hit(x, y, mute_btn_x, radio_h - 86, 140, 34)) {
         audio_set_muted(!audio_is_muted());
     }
 }
@@ -331,6 +359,7 @@ void wl_network_settings_task(void *arg) {
     task_sleep_ms(120);
     wl_surface_t *s = wl_surface_create("Ethernet Settings", 260, 74, RADIO_W, RADIO_H, sched_current()->id);
     if (!s) return;
+    wl_surface_set_constraints(s, true, RADIO_MIN_W, RADIO_MIN_H);
     draw_network(s);
     wl_surface_commit(s);
     u32 my_id = s->id;
@@ -338,7 +367,8 @@ void wl_network_settings_task(void *arg) {
         input_event_t ev;
         bool dirty = false;
         while (wl_surface_pop_event(s, &ev)) {
-            if (ev.type == EV_ABS && ev.code == 0) net_mouse_x = ev.value;
+            if (ev.type == EV_RESIZE) dirty = true;
+            else if (ev.type == EV_ABS && ev.code == 0) net_mouse_x = ev.value;
             else if (ev.type == EV_ABS && ev.code == 1) net_mouse_y = ev.value;
             else if (ev.type == EV_KEY && ev.value == KEY_PRESSED && ev.code >= 0x110 &&
                      net_mouse_x >= 0 && net_mouse_y >= 0) {
@@ -359,6 +389,7 @@ void wl_wifi_settings_task(void *arg) {
     task_sleep_ms(120);
     wl_surface_t *s = wl_surface_create("Wi-Fi Settings", 300, 86, RADIO_W, RADIO_H, sched_current()->id);
     if (!s) return;
+    wl_surface_set_constraints(s, true, RADIO_MIN_W, RADIO_MIN_H);
     draw_wifi(s);
     wl_surface_commit(s);
     u32 my_id = s->id;
@@ -366,7 +397,8 @@ void wl_wifi_settings_task(void *arg) {
         input_event_t ev;
         bool dirty = false;
         while (wl_surface_pop_event(s, &ev)) {
-            if (ev.type == EV_ABS && ev.code == 0) wifi_mouse_x = ev.value;
+            if (ev.type == EV_RESIZE) dirty = true;
+            else if (ev.type == EV_ABS && ev.code == 0) wifi_mouse_x = ev.value;
             else if (ev.type == EV_ABS && ev.code == 1) wifi_mouse_y = ev.value;
             else if (ev.type == EV_KEY && ev.value == KEY_PRESSED && ev.code >= 0x110 &&
                      wifi_mouse_x >= 0 && wifi_mouse_y >= 0) {
@@ -387,6 +419,7 @@ void wl_bluetooth_settings_task(void *arg) {
     task_sleep_ms(120);
     wl_surface_t *s = wl_surface_create("Bluetooth Settings", 340, 108, RADIO_W, RADIO_H, sched_current()->id);
     if (!s) return;
+    wl_surface_set_constraints(s, true, RADIO_MIN_W, RADIO_MIN_H);
     draw_bluetooth(s);
     wl_surface_commit(s);
     u32 my_id = s->id;
@@ -394,7 +427,8 @@ void wl_bluetooth_settings_task(void *arg) {
         input_event_t ev;
         bool dirty = false;
         while (wl_surface_pop_event(s, &ev)) {
-            if (ev.type == EV_ABS && ev.code == 0) bt_mouse_x = ev.value;
+            if (ev.type == EV_RESIZE) dirty = true;
+            else if (ev.type == EV_ABS && ev.code == 0) bt_mouse_x = ev.value;
             else if (ev.type == EV_ABS && ev.code == 1) bt_mouse_y = ev.value;
             else if (ev.type == EV_KEY && ev.value == KEY_PRESSED && ev.code >= 0x110 &&
                      bt_mouse_x >= 0 && bt_mouse_y >= 0) {
@@ -415,6 +449,7 @@ void wl_sound_settings_task(void *arg) {
     task_sleep_ms(120);
     wl_surface_t *s = wl_surface_create("Sound Settings", 380, 120, RADIO_W, RADIO_H, sched_current()->id);
     if (!s) return;
+    wl_surface_set_constraints(s, true, RADIO_MIN_W, RADIO_MIN_H);
     draw_sound(s);
     wl_surface_commit(s);
     u32 my_id = s->id;
@@ -422,7 +457,8 @@ void wl_sound_settings_task(void *arg) {
         input_event_t ev;
         bool dirty = false;
         while (wl_surface_pop_event(s, &ev)) {
-            if (ev.type == EV_ABS && ev.code == 0) sound_mouse_x = ev.value;
+            if (ev.type == EV_RESIZE) dirty = true;
+            else if (ev.type == EV_ABS && ev.code == 0) sound_mouse_x = ev.value;
             else if (ev.type == EV_ABS && ev.code == 1) sound_mouse_y = ev.value;
             else if (ev.type == EV_KEY && ev.value == KEY_PRESSED && ev.code >= 0x110 &&
                      sound_mouse_x >= 0 && sound_mouse_y >= 0) {

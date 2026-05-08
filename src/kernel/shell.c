@@ -21,6 +21,7 @@
 #include "ipc/ipc.h"
 #include "fs/vfs.h"
 #include "sched/wait.h"
+#include "lib/kdebug.h"
 #include <nexus/types.h>
 
 #define MAX_CMD_LEN 256
@@ -88,6 +89,7 @@ static void cmd_help(void) {
     kprintf_color(C_ERROR,   "    shutdown  "); kprintf_color(C_TEXT, "Power off (VM environments)\n");
     kprintf_color(C_OK,      "    echo      "); kprintf_color(C_TEXT, "Print text to screen\n");
     kprintf_color(C_OK,      "    clear     "); kprintf_color(C_TEXT, "Clear the screen\n");
+    kprintf_color(C_OK,      "    debug     "); kprintf_color(C_TEXT, "Debug logging control: on/off/status\n");
     kprintf_color(C_OK,      "    help      "); kprintf_color(C_TEXT, "Show this reference\n");
     kprintf_color(C_OK,      "    whoami    "); kprintf_color(C_TEXT, "Current shell user\n");
     kprintf_color(C_OK,      "    ver       "); kprintf_color(C_TEXT, "Short version string\n");
@@ -569,6 +571,21 @@ static void parse_command(char *cmd) {
     while (cmd[len]) len++;
     while (len > 0 && (cmd[len-1] == ' ' || cmd[len-1] == '\n')) {
         cmd[--len] = 0;
+    }
+
+    if (strcmp(cmd, "debug") == 0 || strcmp(cmd, "debug status") == 0) {
+        bool on = kdebug_is_enabled();
+        kprintf_color(C_HEADER, "  Debug logs: ");
+        kprintf_color(on ? C_OK : C_WARN, "%s\n", on ? "ON" : "OFF");
+        return;
+    } else if (strcmp(cmd, "debug on") == 0) {
+        kdebug_set_enabled(true);
+        kprintf_color(C_OK, "  Debug logs enabled globally.\n");
+        return;
+    } else if (strcmp(cmd, "debug off") == 0) {
+        kdebug_set_enabled(false);
+        kprintf_color(C_WARN, "  Debug logs disabled for production mode.\n");
+        return;
     }
 
     if (len == 0) return;

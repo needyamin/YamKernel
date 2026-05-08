@@ -49,6 +49,16 @@ int memcmp(const void *a, const void *b, usize count) {
     return 0;
 }
 
+char *strchr(const char *s, int c) {
+    char ch = (char)c;
+    while (*s) {
+        if (*s == ch)
+            return (char *)s;
+        s++;
+    }
+    return ch == '\0' ? (char *)s : NULL;
+}
+
 usize strlen(const char *s) {
     usize len = 0;
     while (s[len]) len++;

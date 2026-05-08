@@ -109,8 +109,9 @@
 /* Phase 3: Non-blocking I/O */
 #define SYS_SELECT            92
 #define SYS_FCNTL             93
+#define SYS_EXECVE            94
 
-#define SYS_MAX     94
+#define SYS_MAX               95
 
 #define YAM_ABI_VERSION 1
 #define YAM_OS_NAME "YamOS"
@@ -128,6 +129,7 @@
 #define YAM_OS_FLAG_NONBLOCK_IO       (1u << 9)
 #define YAM_OS_FLAG_PTHREAD_ABI       (1u << 10) /* futex mutex/cond/keys live */
 #define YAM_OS_FLAG_SIGNALS           (1u << 11) /* sigaction/sigprocmask wired */
+#define YAM_OS_FLAG_YAM_EXTENSION    (1u << 12) /* spawn resolves *.yam native ELF suffix */
 
 /* Futex operation codes (mirror Linux for compat) */
 #define FUTEX_WAIT          0
@@ -163,6 +165,10 @@
 #define YAM_INSTALL_ERR_NONE               0
 #define YAM_INSTALL_ERR_UNKNOWN_PACKAGE    1
 #define YAM_INSTALL_ERR_MISSING_CAPABILITY 2
+#define YAM_INSTALL_ERR_MANIFEST           3
+#define YAM_INSTALL_ERR_INTEGRITY          4
+#define YAM_INSTALL_ERR_DOWNLOAD           5
+#define YAM_INSTALL_ERR_IO                 6
 
 #define YAM_INSTALL_CAP_PACKAGE_DB         (1u << 0)
 #define YAM_INSTALL_CAP_TEMP_STORAGE       (1u << 1)

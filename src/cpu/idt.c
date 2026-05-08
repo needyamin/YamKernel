@@ -6,6 +6,7 @@
 #include "apic.h"
 #include "../lib/kprintf.h"
 #include <nexus/panic.h>
+#include "../sched/sched.h"
 
 #define IDT_ENTRIES 256
 
@@ -156,6 +157,27 @@ static void default_exception_handler(interrupt_frame_t *frame) {
         }
     }
 
+    /* User-mode faults should kill the offending task, not panic the kernel. */
+    if ((frame->cs & 0x3u) == 0x3u) {
+        task_t *cur = sched_current();
+        if (cur) {
+            kprintf_color(0xFFFFAA33,
+                "[EXC] user task '%s' (pid=%lu) killed by exception #%lu err=0x%lx rip=0x%lx\n",
+                cur->name, cur->id, frame->int_no, frame->error_code, frame->rip);
+            /* Encode signal-like exit status in the upper byte (128 + signo style). */
+            sched_exit_current((i32)((128u + (u32)frame->int_no) << 8));
+            /*
+             * Never iret back into a faulting user frame (can recurse into
+             * #DF/triple-fault if the task keeps faulting). Park this dead task
+             * in kernel and keep yielding until another runnable task is picked.
+             */
+            for (;;) {
+                sched_yield();
+                __asm__ volatile("hlt");
+            }
+        }
+    }
+
     kprintf_color(0xFFFF3333,
         "\n!!! YamKernel EXCEPTION !!!\n"
         "  Exception: %s (#%lu)\n"
@@ -177,7 +199,7 @@ static void default_exception_handler(interrupt_frame_t *frame) {
         frame->r8,  frame->r9
     );
 
-    /* Halt on unrecoverable exceptions */
+    /* Halt on unrecoverable kernel exceptions */
     if (frame->int_no < 32) {
         kpanic_with_frame(frame, "Unrecoverable CPU exception #%lu", frame->int_no);
     }

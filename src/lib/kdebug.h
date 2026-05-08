@@ -38,29 +38,34 @@
 void kdebug_log(int level, const char *tag, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
 
+/* Runtime debug control (centralized switch) */
+void kdebug_set_enabled(bool enabled);
+bool kdebug_is_enabled(void);
+bool kdebug_should_log(int level);
+
 /* Convenience macros — compile out messages below KDEBUG_LEVEL */
 #define KTRACE(tag, fmt, ...) do { \
-    if (KDEBUG_TRACE >= KDEBUG_LEVEL) \
+    if (KDEBUG_TRACE >= KDEBUG_LEVEL && kdebug_should_log(KDEBUG_TRACE)) \
         kdebug_log(KDEBUG_TRACE, tag, fmt, ##__VA_ARGS__); \
 } while(0)
 
 #define KDBG(tag, fmt, ...) do { \
-    if (KDEBUG_DEBUG >= KDEBUG_LEVEL) \
+    if (KDEBUG_DEBUG >= KDEBUG_LEVEL && kdebug_should_log(KDEBUG_DEBUG)) \
         kdebug_log(KDEBUG_DEBUG, tag, fmt, ##__VA_ARGS__); \
 } while(0)
 
 #define KINFO(tag, fmt, ...) do { \
-    if (KDEBUG_INFO >= KDEBUG_LEVEL) \
+    if (KDEBUG_INFO >= KDEBUG_LEVEL && kdebug_should_log(KDEBUG_INFO)) \
         kdebug_log(KDEBUG_INFO, tag, fmt, ##__VA_ARGS__); \
 } while(0)
 
 #define KWARN(tag, fmt, ...) do { \
-    if (KDEBUG_WARN >= KDEBUG_LEVEL) \
+    if (KDEBUG_WARN >= KDEBUG_LEVEL && kdebug_should_log(KDEBUG_WARN)) \
         kdebug_log(KDEBUG_WARN, tag, fmt, ##__VA_ARGS__); \
 } while(0)
 
 #define KERR(tag, fmt, ...) do { \
-    if (KDEBUG_ERROR >= KDEBUG_LEVEL) \
+    if (KDEBUG_ERROR >= KDEBUG_LEVEL && kdebug_should_log(KDEBUG_ERROR)) \
         kdebug_log(KDEBUG_ERROR, tag, fmt, ##__VA_ARGS__); \
 } while(0)
 

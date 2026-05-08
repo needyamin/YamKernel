@@ -111,7 +111,7 @@ int dns_resolve(const char *hostname, u32 *ip_out) {
     /* Wait for response (up to 3s) */
     for (int i = 0; i < 3000000 && !g_dns_done; i++) {
         if ((i % 1000) == 0) net_poll();
-        __asm__ volatile("pause");
+        net_coop_yield((u32)i);
     }
 
     if (!g_dns_done || !g_dns_result) return -1;

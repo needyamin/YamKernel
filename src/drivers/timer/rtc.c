@@ -22,6 +22,11 @@ static u8 cmos_read(u8 reg) {
     return inb(CMOS_DATA);
 }
 
+static void cmos_write(u8 reg, u8 value) {
+    outb(CMOS_ADDR, reg);
+    outb(CMOS_DATA, value);
+}
+
 static int rtc_updating(void) {
     outb(CMOS_ADDR, 0x0A);
     return (inb(CMOS_DATA) & 0x80);
@@ -29,6 +34,10 @@ static int rtc_updating(void) {
 
 static u8 bcd_to_bin(u8 bcd) {
     return ((bcd >> 4) * 10) + (bcd & 0x0F);
+}
+
+static u8 bin_to_bcd(u8 bin) {
+    return (u8)(((bin / 10) << 4) | (bin % 10));
 }
 
 void rtc_read(rtc_time_t *t) {
@@ -77,4 +86,33 @@ void rtc_read(rtc_time_t *t) {
     t->day    = day;
     t->month  = month;
     t->year   = 2000 + year;  /* CMOS year is 0-99, assume 2000s */
+}
+
+void rtc_set(const rtc_time_t *t) {
+    if (!t) return;
+    while (rtc_updating());
+
+    u8 sec = t->second;
+    u8 min = t->minute;
+    u8 hour = t->hour;
+    u8 day = t->day;
+    u8 month = t->month;
+    u8 year = (u8)(t->year % 100);
+
+    u8 regB = cmos_read(0x0B);
+    if (!(regB & 0x04)) {
+        sec = bin_to_bcd(sec);
+        min = bin_to_bcd(min);
+        hour = bin_to_bcd(hour);
+        day = bin_to_bcd(day);
+        month = bin_to_bcd(month);
+        year = bin_to_bcd(year);
+    }
+
+    cmos_write(0x00, sec);
+    cmos_write(0x02, min);
+    cmos_write(0x04, hour);
+    cmos_write(0x07, day);
+    cmos_write(0x08, month);
+    cmos_write(0x09, year);
 }

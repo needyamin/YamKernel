@@ -15,6 +15,10 @@ typedef struct percpu {
     u64 user_rsp_save;      /* +32  syscall scratch (asm uses gs:[32]) */
     u64 kernel_rsp;         /* +40  syscall kernel stack (asm uses gs:[40]) */
     u64 idle_ticks;         /* +48  ticks spent in idle loop */
+    /* Absolute addresses of syscall_entry stack slots (valid during syscall_dispatch). */
+    u64 syscall_rip_slot;   /* +56  points to saved user RIP (syscall clobber slot) */
+    u64 syscall_rsp_slot;   /* +64  points to saved user RSP slot */
+    u64 syscall_rdi_slot;   /* +72  points to saved user RDI slot */
 } percpu_t;
 
 void      percpu_init(u32 cpu_id, u32 apic_id);

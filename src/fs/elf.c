@@ -13,6 +13,9 @@
 #include "../lib/string.h"
 
 extern void enter_user_mode(u64 rip, u64 rsp, u64 argc, u64 argv, u64 envp) NORETURN;
+extern void enter_user_mode_ldso(u64 rip, u64 rsp) NORETURN;
+
+#define ELF_INTERP_GAP_BYTES (2u * 1024u * 1024u)
 
 /* User stack lives at the top of the lower-half canonical address space */
 #define USER_STACK_GUARD_LOW  0x00007FFEFFFFF000ULL
@@ -31,6 +34,12 @@ typedef struct {
     u64 argv;
     u64 envp;
 } elf_bootstrap_arg_t;
+
+typedef struct {
+    u64 entry;
+    u64 *pml4;
+    u64 stack_top;
+} elf_ldso_bootstrap_arg_t;
 
 static void elf_user_entry(void *arg) {
     elf_bootstrap_arg_t *ba = (elf_bootstrap_arg_t *)arg;
@@ -60,6 +69,26 @@ static void elf_user_entry(void *arg) {
      * stores can fault.
      */
     enter_user_mode(entry, stack_top, argc, argv, envp);
+}
+
+static void elf_user_entry_ldso(void *arg) {
+    elf_ldso_bootstrap_arg_t *ba = (elf_ldso_bootstrap_arg_t *)arg;
+    u64 entry = ba->entry;
+    u64 *pml4 = ba->pml4;
+    u64 stack_top = ba->stack_top;
+
+    kprintf("[ELF] Transitioning to ld.so: entry=0x%lx, pml4=0x%lx\n", entry,
+            (u64)pml4);
+
+    task_t *self = sched_current();
+    self->pml4 = pml4;
+
+    u64 phys = vmm_virt_hhdm_to_phys(pml4);
+    __asm__ volatile("mov %0, %%cr3" :: "r"(phys) : "memory");
+
+    kfree(ba);
+
+    enter_user_mode_ldso(entry, stack_top);
 }
 
 static bool copy_to_user_mapping(u64 *pml4, u64 dst, const void *src, usize len) {
@@ -104,16 +133,266 @@ static bool copy_string_vector(u64 *pml4, u64 *sp, int count,
 
 static bool copy_pointer_vector(u64 *pml4, u64 base, int count,
                                 const u64 ptrs[]) {
-    if (!pml4 || !ptrs || count < 0) return false;
-    for (int i = 0; i < count; i++) {
-        if (!copy_to_user_mapping(pml4, base + (u64)i * sizeof(u64),
-                                  &ptrs[i], sizeof(u64))) {
-            return false;
-        }
+  if (!pml4 || !ptrs || count < 0) return false;
+  for (int i = 0; i < count; i++) {
+    if (!copy_to_user_mapping(pml4, base + (u64)i * sizeof(u64),
+                              &ptrs[i], sizeof(u64))) {
+      return false;
     }
-    u64 null_ptr = 0;
-    return copy_to_user_mapping(pml4, base + (u64)count * sizeof(u64),
-                                &null_ptr, sizeof(null_ptr));
+  }
+  u64 null_ptr = 0;
+  return copy_to_user_mapping(pml4, base + (u64)count * sizeof(u64),
+                              &null_ptr, sizeof(null_ptr));
+}
+
+static const elf64_phdr_t *elf_phdr_at(const elf64_ehdr_t *ehdr, const u8 *base,
+                                       u16 idx) {
+  if (idx >= ehdr->e_phnum) return NULL;
+  return (const elf64_phdr_t *)(base + ehdr->e_phoff +
+                                (usize)idx * ehdr->e_phentsize);
+}
+
+static const elf64_phdr_t *elf_find_phdr(const elf64_ehdr_t *ehdr, const u8 *base,
+                                         u32 kind) {
+  for (u16 i = 0; i < ehdr->e_phnum; i++) {
+    const elf64_phdr_t *ph = elf_phdr_at(ehdr, base, i);
+    if (ph->p_type == kind) return ph;
+  }
+  return NULL;
+}
+
+static bool elf_va_to_file_off(const elf64_ehdr_t *ehdr, const u8 *base, u64 va,
+                               u64 *off_out) {
+  for (u16 i = 0; i < ehdr->e_phnum; i++) {
+    const elf64_phdr_t *ph = elf_phdr_at(ehdr, base, i);
+    if (ph->p_type != PT_LOAD || ph->p_memsz == 0) continue;
+    if (va >= ph->p_vaddr && va < ph->p_vaddr + ph->p_memsz) {
+      u64 delta = va - ph->p_vaddr;
+      if (delta >= ph->p_filesz)
+        return false;
+      *off_out = ph->p_offset + delta;
+      return true;
+    }
+  }
+  return false;
+}
+
+static u64 elf_min_load_vaddr(const elf64_ehdr_t *ehdr, const u8 *base) {
+  u64 min_v = ~(u64)0;
+  for (u16 i = 0; i < ehdr->e_phnum; i++) {
+    const elf64_phdr_t *ph = elf_phdr_at(ehdr, base, i);
+    if (ph->p_type != PT_LOAD || ph->p_memsz == 0) continue;
+    if (ph->p_vaddr < min_v) min_v = ph->p_vaddr;
+  }
+  return min_v == ~(u64)0 ? 0 : min_v;
+}
+
+static u64 elf_align_up(u64 x, u64 align) {
+  if (align == 0) return x;
+  return (x + align - 1) & ~(align - 1);
+}
+
+static u64 elf_max_load_end(const elf64_ehdr_t *ehdr, const u8 *base,
+                            u64 load_bias) {
+  u64 mx = 0;
+  for (u16 i = 0; i < ehdr->e_phnum; i++) {
+    const elf64_phdr_t *ph = elf_phdr_at(ehdr, base, i);
+    if (ph->p_type != PT_LOAD || ph->p_memsz == 0) continue;
+    u64 e = load_bias + ph->p_vaddr + ph->p_memsz;
+    if (e > mx) mx = e;
+  }
+  return mx;
+}
+
+static bool elf_phdr_runtime_addr(const elf64_ehdr_t *ehdr, const u8 *base,
+                                  u64 load_bias, u64 *out) {
+  u64 phoff = ehdr->e_phoff;
+  for (u16 i = 0; i < ehdr->e_phnum; i++) {
+    const elf64_phdr_t *ph = elf_phdr_at(ehdr, base, i);
+    if (ph->p_type != PT_LOAD || ph->p_memsz == 0) continue;
+    if (phoff >= ph->p_offset && phoff < ph->p_offset + ph->p_filesz) {
+      u64 delta = phoff - ph->p_offset;
+      *out = load_bias + ph->p_vaddr + delta;
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool elf_map_pt_loads(u64 *pml4, const elf64_ehdr_t *ehdr, const u8 *base,
+                             u64 load_bias) {
+  for (u16 i = 0; i < ehdr->e_phnum; i++) {
+    const elf64_phdr_t *phdr = elf_phdr_at(ehdr, base, i);
+
+    if (phdr->p_type != PT_LOAD) continue;
+    if (phdr->p_memsz == 0) continue;
+
+    u64 pflags = VMM_FLAG_PRESENT | VMM_FLAG_USER;
+    if (phdr->p_flags & PF_W) pflags |= VMM_FLAG_WRITE;
+    if (!(phdr->p_flags & PF_X)) pflags |= VMM_FLAG_NX;
+
+    u64 seg_base = phdr->p_vaddr + load_bias;
+    u64 seg_start = seg_base & ~0xFFFULL;
+    u64 seg_end = (seg_base + phdr->p_memsz + 0xFFF) & ~0xFFFULL;
+
+    for (u64 va = seg_start; va < seg_end; va += PAGE_SIZE) {
+      u64 phys = pmm_alloc_page();
+      if (!phys) {
+        kprintf_color(0xFFFF3333, "[ELF] OOM mapping segment\n");
+        return false;
+      }
+
+      void *kva = vmm_phys_to_virt(phys);
+      memset(kva, 0, PAGE_SIZE);
+
+      u64 file_seg_start = seg_base;
+      u64 file_seg_end = seg_base + phdr->p_filesz;
+
+      if (va + PAGE_SIZE > file_seg_start && va < file_seg_end) {
+        u64 copy_start = (va > file_seg_start) ? va : file_seg_start;
+        u64 copy_end =
+            (va + PAGE_SIZE < file_seg_end) ? va + PAGE_SIZE : file_seg_end;
+        u64 dst_offset = copy_start - va;
+        u64 src_offset = copy_start - seg_base;
+        memcpy((u8 *)kva + dst_offset, base + phdr->p_offset + src_offset,
+               copy_end - copy_start);
+      }
+
+      vmm_map_page(pml4, va, phys, pflags);
+    }
+  }
+  return true;
+}
+
+static u8 *elf_read_whole_file(const char *path, usize *out_size) {
+  int fd = sys_open(path, 0);
+  if (fd < 0) {
+    kprintf_color(0xFFFF3333, "[ELF] open '%s' failed\n", path ? path : "(null)");
+    return NULL;
+  }
+
+  usize cap = 65536;
+  usize size = 0;
+  u8 *buf = (u8 *)kmalloc(cap);
+  if (!buf) {
+    sys_close(fd);
+    return NULL;
+  }
+
+  for (;;) {
+    if (size == cap) {
+      usize new_cap = cap * 2;
+      if (new_cap > 4 * 1024 * 1024) {
+        kprintf_color(0xFFFF3333, "[ELF] file '%s' too large\n", path);
+        kfree(buf);
+        sys_close(fd);
+        return NULL;
+      }
+      u8 *next = (u8 *)kmalloc(new_cap);
+      if (!next) {
+        kfree(buf);
+        sys_close(fd);
+        return NULL;
+      }
+      memcpy(next, buf, size);
+      kfree(buf);
+      buf = next;
+      cap = new_cap;
+    }
+
+    isize n = sys_read(fd, buf + size, cap - size);
+    if (n < 0) {
+      kprintf_color(0xFFFF3333, "[ELF] read '%s' failed\n", path);
+      kfree(buf);
+      sys_close(fd);
+      return NULL;
+    }
+    if (n == 0) break;
+    size += (usize)n;
+  }
+  sys_close(fd);
+  *out_size = size;
+  return buf;
+}
+
+static bool elf_write_u64_user(u64 *pml4, u64 va, u64 val) {
+  if ((va & 7u) != 0) return false;
+  u64 phys = vmm_virt_to_phys(pml4, va);
+  if (!phys) return false;
+  *(volatile u64 *)(vmm_phys_to_virt(phys)) = val;
+  return true;
+}
+
+static bool elf_apply_relocations(u64 *pml4, const elf64_ehdr_t *ehdr,
+                                  const u8 *base, usize file_size, u64 load_base,
+                                  u64 va_bias) {
+  const elf64_phdr_t *dyn_ph = elf_find_phdr(ehdr, base, PT_DYNAMIC);
+  if (!dyn_ph || dyn_ph->p_memsz == 0) return true;
+
+  if (dyn_ph->p_offset + dyn_ph->p_filesz > file_size) {
+    kprintf_color(0xFFFF3333, "[ELF] PT_DYNAMIC outside file\n");
+    return false;
+  }
+
+  const elf64_dyn_t *dstart =
+      (const elf64_dyn_t *)(base + dyn_ph->p_offset);
+  const u8 *dend = base + dyn_ph->p_offset + dyn_ph->p_filesz;
+
+  u64 rela_va = 0, relasz = 0, relaent = sizeof(elf64_rela_t);
+
+  for (const elf64_dyn_t *cur = dstart;
+       (const u8 *)cur + sizeof(elf64_dyn_t) <= dend; cur++) {
+    if (cur->d_tag == DT_NULL) break;
+    if (cur->d_tag == DT_RELA) rela_va = cur->d_un;
+    else if (cur->d_tag == DT_RELASZ) relasz = cur->d_un;
+    else if (cur->d_tag == DT_RELAENT && cur->d_un != 0) relaent = cur->d_un;
+  }
+
+  if (relasz == 0) return true;
+  if (rela_va == 0 || relaent < sizeof(elf64_rela_t)) {
+    kprintf_color(0xFFFF3333,
+                  "[ELF] PT_DYNAMIC but invalid DT_RELA / DT_RELASZ / DT_RELAENT\n");
+    return false;
+  }
+
+  u64 rela_file_off = 0;
+  if (!elf_va_to_file_off(ehdr, base, rela_va, &rela_file_off)) {
+    kprintf_color(0xFFFF3333, "[ELF] DT_RELA vaddr 0x%lx not covered by PT_LOAD\n",
+                  (unsigned long)rela_va);
+    return false;
+  }
+
+  if (rela_file_off + relasz > file_size) {
+    kprintf_color(0xFFFF3333, "[ELF] RELA table extends past file\n");
+    return false;
+  }
+
+  for (u64 off = 0; off + sizeof(elf64_rela_t) <= relasz; off += relaent) {
+    const elf64_rela_t *rr =
+        (const elf64_rela_t *)(base + rela_file_off + off);
+    u32 type = ELF64_R_TYPE(rr->r_info);
+    u64 loc = va_bias + rr->r_offset;
+
+    if (type == R_X86_64_RELATIVE) {
+      u64 val = load_base + (u64)rr->r_addend;
+      if (!elf_write_u64_user(pml4, loc, val)) {
+        kprintf_color(0xFFFF3333,
+                      "[ELF] R_X86_64_RELATIVE failed at loc=0x%lx\n",
+                      (unsigned long)loc);
+        return false;
+      }
+    } else if (type == R_X86_64_NONE) {
+      continue;
+    } else {
+      kprintf_color(0xFFFF3333,
+                    "[ELF] unsupported Rela type %u at 0x%lx (need full B1)\n",
+                    type, (unsigned long)loc);
+      return false;
+    }
+  }
+  kprintf_color(0xFF88DDFF, "[ELF] applied RELA relocations (%lu bytes)\n",
+                (unsigned long)relasz);
+  return true;
 }
 
 static u64 build_initial_stack(u64 *pml4, const char *name, int argc,
@@ -151,6 +430,100 @@ static u64 build_initial_stack(u64 *pml4, const char *name, int argc,
     return sp;
 }
 
+/*
+ * Linux/musl dynamic linker startup: stack holds argc, argv, envp, auxv (pairs),
+ * ending with AT_NULL. User %rsp points at argc; ld.so _dl_start(void *sp) receives
+ * that pointer in %rdi.
+ */
+static u64 build_initial_stack_ldso(u64 *pml4, const char *name, int argc,
+                                    const char *const argv[],
+                                    const char *const envp[],
+                                    const char *execfn, u64 at_phdr,
+                                    u16 phent, u16 phnum, u64 at_entry,
+                                    u64 at_base) {
+  const char *fallback[1];
+  u64 arg_ptrs[17];
+  u64 env_ptrs[17];
+  u64 sp = USER_STACK_TOP - 8;
+  if (!name || !*name) name = "app";
+  if (argc <= 0 || !argv) {
+    fallback[0] = name;
+    argv = fallback;
+    argc = 1;
+  }
+  if (argc > 16) argc = 16;
+  int envc = count_string_vector(envp, 16);
+
+  if (!copy_string_vector(pml4, &sp, envc, envp, env_ptrs)) return 0;
+  if (!copy_string_vector(pml4, &sp, argc, argv, arg_ptrs)) return 0;
+
+  u64 execfn_user = 0;
+  if (execfn && execfn[0]) {
+    usize elen = strlen(execfn) + 1;
+    if (elen > 255) elen = 255;
+    sp -= elen;
+    char tmp[256];
+    memset(tmp, 0, sizeof(tmp));
+    memcpy(tmp, execfn, elen - 1);
+    if (!copy_to_user_mapping(pml4, sp, tmp, elen)) return 0;
+    execfn_user = sp;
+  }
+
+  sp -= 16;
+  u64 random_slot = sp;
+  {
+    u8 rnd[16];
+    memset(rnd, 0x41, sizeof(rnd));
+    if (!copy_to_user_mapping(pml4, random_slot, rnd, sizeof(rnd))) return 0;
+  }
+
+  sp &= ~0xFULL;
+
+  u64 aux[40];
+  int aw = 0;
+  aux[aw++] = AT_PHDR;
+  aux[aw++] = at_phdr;
+  aux[aw++] = AT_PHENT;
+  aux[aw++] = phent;
+  aux[aw++] = AT_PHNUM;
+  aux[aw++] = phnum;
+  aux[aw++] = AT_PAGESZ;
+  aux[aw++] = PAGE_SIZE;
+  aux[aw++] = AT_BASE;
+  aux[aw++] = at_base;
+  aux[aw++] = AT_FLAGS;
+  aux[aw++] = 0;
+  aux[aw++] = AT_ENTRY;
+  aux[aw++] = at_entry;
+  aux[aw++] = AT_RANDOM;
+  aux[aw++] = random_slot;
+  if (execfn_user) {
+    aux[aw++] = AT_EXECFN;
+    aux[aw++] = execfn_user;
+  }
+  aux[aw++] = AT_NULL;
+  aux[aw++] = 0;
+
+  usize aux_bytes = (usize)aw * sizeof(u64);
+  sp -= aux_bytes;
+  if (!copy_to_user_mapping(pml4, sp, aux, aux_bytes)) return 0;
+
+  sp -= (u64)(envc + 1) * sizeof(u64);
+  u64 envp_user = sp;
+  if (!copy_pointer_vector(pml4, envp_user, envc, env_ptrs)) return 0;
+
+  sp -= (u64)(argc + 1) * sizeof(u64);
+  u64 argv_user = sp;
+  if (!copy_pointer_vector(pml4, argv_user, argc, arg_ptrs)) return 0;
+
+  if ((sp & 0xFULL) != 8) sp -= 8;
+
+  u64 argc_slot_val = (argc <= 0) ? 1 : (u64)argc;
+  if (!elf_write_u64_user(pml4, sp, argc_slot_val)) return 0;
+
+  return sp;
+}
+
 i64 elf_spawn_argv_envp(const void *file_data, usize file_size, const char *name,
                         int argc, const char *const argv[],
                         const char *const envp[]) {
@@ -170,16 +543,165 @@ i64 elf_spawn_argv_envp(const void *file_data, usize file_size, const char *name
         return -1;
     }
     if (ehdr->e_machine != 0x3E) {
-        kprintf_color(0xFFFF3333, "[ELF] Not x86_64 (machine=0x%x)\n", ehdr->e_machine);
-        return -1;
+      kprintf_color(0xFFFF3333, "[ELF] Not x86_64 (machine=0x%x)\n", ehdr->e_machine);
+      return -1;
+    }
+    if (ehdr->e_type != ET_EXEC && ehdr->e_type != ET_DYN) {
+      kprintf_color(0xFFFF3333, "[ELF] unsupported e_type=%u (need ET_EXEC or ET_DYN)\n",
+                    ehdr->e_type);
+      return -1;
     }
     if (ehdr->e_phoff + (u64)ehdr->e_phnum * ehdr->e_phentsize > file_size) {
         kprintf_color(0xFFFF3333, "[ELF] Program headers outside file\n");
         return -1;
     }
 
+    const u8 *base = (const u8 *)file_data;
+
     kprintf_color(0xFF00DDFF, "[ELF] Loading '%s': entry=0x%lx, %u program headers\n",
                   name, ehdr->e_entry, ehdr->e_phnum);
+
+    char interp_path[256];
+    interp_path[0] = 0;
+    const elf64_phdr_t *interp_ph = elf_find_phdr(ehdr, base, PT_INTERP);
+    if (interp_ph && interp_ph->p_filesz > 0 &&
+        interp_ph->p_offset + interp_ph->p_filesz <= file_size) {
+      usize il = (usize)interp_ph->p_filesz;
+      if (il >= sizeof(interp_path)) il = sizeof(interp_path) - 1;
+      memcpy(interp_path, base + interp_ph->p_offset, il);
+      interp_path[il] = 0;
+      for (usize j = 0; j < il && interp_path[j]; j++) {
+        if (interp_path[j] == '\n' || interp_path[j] == '\r')
+          interp_path[j] = 0;
+      }
+    }
+
+    if (interp_path[0]) {
+      usize interp_sz = 0;
+      u8 *interp_buf = elf_read_whole_file(interp_path, &interp_sz);
+      if (!interp_buf || interp_sz < sizeof(elf64_ehdr_t)) {
+        kprintf_color(0xFFFF3333, "[ELF] could not read interpreter '%s'\n",
+                      interp_path);
+        kfree(interp_buf);
+        return -1;
+      }
+      const elf64_ehdr_t *ieh = (const elf64_ehdr_t *)(void *)interp_buf;
+      if (ieh->e_magic != ELF_MAGIC || ieh->e_class != 2 ||
+          ieh->e_machine != 0x3E || ieh->e_type != ET_DYN) {
+        kprintf_color(0xFFFF3333,
+                      "[ELF] interpreter '%s' is not ET_DYN x86-64 ELF\n",
+                      interp_path);
+        kfree(interp_buf);
+        return -1;
+      }
+      if (ieh->e_phoff + (u64)ieh->e_phnum * ieh->e_phentsize > interp_sz) {
+        kprintf_color(0xFFFF3333, "[ELF] interpreter program headers invalid\n");
+        kfree(interp_buf);
+        return -1;
+      }
+
+      u64 *user_pml4 = vmm_create_user_pml4();
+      if (!user_pml4) {
+        kprintf_color(0xFFFF3333, "[ELF] Failed to create user PML4\n");
+        kfree(interp_buf);
+        return -1;
+      }
+
+      if (!elf_map_pt_loads(user_pml4, ehdr, base, 0)) {
+        vmm_destroy_user_pml4(user_pml4);
+        kfree(interp_buf);
+        return -1;
+      }
+
+      u64 max_main = elf_max_load_end(ehdr, base, 0);
+      u64 interp_bias =
+          elf_align_up(max_main + ELF_INTERP_GAP_BYTES, PAGE_SIZE);
+
+      if (!elf_map_pt_loads(user_pml4, ieh, interp_buf, interp_bias)) {
+        vmm_destroy_user_pml4(user_pml4);
+        kfree(interp_buf);
+        return -1;
+      }
+
+      u64 interp_min = elf_min_load_vaddr(ieh, interp_buf);
+      u64 interp_load_base = interp_bias + interp_min;
+
+      if (!elf_apply_relocations(user_pml4, ieh, interp_buf, interp_sz,
+                                 interp_load_base, interp_bias)) {
+        kprintf_color(0xFFFF3333, "[ELF] interpreter relocation failed\n");
+        vmm_destroy_user_pml4(user_pml4);
+        kfree(interp_buf);
+        return -1;
+      }
+
+      u64 interp_entry = interp_bias + ieh->e_entry;
+
+      u64 at_phdr = 0;
+      if (!elf_phdr_runtime_addr(ehdr, base, 0, &at_phdr)) {
+        kprintf_color(0xFFFF3333, "[ELF] AT_PHDR: program headers not in PT_LOAD\n");
+        vmm_destroy_user_pml4(user_pml4);
+        kfree(interp_buf);
+        return -1;
+      }
+
+      kprintf_color(0xFF88DDFF,
+                    "[ELF] PT_INTERP '%s' mapped at bias 0x%lx entry=0x%lx\n",
+                    interp_path, interp_bias, interp_entry);
+
+      for (u32 i = 0; i < USER_STACK_PAGES; i++) {
+        u64 va = USER_STACK_BASE + i * PAGE_SIZE;
+        u64 phys = pmm_alloc_page();
+        if (!phys) {
+          kprintf_color(0xFFFF3333, "[ELF] OOM allocating user stack\n");
+          vmm_destroy_user_pml4(user_pml4);
+          kfree(interp_buf);
+          return -1;
+        }
+        memset(vmm_phys_to_virt(phys), 0, PAGE_SIZE);
+        vmm_map_page(user_pml4, va, phys,
+                     VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_WRITE |
+                         VMM_FLAG_NX);
+      }
+      kprintf("[ELF] user stack guards low=0x%lx high=0x%lx\n",
+              USER_STACK_GUARD_LOW, USER_STACK_GUARD_HIGH);
+
+      u64 user_rsp = build_initial_stack_ldso(
+          user_pml4, name, argc, argv, envp, name, at_phdr, ehdr->e_phentsize,
+          ehdr->e_phnum, ehdr->e_entry, interp_load_base);
+      if (!user_rsp) {
+        kprintf_color(0xFFFF3333, "[ELF] Failed to build ld.so initial stack\n");
+        vmm_destroy_user_pml4(user_pml4);
+        kfree(interp_buf);
+        return -1;
+      }
+
+      elf_ldso_bootstrap_arg_t *ba =
+          (elf_ldso_bootstrap_arg_t *)kmalloc(sizeof(*ba));
+      if (!ba) {
+        vmm_destroy_user_pml4(user_pml4);
+        kfree(interp_buf);
+        return -1;
+      }
+      ba->entry = interp_entry;
+      ba->pml4 = user_pml4;
+      ba->stack_top = user_rsp;
+
+      task_t *t = sched_spawn(name, elf_user_entry_ldso, ba, 2);
+      if (!t) {
+        kfree(ba);
+        vmm_destroy_user_pml4(user_pml4);
+        kfree(interp_buf);
+        return -1;
+      }
+      t->pml4 = user_pml4;
+
+      kprintf_color(0xFF00FF88,
+                    "[ELF] User process '%s' spawned via ld.so (id=%lu "
+                    "interp_entry=0x%lx)\n",
+                    name, t->id, interp_entry);
+      kfree(interp_buf);
+      return (i64)t->id;
+    }
 
     /* ---- Create isolated user address space ---- */
     u64 *user_pml4 = vmm_create_user_pml4();
@@ -189,51 +711,17 @@ i64 elf_spawn_argv_envp(const void *file_data, usize file_size, const char *name
     }
 
     /* ---- Load PT_LOAD segments ---- */
-    const u8 *base = (const u8 *)file_data;
-    for (u16 i = 0; i < ehdr->e_phnum; i++) {
-        const elf64_phdr_t *phdr = (const elf64_phdr_t *)(base + ehdr->e_phoff + i * ehdr->e_phentsize);
+    if (!elf_map_pt_loads(user_pml4, ehdr, base, 0)) {
+        kprintf_color(0xFFFF3333, "[ELF] Failed to map ELF segments\n");
+        vmm_destroy_user_pml4(user_pml4);
+        return -1;
+    }
 
-        if (phdr->p_type != PT_LOAD) continue;
-        if (phdr->p_memsz == 0) continue;
-
-        /* kprintf_color(0xFF88DDFF, "[ELF]   LOAD vaddr=0x%lx filesz=%lu memsz=%lu flags=%u\n",
-                      phdr->p_vaddr, phdr->p_filesz, phdr->p_memsz, phdr->p_flags); */
-
-        /* Calculate VMM flags */
-        u64 pflags = VMM_FLAG_PRESENT | VMM_FLAG_USER;
-        if (phdr->p_flags & PF_W) pflags |= VMM_FLAG_WRITE;
-        if (!(phdr->p_flags & PF_X)) pflags |= VMM_FLAG_NX;
-
-        /* Map and copy pages */
-        u64 seg_start = phdr->p_vaddr & ~0xFFFULL;
-        u64 seg_end   = (phdr->p_vaddr + phdr->p_memsz + 0xFFF) & ~0xFFFULL;
-
-        for (u64 va = seg_start; va < seg_end; va += PAGE_SIZE) {
-            u64 phys = pmm_alloc_page();
-            if (!phys) {
-                kprintf_color(0xFFFF3333, "[ELF] OOM mapping segment\n");
-                vmm_destroy_user_pml4(user_pml4);
-                return -1;
-            }
-
-            /* Zero the page first, then copy file data where applicable */
-            void *kva = vmm_phys_to_virt(phys);
-            memset(kva, 0, PAGE_SIZE);
-
-            /* Calculate how much file data overlaps with this page */
-            u64 file_seg_start = phdr->p_vaddr;
-            u64 file_seg_end   = phdr->p_vaddr + phdr->p_filesz;
-
-            if (va + PAGE_SIZE > file_seg_start && va < file_seg_end) {
-                u64 copy_start = (va > file_seg_start) ? va : file_seg_start;
-                u64 copy_end   = (va + PAGE_SIZE < file_seg_end) ? va + PAGE_SIZE : file_seg_end;
-                u64 dst_offset = copy_start - va;
-                u64 src_offset = copy_start - phdr->p_vaddr;
-                memcpy((u8 *)kva + dst_offset, base + phdr->p_offset + src_offset, copy_end - copy_start);
-            }
-
-            vmm_map_page(user_pml4, va, phys, pflags);
-        }
+    u64 load_base = elf_min_load_vaddr(ehdr, base);
+    if (!elf_apply_relocations(user_pml4, ehdr, base, file_size, load_base, 0)) {
+      kprintf_color(0xFFFF3333, "[ELF] relocation failed\n");
+      vmm_destroy_user_pml4(user_pml4);
+      return -1;
     }
 
     /* ---- Allocate user stack; adjacent pages stay unmapped as guards ---- */
@@ -273,6 +761,8 @@ i64 elf_spawn_argv_envp(const void *file_data, usize file_size, const char *name
     ba->argc = (argc <= 0) ? 1 : (argc > 16 ? 16 : (u64)argc);
     ba->argv = argv_user;
     ba->envp = envp_user;
+    kprintf("[ELF] handoff argc=%lu argv=0x%lx envp=0x%lx rsp=0x%lx\n",
+            ba->argc, ba->argv, ba->envp, ba->stack_top);
 
     task_t *t = sched_spawn(name, elf_user_entry, ba, 2);
     if (!t) {
@@ -331,30 +821,47 @@ static bool elf_path_has_magic(const char *path) {
     return value == ELF_MAGIC;
 }
 
+/*
+ * YamOS native executables use the standard ELF64 LE header (\x7FELF). The optional `.yam`
+ * suffix is convention only — same bytes as `.elf`; spawn probes magic, not the extension.
+ */
+static bool name_already_yam_suffixed(const char *name) {
+    usize n = strlen(name);
+    return n > 4 && strcmp(name + n - 4, ".yam") == 0;
+}
+
+static bool try_elf_candidate_path(const char *path, char *out, usize out_cap) {
+    if (!elf_path_has_magic(path)) return false;
+    strncpy(out, path, out_cap - 1);
+    out[out_cap - 1] = 0;
+    return true;
+}
+
 static bool elf_resolve_executable(const char *name, char *out, usize out_cap) {
     static const char *search_dirs[] = {
         "/bin",
         "/usr/local/bin",
+        "/opt/yamos/apps",
         "/opt/yamos/packages",
         "/home/root/bin",
     };
     if (!name || !*name || !out || out_cap == 0) return false;
     out[0] = 0;
 
-    if (path_has_slash(name)) {
-        if (!elf_path_has_magic(name)) return false;
-        strncpy(out, name, out_cap - 1);
-        out[out_cap - 1] = 0;
-        return true;
-    }
+    if (path_has_slash(name))
+        return try_elf_candidate_path(name, out, out_cap);
 
     for (u32 i = 0; i < sizeof(search_dirs) / sizeof(search_dirs[0]); i++) {
         char candidate[256];
         ksnprintf(candidate, sizeof(candidate), "%s/%s", search_dirs[i], name);
-        if (!elf_path_has_magic(candidate)) continue;
-        strncpy(out, candidate, out_cap - 1);
-        out[out_cap - 1] = 0;
-        return true;
+        if (try_elf_candidate_path(candidate, out, out_cap))
+            return true;
+
+        if (!name_already_yam_suffixed(name)) {
+            ksnprintf(candidate, sizeof(candidate), "%s/%s.yam", search_dirs[i], name);
+            if (try_elf_candidate_path(candidate, out, out_cap))
+                return true;
+        }
     }
     return false;
 }

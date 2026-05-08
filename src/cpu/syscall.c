@@ -79,9 +79,11 @@ static i64 sys_exit(u64 code) {
     task_t *t = this_cpu()->current;
     kprintf_color(0xFFFF8833, "[SYS] task '%s' exit(%lu)\n", t->name, code);
     sched_exit_current((i32)code);
-    sched_yield();
-    for (;;) hlt();
-    return 0;
+    for (;;) {
+        sched_yield();
+        __asm__ volatile ("hlt");
+    }
+    __builtin_unreachable();
 }
 
 static i64 sys_clock_gettime(void) {
@@ -407,6 +409,14 @@ static int copy_user_string_vector(u64 uargv, const char *fallback,
     return argc;
 }
 
+static i64 sys_execve_user(u64 upath, u64 uargv, u64 uenvp) {
+    (void)upath;
+    (void)uargv;
+    (void)uenvp;
+    kprintf("[EXECVE] stub: replace current process image not implemented (Track B2)\n");
+    return -38;
+}
+
 static i64 sys_spawn_user(u64 upath, u64 uargv, u64 uenvp) {
     char path[256];
     char *argv[16];
@@ -459,7 +469,8 @@ static i64 sys_os_info(u64 uout) {
                  YAM_OS_FLAG_THREADS |
                  YAM_OS_FLAG_NONBLOCK_IO |
                  YAM_OS_FLAG_PTHREAD_ABI |
-                 YAM_OS_FLAG_SIGNALS;
+                 YAM_OS_FLAG_SIGNALS |
+                 YAM_OS_FLAG_YAM_EXTENSION;
     strncpy(info.os_name, YAM_OS_NAME, sizeof(info.os_name) - 1);
     strncpy(info.kernel_name, YAM_KERNEL_NAME, sizeof(info.kernel_name) - 1);
     return copy_to_user(uout, &info, sizeof(info));
@@ -978,32 +989,41 @@ static i64 sys_channel_lookup(u64 uname) {
 /* ---- Threads & Signals ---- */
 
 /*
- * Signal frame pushed onto the user stack before jumping to handler:
- *   [ saved_rip | saved_rflags | signum | pad ]
- * On sigreturn the kernel pops this frame and restores RIP.
- * NOTE: This is a minimal first-slice; a full POSIX sigframe stores all
- * general-purpose registers. We'll extend it in the next threading pass.
+ * User stacks for ELF tasks live in src/fs/elf.c (high canonical region). Threads may use
+ * other mappings in the lower canonical half — accept any plausible ring-3 pointer.
  */
-typedef struct {
-    u64 saved_rip;
-    u64 saved_rflags;
-    u32 signum;
-    u32 _pad;
-} yam_sigframe_t;
+static bool user_rsp_plausible(u64 rsp) {
+    if (rsp < 0x1000ULL || (rsp & 7ULL) != 0)
+        return false;
+    /* Lower canonical half (positive canonical user addresses). */
+    return rsp < 0x0000800000000000ULL;
+}
 
 /*
- * deliver_pending_signals — called just before returning to user space.
- * If a signal is pending and unblocked and has a user handler, push a
- * sigframe on the user stack and redirect RIP to the handler.
- * The SYSCALL_RETURN macro saves the current user RIP (rcx at syscall entry)
- * into the per-cpu current task for this purpose.
+ * deliver_pending_signals — called just before returning to user space (syscall path).
+ * For a caught signal: push saved user RIP onto the user stack so the handler's RET resumes
+ * the interrupted syscall/instruction; point user RIP at the handler and pass signum in RDI
+ * (Sys V amd64). Patches syscall_entry's saved RCX/RDI/user_rsp slots read by sysret.
  */
 static void deliver_pending_signals(task_t *t, u64 *user_rip_ptr, u64 *user_rflags_ptr) {
-    if (!t || !t->signal_pending) return;
+    (void)user_rip_ptr;
+    (void)user_rflags_ptr;
+    if (!t || !t->signal_pending)
+        return;
+
+    percpu_t *pc = this_cpu();
+    u64 *rip_slot = (u64 *)pc->syscall_rip_slot;
+    u64 *rsp_slot = (u64 *)pc->syscall_rsp_slot;
+    u64 *rdi_slot = (u64 *)pc->syscall_rdi_slot;
+    if (!rip_slot || !rsp_slot || !rdi_slot)
+        return;
+
     for (int sig = 1; sig < 32; sig++) {
         u32 bit = 1u << sig;
-        if (!(t->signal_pending & bit)) continue;
-        if (t->sig_mask & bit) continue; /* blocked */
+        if (!(t->signal_pending & bit))
+            continue;
+        if (t->sig_mask & bit)
+            continue; /* blocked */
         t->signal_pending &= ~bit;
         void *handler = t->sig_handlers[sig];
         if (!handler) {
@@ -1014,16 +1034,28 @@ static void deliver_pending_signals(task_t *t, u64 *user_rip_ptr, u64 *user_rfla
             }
             continue;
         }
-        /* Push sigframe onto user stack */
-        if (user_rip_ptr && user_rflags_ptr) {
-            bool smap = (read_cr4() & CR4_SMAP) != 0;
-            /* user RSP is stored in the per-task register save area;
-             * we can't easily reach it here without full sigcontext.
-             * For now just log and call the handler via kernel shim. */
-            kprintf_color(0xFFFFAA00, "[SYS] signal %d -> handler %p for task %lu (sigframe delivery TBD)\n",
-                          sig, handler, t->id);
-            (void)smap;
+
+        u64 ursp = *rsp_slot;
+        u64 urip = *rip_slot;
+        u64 new_rsp = ursp - sizeof(u64);
+        if (!user_rsp_plausible(new_rsp)) {
+            kprintf_color(0xFFFFAA00,
+                          "[SYS] signal %d delivery skipped: bad user rsp=%lx task=%lu\n",
+                          sig, ursp, t->id);
+            continue;
         }
+
+        /* Resume address after handler RET */
+        if (copy_to_user(new_rsp, &urip, sizeof(u64)) != 0) {
+            kprintf_color(0xFFFFAA00,
+                          "[SYS] signal %d delivery skipped: user stack fault rsp=%lx task=%lu\n",
+                          sig, new_rsp, t->id);
+            continue;
+        }
+
+        *rip_slot = (u64)handler;
+        *rsp_slot = new_rsp;
+        *rdi_slot = (u64)sig;
         return;
     }
 }
@@ -1040,9 +1072,11 @@ static i64 sys_thread_exit(u64 code) {
     task_t *t = this_cpu()->current;
     kprintf_color(0xFFFF8833, "[THREAD] tid=%lu exit(%lu)\n", t->id, code);
     sched_exit_current((i32)code);
-    sched_yield();
-    for (;;) hlt();
-    return 0;
+    for (;;) {
+        sched_yield();
+        __asm__ volatile ("hlt");
+    }
+    __builtin_unreachable();
 }
 
 static i64 sys_sigaction(int signum, u64 uact, u64 uoldact) {
@@ -1104,10 +1138,8 @@ static i64 sys_sigprocmask(int how, u64 uset, u64 uoldset) {
 
 static i64 sys_sigreturn(void) {
     /*
-     * First-slice: we don't yet push a full ucontext on the user stack
-     * (that requires full register save at syscall entry).
-     * For now, clear the handler-blocked period by checking for more signals.
-     * A full sigreturn will be wired once the syscall entry saves all regs.
+     * Full POSIX rt_sigreturn/ucontext restore is not wired yet. Delivery uses one pushed
+     * resume address so the handler RET resumes after the interrupted syscall.
      */
     task_t *t = this_cpu()->current;
     /* Re-enable any signals that were masked during handler */
@@ -1175,6 +1207,7 @@ i64 syscall_dispatch(u64 nr, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5) {
     case SYS_SENDTO:            SYSCALL_RETURN(-1);
     case SYS_RECVFROM:          SYSCALL_RETURN(-1);
     case SYS_SPAWN:             SYSCALL_RETURN(sys_spawn_user(a1, a2, a3));
+    case SYS_EXECVE:            SYSCALL_RETURN(sys_execve_user(a1, a2, a3));
     case SYS_STAT:              SYSCALL_RETURN(sys_stat_user(a1, a2));
     case SYS_FSTAT:             SYSCALL_RETURN(sys_fstat_user((int)a1, a2));
     case SYS_FTRUNCATE:         SYSCALL_RETURN(sys_ftruncate((int)a1, (isize)a2));

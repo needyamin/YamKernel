@@ -4,11 +4,6 @@
 static void composite_surface(wl_surface_t *s) {
     if (s->state != WL_SURFACE_ACTIVE || !s->buffer) return;
     s->composite_count++;
-    if (s->composite_count <= 3 || (s->composite_count % 180) == 0) {
-        kprintf("[WL_DBG] composite id=%u title='%s' frame=%u commits=%u checksum=0x%x pos=%d,%d size=%ux%u focus=%d\n",
-                s->id, s->title, s->composite_count, s->commit_count, s->last_checksum,
-                s->x, s->y, s->width, s->height, s->focused ? 1 : 0);
-    }
 
     /* Animation Update - Smoother transitions */
     if (s->anim_closing) {
@@ -42,6 +37,17 @@ static void composite_surface(wl_surface_t *s) {
     u32 frame_content_h = s->maximized ? (dh - 126) : s->height;
     i32 frame_x = s->maximized ? 12 : s->x;
     i32 frame_y = s->maximized ? 42 : s->y;
+    if (g_compositor.resizing &&
+        g_compositor.resize_preview_valid &&
+        g_compositor.resize_surface_id < WL_MAX_SURFACES &&
+        &g_compositor.surfaces[g_compositor.resize_surface_id] == s) {
+        if (g_compositor.resize_preview_w > 0 && g_compositor.resize_preview_h > 0) {
+            frame_w = (u32)g_compositor.resize_preview_w;
+            frame_content_h = (u32)g_compositor.resize_preview_h;
+            frame_x = g_compositor.resize_preview_x;
+            frame_y = g_compositor.resize_preview_y;
+        }
+    }
 
     /* Animated Size */
     u32 sw = (frame_w * s->anim_scale) / 100;
@@ -177,7 +183,52 @@ static void composite_cursor(void) {
     i32 cx = g_compositor.cursor_x;
     i32 cy = g_compositor.cursor_y;
     
-    /* Draw a simple arrow cursor */
+    /* Draw resize-aware cursor hints */
+    u8 edge = g_compositor.cursor_resize_edge;
+    if (edge) {
+        if (((edge & 0x1) && (edge & 0x4)) || ((edge & 0x2) && (edge & 0x8))) {
+            /* Diagonal '\' */
+            for (int i = 0; i < 13; i++) {
+                i32 px = cx + i;
+                i32 py = cy + i;
+                if (px >= 0 && px < (i32)dw && py >= 0 && py < (i32)dh) dst[py * dw + px] = 0xFF111827;
+                if (px + 1 < (i32)dw && py >= 0 && py < (i32)dh) dst[py * dw + px + 1] = 0xFFFFFFFF;
+            }
+            return;
+        }
+        if (((edge & 0x2) && (edge & 0x4)) || ((edge & 0x1) && (edge & 0x8))) {
+            /* Diagonal '/' */
+            for (int i = 0; i < 13; i++) {
+                i32 px = cx + i;
+                i32 py = cy + (12 - i);
+                if (px >= 0 && px < (i32)dw && py >= 0 && py < (i32)dh) dst[py * dw + px] = 0xFF111827;
+                if (px + 1 < (i32)dw && py >= 0 && py < (i32)dh) dst[py * dw + px + 1] = 0xFFFFFFFF;
+            }
+            return;
+        }
+        if (edge & 0x1 || edge & 0x2) {
+            /* Horizontal */
+            for (int i = 0; i < 14; i++) {
+                i32 px = cx + i;
+                i32 py = cy + 7;
+                if (px >= 0 && px < (i32)dw && py >= 0 && py < (i32)dh) dst[py * dw + px] = 0xFF111827;
+                if (px >= 0 && px < (i32)dw && py + 1 < (i32)dh) dst[(py + 1) * dw + px] = 0xFFFFFFFF;
+            }
+            return;
+        }
+        if (edge & 0x4 || edge & 0x8) {
+            /* Vertical */
+            for (int i = 0; i < 14; i++) {
+                i32 px = cx + 7;
+                i32 py = cy + i;
+                if (px >= 0 && px < (i32)dw && py >= 0 && py < (i32)dh) dst[py * dw + px] = 0xFF111827;
+                if (px + 1 < (i32)dw && py >= 0 && py < (i32)dh) dst[py * dw + px + 1] = 0xFFFFFFFF;
+            }
+            return;
+        }
+    }
+
+    /* Default arrow cursor */
     const char cursor_map[15][12] = {
         "X           ",
         "XX          ",
@@ -237,18 +288,10 @@ static void composite_setup_screen(void) {
     u32 dw = g_compositor.scanout->width;
     u32 dh = g_compositor.scanout->height;
     wl_surface_t ds = { .buffer = g_compositor.scanout, .width = dw, .height = dh };
+    (void)dst;
 
-    /* Apple-like heavy glass background blur simulation */
-    for (u32 y = 0; y < dh; y++) {
-        for (u32 x = 0; x < dw; x++) {
-            u32 c = dst[y * dw + x];
-            u32 r = ((c >> 16) & 0xFF), g = ((c >> 8) & 0xFF), b = (c & 0xFF);
-            r = (r * 30 + 0x11 * 70) / 100;
-            g = (g * 30 + 0x18 * 70) / 100;
-            b = (b * 30 + 0x27 * 70) / 100;
-            dst[y * dw + x] = 0xFF000000 | (r << 16) | (g << 8) | b;
-        }
-    }
+    /* Avoid full-screen per-pixel post-process every frame; use a cheap tint. */
+    wl_draw_rect(&ds, 0, 0, dw, dh, 0xCC111827);
 
     i32 box_w = 800;
     i32 box_h = 500;
@@ -304,23 +347,15 @@ static void composite_login_screen(void) {
     u32 dw = g_compositor.scanout->width;
     u32 dh = g_compositor.scanout->height;
     wl_surface_t ds = { .buffer = g_compositor.scanout, .width = dw, .height = dh };
+    (void)dst;
     
     i32 box_w = 420;
     i32 box_h = 460;
     i32 bx = (dw - box_w) / 2;
     i32 by = (dh - box_h) / 2;
     
-    /* Apple-style smooth frosted glass backdrop */
-    for (u32 y = 0; y < dh; y++) {
-        for (u32 x = 0; x < dw; x++) {
-            u32 c = dst[y * dw + x];
-            u32 r = ((c >> 16) & 0xFF), g = ((c >> 8) & 0xFF), b = (c & 0xFF);
-            r = (r * 60 + 0x05 * 40) / 100;
-            g = (g * 60 + 0x05 * 40) / 100;
-            b = (b * 60 + 0x05 * 40) / 100;
-            dst[y * dw + x] = 0xFF000000 | (r << 16) | (g << 8) | b;
-        }
-    }
+    /* Avoid expensive full-frame blending in the hot render loop. */
+    wl_draw_rect(&ds, 0, 0, dw, dh, 0xB0000000);
     
     /* Premium Glass Box */
     wl_draw_rounded_rect(&ds, bx, by, box_w, box_h, 24, 0x88000000); // Shadow
@@ -387,9 +422,21 @@ static int day_of_week(int year, int month, int day) {
 
 static void rtc_read_local_bdt(rtc_time_t *out) {
     rtc_read(out);
-    out->hour = (u8)(out->hour + 6);
-    if (out->hour >= 24) {
-        out->hour = (u8)(out->hour - 24);
+    int total_minutes = (int)out->hour * 60 + (int)out->minute + 360 + g_compositor.time_offset_minutes;
+    while (total_minutes < 0) {
+        total_minutes += 24 * 60;
+        out->day--;
+        if (out->day < 1) {
+            out->month--;
+            if (out->month < 1) {
+                out->month = 12;
+                out->year--;
+            }
+            out->day = (u8)days_in_month(out->year, out->month);
+        }
+    }
+    while (total_minutes >= 24 * 60) {
+        total_minutes -= 24 * 60;
         out->day++;
         if (out->day > days_in_month(out->year, out->month)) {
             out->day = 1;
@@ -400,6 +447,8 @@ static void rtc_read_local_bdt(rtc_time_t *out) {
             }
         }
     }
+    out->hour = (u8)(total_minutes / 60);
+    out->minute = (u8)(total_minutes % 60);
 }
 
 static void draw_signal_bars(wl_surface_t *ds, i32 x, i32 y, bool strong, u32 color) {
@@ -452,43 +501,47 @@ static void composite_calendar_popover(rtc_time_t t) {
         "July", "August", "September", "October", "November", "December"
     };
 
-    i32 w = 312;
-    i32 h = 292;
-    i32 x = (i32)dw - w - 14;
+    i32 w = 332;
+    i32 h = 318;
+    i32 x = (i32)dw - w - 16;
     i32 y = 40;
-    wl_draw_rounded_rect(&ds, x + 6, y + 8, w, h, 10, 0xCC000000);
-    wl_draw_rounded_rect(&ds, x, y, w, h, 10, 0xF01F2937);
-    wl_draw_rect(&ds, x, y, w, 2, 0xFF2563EB);
+    wl_draw_rounded_rect(&ds, x + 8, y + 10, w, h, 14, 0xA0000000);
+    wl_draw_vgradient(&ds, x, y, w, h, 0xF01E293B, 0xF0121A2B);
+    wl_draw_rounded_outline(&ds, x, y, w, h, 14, 0x335F7A99);
+    wl_draw_rect(&ds, x, y, w, 2, 0xFF3B82F6);
 
     char header[64];
     ksnprintf(header, sizeof(header), "%s %u", months[t.month - 1], t.year);
-    wl_draw_text_shadow(&ds, x + 18, y + 18, header, 0xFFF8FAFC, 0x00000040);
+    wl_draw_text_shadow(&ds, x + 20, y + 20, header, 0xFFF8FAFC, 0x00000040);
 
     char clock[32];
     int hour12 = t.hour % 12;
     if (hour12 == 0) hour12 = 12;
     ksnprintf(clock, sizeof(clock), "%d:%02d:%02d %s BDT", hour12, t.minute, t.second,
               t.hour >= 12 ? "PM" : "AM");
-    wl_draw_text_shadow(&ds, x + 18, y + 42, clock, 0xFFB0B9C3, 0x00000020);
+    wl_draw_text_shadow(&ds, x + 20, y + 46, clock, 0xFFB6C2D1, 0x00000020);
+    wl_draw_rect(&ds, x + 18, y + 72, w - 36, 1, 0x334B6078);
 
     const char *days[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
     for (int i = 0; i < 7; i++) {
-        wl_draw_text_shadow(&ds, x + 20 + i * 40, y + 76, days[i], 0xFF60A5FA, 0x00000020);
+        u32 day_col = (i == 0 || i == 6) ? 0xFF93C5FD : 0xFF60A5FA;
+        wl_draw_text_shadow(&ds, x + 22 + i * 44, y + 84, days[i], day_col, 0x00000020);
     }
 
     int first = day_of_week(t.year, t.month, 1);
     int count = days_in_month(t.year, t.month);
     for (int d = 1; d <= count; d++) {
         int cell = first + d - 1;
-        int cx = x + 18 + (cell % 7) * 40;
-        int cy = y + 104 + (cell / 7) * 30;
+        int cx = x + 18 + (cell % 7) * 44;
+        int cy = y + 116 + (cell / 7) * 32;
         char num[4];
         ksnprintf(num, sizeof(num), "%d", d);
         if (d == t.day) {
-            wl_draw_rounded_rect(&ds, cx - 5, cy - 5, 32, 24, 6, 0xFF2563EB);
-            wl_draw_text(&ds, cx + (d < 10 ? 5 : 1), cy, num, 0xFFF8FAFC, 0);
+            wl_draw_rounded_rect(&ds, cx - 8, cy - 6, 34, 26, 8, 0xFF2563EB);
+            wl_draw_text(&ds, cx + (d < 10 ? 4 : 1), cy, num, 0xFFF8FAFC, 0);
         } else {
-            wl_draw_text(&ds, cx + (d < 10 ? 5 : 1), cy, num, 0xFFF3F4F6, 0);
+            u32 num_col = ((cell % 7) == 0 || (cell % 7) == 6) ? 0xFFCAD5E3 : 0xFFF3F4F6;
+            wl_draw_text(&ds, cx + (d < 10 ? 4 : 1), cy, num, num_col, 0);
         }
     }
 }
@@ -657,8 +710,8 @@ static void composite_menubar(void) {
 
     if (g_compositor.desktop_menu_open) {
         i32 mx = 182;
-        i32 mw = 204;
-        i32 mh = g_compositor.desktop_menu_open == 1 ? 320 : 200;
+        i32 mw = 214;
+        i32 mh = 164;
         if (g_compositor.desktop_menu_open == 2) mx = 234;
         if (g_compositor.desktop_menu_open == 3) mx = 288;
         wl_draw_rounded_rect(&ds, mx, 34, mw, mh, 8, 0xFF232B37);
@@ -667,18 +720,13 @@ static void composite_menubar(void) {
         if (g_compositor.desktop_menu_open == 1) {
             wl_draw_text_shadow(&ds, mx + 16, 52, "New Terminal", 0xFFF3F4F6, 0x00000020);
             wl_draw_text_shadow(&ds, mx + 16, 82, "New Browser", 0xFFF3F4F6, 0x00000020);
-            wl_draw_text_shadow(&ds, mx + 16, 112, "New Calculator", 0xFFF3F4F6, 0x00000020);
-            wl_draw_text_shadow(&ds, mx + 16, 142, "File Manager", 0xFFF3F4F6, 0x00000020);
-            wl_draw_text_shadow(&ds, mx + 16, 172, "Ethernet Settings", 0xFFF3F4F6, 0x00000020);
-            wl_draw_text_shadow(&ds, mx + 16, 202, "Wi-Fi Settings", 0xFFF3F4F6, 0x00000020);
-            wl_draw_text_shadow(&ds, mx + 16, 232, "Bluetooth Settings", 0xFFF3F4F6, 0x00000020);
-            wl_draw_text_shadow(&ds, mx + 16, 262, "Sound Settings", 0xFFF3F4F6, 0x00000020);
-            wl_draw_text_shadow(&ds, mx + 16, 292, "Driver Probe", 0xFFF3F4F6, 0x00000020);
+            wl_draw_text_shadow(&ds, mx + 16, 112, "File Manager", 0xFFF3F4F6, 0x00000020);
+            wl_draw_text_shadow(&ds, mx + 16, 142, "System Settings", 0xFFF3F4F6, 0x00000020);
         } else if (g_compositor.desktop_menu_open == 2) {
-            wl_draw_text_shadow(&ds, mx + 16, 52, "Toggle Debug", 0xFFF3F4F6, 0x00000020);
-            wl_draw_text_shadow(&ds, mx + 16, 82, "Refresh Screen", 0xFFF3F4F6, 0x00000020);
-            wl_draw_text_shadow(&ds, mx + 16, 112, "Display Settings", 0xFFF3F4F6, 0x00000020);
-            wl_draw_text_shadow(&ds, mx + 16, 142, "Hide Menu", 0xFFF3F4F6, 0x00000020);
+            wl_draw_text_shadow(&ds, mx + 16, 52, "Refresh Screen", 0xFFF3F4F6, 0x00000020);
+            wl_draw_text_shadow(&ds, mx + 16, 82, "Toggle Calendar", 0xFFF3F4F6, 0x00000020);
+            wl_draw_text_shadow(&ds, mx + 16, 112, "Toggle Debug", 0xFFF3F4F6, 0x00000020);
+            wl_draw_text_shadow(&ds, mx + 16, 142, "System Settings", 0xFFF3F4F6, 0x00000020);
         } else {
             wl_draw_text_shadow(&ds, mx + 16, 52, "Close Focused", 0xFFF3F4F6, 0x00000020);
             wl_draw_text_shadow(&ds, mx + 16, 82, "Minimize Focused", 0xFFF3F4F6, 0x00000020);
@@ -708,14 +756,14 @@ static void composite_taskbar(void) {
     }
     
     /* Modern Dock sizing */
-    i32 dock_w = 90 + (shown_apps * 64);
+    i32 dock_w = 96 + (shown_apps * 64);
     if (dock_w > (i32)dw - 40) dock_w = dw - 40;
     i32 dock_h = 72;
     i32 dock_x = (dw - dock_w) / 2;
     i32 dock_y = dh - dock_h - 16;
     
-    /* Premium macOS-style Glass Dock */
-    wl_draw_rounded_rect(&ds, dock_x, dock_y + 4, dock_w, dock_h, 24, 0x66000000); // Shadow
+    /* Premium dock with softer hierarchy and stronger legibility */
+    wl_draw_rounded_rect(&ds, dock_x, dock_y + 5, dock_w, dock_h, 24, 0x52000000);
     
     for (i32 y = dock_y; y < dock_y + dock_h; y++) {
         for (i32 x = dock_x; x < dock_x + dock_w; x++) {
@@ -729,20 +777,21 @@ static void composite_taskbar(void) {
             if (!mask) {
                 u32 c = dst[y * dw + x];
                 u32 r_c = (c >> 16) & 0xFF, g_c = (c >> 8) & 0xFF, b_c = c & 0xFF;
-                r_c = (r_c * 40 + 0xCC * 60) / 100;
-                g_c = (g_c * 40 + 0xCC * 60) / 100;
-                b_c = (b_c * 40 + 0xCC * 60) / 100;
+                r_c = (r_c * 28 + 0xB8 * 72) / 100;
+                g_c = (g_c * 28 + 0xC0 * 72) / 100;
+                b_c = (b_c * 28 + 0xCC * 72) / 100;
                 dst[y * dw + x] = 0xFF000000 | (r_c << 16) | (g_c << 8) | b_c;
             }
         }
     }
     wl_draw_rounded_outline(&ds, dock_x, dock_y, dock_w, dock_h, 24, 0x66FFFFFF);
+    wl_draw_rect(&ds, dock_x + 18, dock_y + 6, dock_w - 36, 1, 0x66FFFFFF);
     
     /* Draw launcher tile (Launchpad style) */
-    i32 bx = dock_x + 16;
+    i32 bx = dock_x + 14;
     u32 launcher_bg = g_compositor.show_power_menu ? 0xFF3B82F6 : 0xFFFFFFFF;
     wl_draw_rounded_rect(&ds, bx, dock_y + 12, 48, 48, 12, launcher_bg);
-    wl_draw_text_shadow(&ds, bx + 12, dock_y + 28, "YAM", g_compositor.show_power_menu ? 0xFFFFFFFF : 0xFF000000, 0);
+    wl_draw_text_shadow(&ds, bx + 10, dock_y + 28, "MENU", g_compositor.show_power_menu ? 0xFFFFFFFF : 0xFF000000, 0);
     bx += 64;
     
     /* Draw Power Menu if active */
@@ -816,11 +865,12 @@ static void composite_taskbar(void) {
             else if (strstr(s->title, "Settings")) { glyph = "*"; bg = 0xFF64748B; accent = 0xFFFFFFFF; }
             
             wl_draw_rounded_rect(&ds, bx, dock_y + 12, 48, 48, 12, bg);
-            if (s->focused) wl_draw_rounded_outline(&ds, bx, dock_y + 12, 48, 48, 12, 0xAA000000);
+            if (s->focused) wl_draw_rounded_outline(&ds, bx, dock_y + 12, 48, 48, 12, 0xAA0F172A);
             
             wl_draw_text_shadow(&ds, bx + 16, dock_y + 28, glyph, accent, 0x00000040);
             
-            if (!minimized) wl_draw_filled_circle(&ds, bx + 24, dock_y + 66, 2, 0xFF333333);
+            if (minimized) wl_draw_rect(&ds, bx + 10, dock_y + 64, 28, 2, 0x668B9DB3);
+            else wl_draw_rounded_rect(&ds, bx + 9, dock_y + 63, 30, 3, 2, s->focused ? 0xFF1D4ED8 : 0xFF334155);
             bx += 64;
         }
     }
@@ -915,9 +965,24 @@ static void composite_heartbeat(void) {
 
 
 void wl_compositor_render_frame(void) {
-    if (g_wallpaper_module) {
+    if (!g_compositor.scanout || !g_compositor.scanout->pixels) {
+        return;
+    }
+
+    if (g_wallpaper_module && g_compositor.wallpaper_mode == 0) {
         u32 *wp = (u32 *)g_wallpaper_module;
         u32 wp_w = wp[0], wp_h = wp[1];
+        if (wp_w == 0 || wp_h == 0) {
+            g_compositor.wallpaper_mode = 1;
+            wp = NULL;
+        }
+        if (!wp) {
+            u32 *dst = g_compositor.scanout->pixels;
+            u32 dw = g_compositor.scanout->width, dh = g_compositor.scanout->height;
+            for (u32 y = 0; y < dh; y++) {
+                for (u32 x = 0; x < dw; x++) dst[y * dw + x] = 0xFF11111B;
+            }
+        } else {
         u32 *wp_pixels = &wp[2];
         u32 *dst = g_compositor.scanout->pixels;
         u32 dw = g_compositor.scanout->width, dh = g_compositor.scanout->height;
@@ -934,14 +999,21 @@ void wl_compositor_render_frame(void) {
                 for (u32 x = 0; x < dw; x++) dst_row[x] = 0xFF11111B;
             }
         }
+        }
     } else {
-        /* Gorgeous macOS Monterey-inspired procedural gradient wallpaper */
         u32 *dst = g_compositor.scanout->pixels;
         u32 dw = g_compositor.scanout->width, dh = g_compositor.scanout->height;
+        u32 r1 = 0x4F, g1 = 0x46, b1 = 0xE5;
+        u32 r2 = 0xEC, g2 = 0x48, b2 = 0x99;
+        if (g_compositor.wallpaper_mode == 2) {
+            r1 = 0x0F; g1 = 0x17; b1 = 0x2A;
+            r2 = 0x1D; g2 = 0x4E; b2 = 0x89;
+        } else if (g_compositor.wallpaper_mode == 3) {
+            r1 = 0x06; g1 = 0x34; b1 = 0x2F;
+            r2 = 0x10; g2 = 0xB9; b2 = 0x81;
+        }
         for (u32 y = 0; y < dh; y++) {
             for (u32 x = 0; x < dw; x++) {
-                u32 r1 = 0x4F, g1 = 0x46, b1 = 0xE5; // Indigo
-                u32 r2 = 0xEC, g2 = 0x48, b2 = 0x99; // Pink
                 u32 mix = ((x * 100) / dw + (y * 100) / dh) / 2;
                 u32 nr = r1 + ((r2 - r1) * mix) / 100;
                 u32 ng = g1 + ((g2 - g1) * mix) / 100;

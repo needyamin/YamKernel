@@ -8,12 +8,13 @@
 #include "../../mem/vmm.h"
 #include "../../mem/pmm.h"
 #include "../../net/net.h"
+#include "../../lib/spinlock.h"
 
 static void *e1000_mmio_base;
 static u8 e1000_mac[6];
 
-#define E1000_RX_DESC_COUNT 32
-#define E1000_TX_DESC_COUNT 8
+#define E1000_RX_DESC_COUNT 128
+#define E1000_TX_DESC_COUNT 64
 #define E1000_RX_BUF_SIZE   2048
 #define E1000_TX_BUF_SIZE   2048
 
@@ -27,6 +28,9 @@ static u32 rx_cur;
 static u32 tx_cur;
 static bool e1000_ready;
 static bool e1000_tx_enabled;
+static spinlock_t e1000_tx_lock = SPINLOCK_INIT;
+static spinlock_t e1000_rx_lock = SPINLOCK_INIT;
+static e1000_stats_t e1000_stats;
 
 static void e1000_write(u16 offset, u32 val) {
     *(volatile u32 *)((u64)e1000_mmio_base + offset) = val;
@@ -38,19 +42,25 @@ static u32 e1000_read(u16 offset) {
 }
 
 static void e1000_send_packet(const void *buf, usize len) {
+    e1000_stats.tx_attempts++;
     if (!e1000_ready || !buf || len == 0) return;
     if (!e1000_tx_enabled) {
+        e1000_stats.tx_not_ready_drop++;
         kprintf("[e1000] TX not enabled yet; packet queued/drop len=%lu\n", len);
         return;
     }
     if (len > E1000_TX_BUF_SIZE) {
+        e1000_stats.tx_oversize_drop++;
         kprintf("[e1000] TX drop oversized packet len=%lu\n", len);
         return;
     }
 
+    u64 f = spin_lock_irqsave(&e1000_tx_lock);
     u32 idx = tx_cur;
     if (!(tx_descs[idx].status & E1000_TX_STATUS_DD)) {
+        e1000_stats.tx_ring_full_drop++;
         kprintf("[e1000] TX ring full/drop idx=%u len=%lu\n", idx, len);
+        spin_unlock_irqrestore(&e1000_tx_lock, f);
         return;
     }
 
@@ -66,11 +76,16 @@ static void e1000_send_packet(const void *buf, usize len) {
 
     tx_cur = (tx_cur + 1) % E1000_TX_DESC_COUNT;
     e1000_write(E1000_REG_TXDESCTAIL, tx_cur);
+    spin_unlock_irqrestore(&e1000_tx_lock, f);
 
     for (int i = 0; i < 100000; i++) {
-        if (tx_descs[idx].status & E1000_TX_STATUS_DD) return;
+        if (tx_descs[idx].status & E1000_TX_STATUS_DD) {
+            e1000_stats.tx_ok++;
+            return;
+        }
         __asm__ volatile("pause");
     }
+    e1000_stats.tx_timeouts++;
     kprintf("[e1000] TX timeout idx=%u len=%lu\n", idx, len);
 }
 
@@ -150,9 +165,13 @@ static void e1000_enable_rxtx(void) {
 
 void e1000_poll(void) {
     if (!e1000_ready || !rx_descs) return;
+    u64 f = spin_lock_irqsave(&e1000_rx_lock);
     for (u32 loops = 0; loops < E1000_RX_DESC_COUNT; loops++) {
         e1000_rx_desc_t *d = &rx_descs[rx_cur];
-        if (!(d->status & E1000_RX_STATUS_DD)) return;
+        if (!(d->status & E1000_RX_STATUS_DD)) {
+            spin_unlock_irqrestore(&e1000_rx_lock, f);
+            return;
+        }
 
         u8 *packet = rx_bufs[rx_cur];
         u16 length = d->length;
@@ -162,9 +181,21 @@ void e1000_poll(void) {
         rx_cur = (rx_cur + 1) % E1000_RX_DESC_COUNT;
 
         if (length > 0 && length <= E1000_RX_BUF_SIZE) {
+            e1000_stats.rx_packets++;
+            e1000_stats.rx_bytes += length;
             net_receive(packet, length);
+        } else {
+            e1000_stats.rx_drops++;
         }
     }
+    spin_unlock_irqrestore(&e1000_rx_lock, f);
+}
+
+void e1000_get_stats(e1000_stats_t *out) {
+    if (!out) return;
+    u64 f = spin_lock_irqsave(&e1000_tx_lock);
+    memcpy(out, &e1000_stats, sizeof(*out));
+    spin_unlock_irqrestore(&e1000_tx_lock, f);
 }
 
 void e1000_init(void) {

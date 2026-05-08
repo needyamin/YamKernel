@@ -11,6 +11,8 @@
 
 #define DISP_W 540
 #define DISP_H 380
+#define DISP_MIN_W 540
+#define DISP_MIN_H 380
 
 #define COL_BG     0xFFF4F7FB
 #define COL_PANEL  0xFFFFFFFF
@@ -22,6 +24,11 @@
 
 static i32 display_mouse_x = -1;
 static i32 display_mouse_y = -1;
+static i32 disp_w = DISP_W;
+static i32 disp_h = DISP_H;
+static i32 btn_dbg_x = 160;
+static i32 btn_1080_x = 260;
+static i32 btn_768_x = 380;
 
 static void draw_fit(wl_surface_t *s, i32 x, i32 y, const char *text, i32 max_w, u32 color) {
     char buf[96];
@@ -79,16 +86,25 @@ static u32 active_window_count(void) {
 }
 
 static void draw_display_settings(wl_surface_t *s) {
-    wl_compositor_t *comp = wl_get_compositor();
-    wl_draw_rect(s, 0, 0, DISP_W, DISP_H, COL_BG);
+    if (!s) return;
+    disp_w = (i32)s->width;
+    disp_h = (i32)s->height;
+    if (disp_w < DISP_MIN_W) disp_w = DISP_MIN_W;
+    if (disp_h < DISP_MIN_H) disp_h = DISP_MIN_H;
+    btn_768_x = disp_w - 140;
+    btn_1080_x = btn_768_x - 120;
+    btn_dbg_x = btn_1080_x - 100;
 
-    wl_draw_rect(s, 0, 0, DISP_W, 64, COL_PANEL);
-    wl_draw_rect(s, 0, 63, DISP_W, 1, COL_LINE);
+    wl_compositor_t *comp = wl_get_compositor();
+    wl_draw_rect(s, 0, 0, disp_w, disp_h, COL_BG);
+
+    wl_draw_rect(s, 0, 0, disp_w, 64, COL_PANEL);
+    wl_draw_rect(s, 0, 63, disp_w, 1, COL_LINE);
     wl_draw_text(s, 24, 22, "Display Settings", COL_TEXT, 0);
     wl_draw_text(s, 224, 22, "Compositor and framebuffer", COL_MUTED, 0);
 
-    wl_draw_rounded_rect(s, 24, 88, 492, 114, 10, COL_PANEL);
-    wl_draw_rounded_outline(s, 24, 88, 492, 114, 10, COL_LINE);
+    wl_draw_rounded_rect(s, 24, 88, disp_w - 48, 114, 10, COL_PANEL);
+    wl_draw_rounded_outline(s, 24, 88, disp_w - 48, 114, 10, COL_LINE);
     char resolution[48];
     ksnprintf(resolution, sizeof(resolution), "%ux%u", comp->display_w, comp->display_h);
     char pitch[48];
@@ -97,18 +113,18 @@ static void draw_display_settings(wl_surface_t *s) {
     draw_row(s, 48, 142, "Framebuffer", pitch);
     draw_row(s, 48, 172, "Scale", "100% software compositor");
 
-    wl_draw_rounded_rect(s, 24, 224, 492, 74, 10, COL_PANEL);
-    wl_draw_rounded_outline(s, 24, 224, 492, 74, 10, COL_LINE);
+    wl_draw_rounded_rect(s, 24, 224, disp_w - 48, 74, 10, COL_PANEL);
+    wl_draw_rounded_outline(s, 24, 224, disp_w - 48, 74, 10, COL_LINE);
     char windows[32];
     ksnprintf(windows, sizeof(windows), "%u windows", active_window_count());
     draw_row(s, 48, 248, "Focused", focused_title());
     draw_row(s, 48, 274, "Open surfaces", windows);
 
-    wl_draw_text(s, 32, 326, comp->show_debug_overlay ? "Debug overlay is on" : "Debug overlay is off",
+    wl_draw_text(s, 32, disp_h - 54, comp->show_debug_overlay ? "Debug overlay is on" : "Debug overlay is off",
                  comp->show_debug_overlay ? COL_GREEN : COL_MUTED, 0);
-    draw_button(s, 160, 318, 90, comp->show_debug_overlay ? "Hide Dbg" : "Show Dbg", true);
-    draw_button(s, 260, 318, 110, "1920x1080", false);
-    draw_button(s, 380, 318, 110, "1024x768", false);
+    draw_button(s, btn_dbg_x, disp_h - 62, 90, comp->show_debug_overlay ? "Hide Dbg" : "Show Dbg", true);
+    draw_button(s, btn_1080_x, disp_h - 62, 110, "1920x1080", false);
+    draw_button(s, btn_768_x, disp_h - 62, 110, "1024x768", false);
 }
 
 static bool hit(i32 x, i32 y, i32 rx, i32 ry, i32 rw, i32 rh) {
@@ -117,17 +133,17 @@ static bool hit(i32 x, i32 y, i32 rx, i32 ry, i32 rw, i32 rh) {
 
 static void handle_display_click(i32 x, i32 y) {
     wl_compositor_t *comp = wl_get_compositor();
-    if (hit(x, y, 160, 318, 90, 34)) {
+    if (hit(x, y, btn_dbg_x, disp_h - 62, 90, 34)) {
         comp->show_debug_overlay = !comp->show_debug_overlay;
         kprintf("[DISPLAY] debug overlay from Display Settings: %s\n",
                 comp->show_debug_overlay ? "on" : "off");
-    } else if (hit(x, y, 260, 318, 110, 34)) {
+    } else if (hit(x, y, btn_1080_x, disp_h - 62, 110, 34)) {
         drm_set_mode(1920, 1080);
         comp->display_w = 1920;
         comp->display_h = 1080;
         comp->scanout = drm_get_primary();
         kprintf("[DISPLAY] Resolution changed to 1920x1080\n");
-    } else if (hit(x, y, 380, 318, 110, 34)) {
+    } else if (hit(x, y, btn_768_x, disp_h - 62, 110, 34)) {
         drm_set_mode(1024, 768);
         comp->display_w = 1024;
         comp->display_h = 768;
@@ -141,6 +157,7 @@ void wl_display_settings_task(void *arg) {
     task_sleep_ms(120);
     wl_surface_t *s = wl_surface_create("Display Settings", 360, 96, DISP_W, DISP_H, sched_current()->id);
     if (!s) return;
+    wl_surface_set_constraints(s, true, DISP_MIN_W, DISP_MIN_H);
     draw_display_settings(s);
     wl_surface_commit(s);
     u32 my_id = s->id;
@@ -148,7 +165,8 @@ void wl_display_settings_task(void *arg) {
         input_event_t ev;
         bool dirty = false;
         while (wl_surface_pop_event(s, &ev)) {
-            if (ev.type == EV_ABS && ev.code == 0) display_mouse_x = ev.value;
+            if (ev.type == EV_RESIZE) dirty = true;
+            else if (ev.type == EV_ABS && ev.code == 0) display_mouse_x = ev.value;
             else if (ev.type == EV_ABS && ev.code == 1) display_mouse_y = ev.value;
             else if (ev.type == EV_KEY && ev.value == KEY_PRESSED && ev.code >= 0x110 &&
                      display_mouse_x >= 0 && display_mouse_y >= 0) {

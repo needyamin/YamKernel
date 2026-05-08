@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YamOS Development Roadmap & Market Analysis</title>
+    <meta name="description" content="Strategic engineering plan and market research for YamOS - A premium macOS-inspired hobbyist operating system.">
+    
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Google Fonts: Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --yam-blue: #3b82f6;
+            --yam-dark: #0f172a;
+            --yam-slate: #1e293b;
+            --yam-glass: rgba(30, 41, 59, 0.7);
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--yam-dark);
+            color: #f8fafc;
+            line-height: 1.6;
+        }
+
+        .hero-section {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            padding: 80px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .card {
+            background-color: var(--yam-slate);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #f8fafc;
+            border-radius: 12px;
+            transition: transform 0.2s;
+            backdrop-filter: blur(10px);
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            border-color: var(--yam-blue);
+        }
+
+        .badge-priority {
+            background-color: #ef4444;
+        }
+
+        .badge-status {
+            background-color: var(--yam-blue);
+        }
+
+        .table {
+            color: #f8fafc;
+        }
+
+        .table-dark {
+            --bs-table-bg: transparent;
+        }
+
+        .roadmap-step {
+            position: relative;
+            padding-left: 30px;
+            margin-bottom: 30px;
+            border-left: 2px solid var(--yam-blue);
+        }
+
+        .roadmap-step::before {
+            content: '';
+            position: absolute;
+            left: -9px;
+            top: 0;
+            width: 16px;
+            height: 16px;
+            background-color: var(--yam-blue);
+            border-radius: 50%;
+        }
+
+        .text-accent {
+            color: var(--yam-blue);
+        }
+
+        .glass-panel {
+            background: var(--yam-glass);
+            backdrop-filter: blur(12px);
+            border-radius: 16px;
+            padding: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        h1, h2, h3 {
+            font-weight: 700;
+        }
+    </style>
+</head>
+<body>
+
+    <header class="hero-section text-center">
+        <div class="container">
+            <h1 class="display-4 mb-3">YamOS <span class="text-accent">Strategy & Roadmap</span></h1>
+            <p class="lead text-secondary">Bridging the gap between premium aesthetics and kernel-level performance.</p>
+        </div>
+    </header>
+
+    <main class="container my-5">
+        
+        <!-- Market Positioning -->
+        <section id="market" class="mb-5">
+            <h2 class="mb-4">Market Positioning</h2>
+            <div class="glass-panel">
+                <p>YamOS occupies a unique niche in the hobbyist OS landscape, prioritizing high-fidelity visual experiences and macOS-inspired workflows.</p>
+                <div class="table-responsive">
+                    <table class="table table-dark table-hover">
+                        <thead>
+                            <tr>
+                                <th>OS Project</th>
+                                <th>Philosophy</th>
+                                <th>Core Strength</th>
+                                <th>Target Gap for YamOS</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>SerenityOS</td>
+                                <td>Unix from scratch</td>
+                                <td>Custom Ecosystem</td>
+                                <td>Visual Modernity</td>
+                            </tr>
+                            <tr>
+                                <td>Haiku</td>
+                                <td>BeOS Successor</td>
+                                <td>Usability</td>
+                                <td>Modern Web Support</td>
+                            </tr>
+                            <tr>
+                                <td>Redox</td>
+                                <td>Rust Safety</td>
+                                <td>Security</td>
+                                <td>Application UX</td>
+                            </tr>
+                            <tr class="table-active">
+                                <td class="text-accent fw-bold">YamOS</td>
+                                <td>Apple-like UI</td>
+                                <td>Aesthetics</td>
+                                <td>Kernel Infrastructure</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- Critical Gaps -->
+        <section id="gaps" class="mb-5">
+            <h2 class="mb-4">Critical Technical Gaps</h2>
+            <div class="row g-4">
+                <div class="col-md-6">
+                    <div class="card h-100 p-4">
+                        <h3 class="h5 text-accent"><span class="badge badge-priority me-2">HIGH</span> Threads & Signals</h3>
+                        <p class="text-secondary small">Status: MISSING</p>
+                        <p>Essential for modern language runtimes and multi-process browsers. Without this, application complexity is capped at single-threaded logic.</p>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card h-100 p-4">
+                        <h3 class="h5 text-accent"><span class="badge badge-priority me-2">HIGH</span> Dynamic Linking</h3>
+                        <p class="text-secondary small">Status: MISSING</p>
+                        <p>Currently, every app bundles its own libc. An ELF interpreter is required to enable shared libraries and reduce system-wide memory pressure.</p>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card h-100 p-4">
+                        <h3 class="h5 text-accent">Non-blocking I/O</h3>
+                        <p class="text-secondary small">Status: MISSING</p>
+                        <p>The current networking stack is synchronous. Implementing <code>select()</code> or <code>epoll()</code> is vital for responsive network applications.</p>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card h-100 p-4">
+                        <h3 class="h5 text-accent">Page Cache</h3>
+                        <p class="text-secondary small">Status: MISSING</p>
+                        <p>A massive bottleneck for disk-intensive apps. Implementing an LRU page cache will make the system feel significantly "snappier" on real hardware.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Implementation Roadmap -->
+        <section id="roadmap" class="mb-5">
+            <h2 class="mb-4">Implementation Roadmap</h2>
+            <div class="glass-panel">
+                <div class="roadmap-step">
+                    <h4 class="text-accent">Phase 1: The Runtime Foundation</h4>
+                    <p>Focus on kernel stability and porting ability.</p>
+                    <ul>
+                        <li>Implement Kernel Threads & Futexes</li>
+                        <li>Build ELF Dynamic Loader (ld.so)</li>
+                        <li>Standard POSIX Signal Delivery</li>
+                    </ul>
+                </div>
+
+                <div class="roadmap-step">
+                    <h4>Phase 2: Performance & Hardware</h4>
+                    <p>Moving from a VM-only demo to a real-world OS.</p>
+                    <ul>
+                        <li>LRU Page Cache for Storage</li>
+                        <li>AHCI / NVMe Driver Hardening</li>
+                        <li>VirtIO-GPU / DRM Modesetting improvements</li>
+                    </ul>
+                </div>
+
+                <div class="roadmap-step">
+                    <h4>Phase 3: Connected Ecosystem</h4>
+                    <p>Enabling web connectivity and package management.</p>
+                    <ul>
+                        <li>Non-blocking Socket API</li>
+                        <li>Full TLS/HTTPS Handshake Completion</li>
+                        <li>Initial Package Manager (ypkg)</li>
+                    </ul>
+                </div>
+
+                <div class="roadmap-step">
+                    <h4>Phase 4: Experience Polish</h4>
+                    <p>Finalizing the macOS-inspired desktop experience.</p>
+                    <ul>
+                        <li>FreeType / HarfBuzz Font Integration</li>
+                        <li>Global Theme Service (CSS-based)</li>
+                        <li>VFS-level Permissions (UID/GID enforcement)</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <footer class="text-center py-4 border-top border-secondary">
+        <p class="text-secondary">&copy; 2026 YamOS Development Team. All rights reserved.</p>
+    </footer>
+
+    <!-- Bootstrap 5 JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

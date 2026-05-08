@@ -75,7 +75,8 @@ int icmp_ping(u32 dst_ip, u16 seq, u32 timeout_ms) {
     /* Poll for reply with timeout */
     for (u32 t = 0; t < timeout_ms * 100; t++) {
         if (g_ping_got_reply) return 0;
-        __asm__ volatile("pause");
+        if ((t % 100u) == 0) net_poll();
+        net_coop_yield(t);
     }
     return -1; /* Timeout */
 }

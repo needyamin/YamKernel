@@ -334,8 +334,6 @@ static int block_rw_all(block_device_t *dev, bool write, u64 lba, u32 sectors, v
 static int vfs_flush_block_mount(vfs_mount_t *m) {
     if (!m || !m->block_backed || !m->block_dev) return 0;
     bcache_flush(m->block_dev);
-    kprintf("[VFS] Flushed block-backed FAT32 mount '%s' -> %s\n",
-            m->mount_point, m->block_dev->name);
     return 0;
 }
 
@@ -453,6 +451,7 @@ static void vfs_promote_var_to_block(vfs_mount_t *source) {
     fat32_vol_t *vol = (fat32_vol_t *)source->priv;
     bool changed = false;
     changed |= fat32_ensure_dir_path(vol, "/cache/yamos/downloads");
+    changed |= fat32_ensure_dir_path(vol, "/cache/yamos/ypkg");
     changed |= fat32_ensure_dir_path(vol, "/lib/yamos/packages");
     changed |= fat32_ensure_dir_path(vol, "/log");
     if (changed && source->block_backed) (void)vfs_flush_block_mount(source);
@@ -1294,7 +1293,6 @@ int sys_chdir(const char *pathname) {
     task_t *t = sched_current();
     if (!t) return -1;
     vfs_resolve_path(pathname, t->cwd, sizeof(t->cwd));
-    kprintf("[VFS] task '%s' cwd='%s'\n", t->name, t->cwd);
     return 0;
 }
 
@@ -1332,7 +1330,6 @@ int sys_dup(int fd) {
         return -1;
     }
     if (!created_stdio_file) f->ref_count++;
-    kprintf("[VFS] dup fd%d -> fd%d path='%s' refs=%u\n", fd, newfd, f->path, f->ref_count);
     return newfd;
 }
 
@@ -1350,7 +1347,6 @@ int sys_dup2(int oldfd, int newfd) {
         return -1;
     }
     if (!created_stdio_file) f->ref_count++;
-    kprintf("[VFS] dup2 fd%d -> fd%d path='%s' refs=%u\n", oldfd, newfd, f->path, f->ref_count);
     return newfd;
 }
 
@@ -1451,6 +1447,7 @@ void vfs_init(void) {
     ramfs_init(&g_ramfs_mnt);
 
     ramfs_mkdir_p(&g_ramfs_var, "/cache/yamos/downloads");
+    ramfs_mkdir_p(&g_ramfs_var, "/cache/yamos/ypkg");
     ramfs_mkdir_p(&g_ramfs_var, "/lib/yamos/packages");
     ramfs_mkdir_p(&g_ramfs_var, "/log");
     ramfs_mkdir_p(&g_ramfs_usr_local, "/bin");

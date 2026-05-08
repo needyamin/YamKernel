@@ -27,15 +27,30 @@ CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-stack-check \
           -Wall -Wextra -Werror -O2 -g \
           -Isrc/include -Isrc
 
-KERNEL_CFLAGS := $(CFLAGS) -DYAM_KERNEL
+KERNEL_CFLAGS := $(CFLAGS) -DYAM_KERNEL \
+                 -Ithird_party/mbedtls/include
+
+LDFLAGS := -nostdlib -static -T linker.ld -z max-page-size=0x1000
+
+LIBGCC := $(shell $(CC) -print-libgcc-file-name 2>/dev/null)
+ifeq ($(LIBGCC),)
+    LIBGCC :=
+endif
+
+MBEDTLS_LIBS := third_party/mbedtls/library/libmbedcrypto.a \
+                third_party/mbedtls/library/libmbedx509.a \
+                third_party/mbedtls/library/libmbedtls.a
 
 ASFLAGS := -f elf64
-LDFLAGS := -nostdlib -static -T linker.ld -z max-page-size=0x1000
 
 # Directories
 SRC_DIR   := src
 BUILD_DIR := build
 ISO_DIR   := $(BUILD_DIR)/iso_root
+
+# Embedded PEM for HTTPS trust store (xxd -i -> unsigned char isrgrootx1_pem[])
+CA_EMBED_SRC := $(BUILD_DIR)/net/isrgrootx1_pem.c
+CA_EMBED_OBJ := $(BUILD_DIR)/net/isrgrootx1_pem.o
 
 # Source files (Exclude OS-level apps, drivers, and userspace libs from kernel build, keep services like compositor)
 C_SRCS := $(shell find $(SRC_DIR) -name '*.c' -type f -not -path '$(SRC_DIR)/os/apps/*' -not -path '$(SRC_DIR)/os/drivers/*' -not -path '$(SRC_DIR)/os/lib/*' -not -path '$(SRC_DIR)/os/ports/*')
@@ -80,10 +95,19 @@ all: $(KERNEL_ELF)
 iso: $(KERNEL_ISO)
 
 # Link kernel
-$(KERNEL_ELF): $(OBJS)
+$(KERNEL_ELF): $(OBJS) $(CA_EMBED_OBJ)
 	@mkdir -p $(dir $@)
-	$(LD) $(LDFLAGS) -o $@ $^
+	$(CC) $(LDFLAGS) -o $@ $^ -Wl,--start-group $(MBEDTLS_LIBS) -Wl,--end-group $(LIBGCC)
 	@echo "[LINK] $@"
+
+$(BUILD_DIR)/net/isrgrootx1_pem.c: src/net/certs/isrgrootx1.pem
+	@mkdir -p $(dir $@)
+	xxd -i $< | sed 's/src_net_certs_isrgrootx1_pem/isrgrootx1_pem/g' > $@
+
+$(BUILD_DIR)/net/isrgrootx1_pem.o: $(BUILD_DIR)/net/isrgrootx1_pem.c
+	@mkdir -p $(dir $@)
+	$(CC) $(KERNEL_CFLAGS) -c $< -o $@
+	@echo "[EMBED] $<"
 
 # Compile C sources (Kernel)
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
@@ -287,7 +311,7 @@ verify-log: $(KERNEL_ISO) $(DISK_IMG)
 		-no-reboot \
 		-no-shutdown >/dev/null 2>&1 || true
 	@echo "[VERIFY] Key boot evidence:"
-	@grep -E "\[PCI\]|\[DRIVER\]|\[BLOCK\]|\[VBLK\]|\[VFS\]|\[FAT32\]|\[e1000\]|\[DHCP\]|\[DNS\]|\[TCP\]|\[HTTP\]|PANIC|EXCEPTION|FAULT" build/verify.log | tail -n 220 || true
+	@grep -E "\[INIT\]|\[ELF\]|\[WAYLAND\]|\[WL_DBG\]|\[EXC\]|\[PCI\]|\[DRIVER\]|\[BLOCK\]|\[VBLK\]|\[VFS\]|\[FAT32\]|\[e1000\]|\[DHCP\]|\[DNS\]|\[TCP\]|\[HTTP\]|PANIC|EXCEPTION|FAULT" build/verify.log | tail -n 260 || true
 
 # ============================================================================
 #  Setup (install dependencies on Debian/Ubuntu/WSL)

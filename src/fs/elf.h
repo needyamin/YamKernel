@@ -8,6 +8,11 @@
 
 #define ELF_MAGIC 0x464C457F /* '\x7F', 'E', 'L', 'F' */
 
+#define ET_NONE   0
+#define ET_REL    1
+#define ET_EXEC   2
+#define ET_DYN    3
+
 typedef struct {
     u32 e_magic;        /* 0x7F 'E' 'L' 'F' */
     u8  e_class;        /* 2 = 64-bit */
@@ -38,6 +43,36 @@ typedef struct {
 #define PT_NOTE     4
 #define PT_SHLIB    5
 #define PT_PHDR     6
+
+#define DT_NULL    0
+#define DT_RELA    7
+#define DT_RELASZ  8
+#define DT_RELAENT 9
+
+typedef struct {
+    i64 d_tag;
+    u64 d_un;
+} elf64_dyn_t;
+
+typedef struct {
+    u64 r_offset;
+    u64 r_info;
+    i64 r_addend;
+} elf64_rela_t;
+
+#define ELF64_R_SYM(i)   ((u32)((i) >> 32))
+#define ELF64_R_TYPE(i)  ((u32)(i))
+
+/* x86_64 relocation types (subset) */
+#define R_X86_64_NONE       0
+#define R_X86_64_64         1
+#define R_X86_64_PC32       2
+#define R_X86_64_GOT32      3
+#define R_X86_64_PLT32      4
+#define R_X86_64_COPY       5
+#define R_X86_64_GLOB_DAT   6
+#define R_X86_64_JUMP_SLOT  7
+#define R_X86_64_RELATIVE   8
 
 #define PF_X        1
 #define PF_W        2

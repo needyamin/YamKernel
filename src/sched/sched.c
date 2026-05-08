@@ -209,10 +209,11 @@ task_t *sched_spawn(const char *name, void (*entry)(void *), void *arg, u8 prio)
 }
 
 void task_exit(void) {
-    cli();
     sched_exit_current(0);
-    sched_yield();
-    for(;;) hlt();
+    for (;;) {
+        sched_yield();
+        __asm__ volatile("hlt");
+    }
 }
 
 void sched_exit_current(i32 code) {

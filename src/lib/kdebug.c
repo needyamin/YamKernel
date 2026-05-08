@@ -15,6 +15,7 @@
 static char g_debug_buf[DEBUG_BUF_SIZE];
 static u32  g_debug_ptr = 0;
 static spinlock_t g_debug_lock = SPINLOCK_INIT;
+static bool g_kdebug_enabled = false; /* production-safe default */
 
 /* Variadic args */
 typedef __builtin_va_list va_list;
@@ -59,7 +60,30 @@ static void serial_put_i64(i64 val) {
 }
 
 /* ---- Core log function ---- */
+void kdebug_set_enabled(bool enabled) {
+    u64 f = spin_lock_irqsave(&g_debug_lock);
+    g_kdebug_enabled = enabled;
+    spin_unlock_irqrestore(&g_debug_lock, f);
+}
+
+bool kdebug_is_enabled(void) {
+    bool enabled;
+    u64 f = spin_lock_irqsave(&g_debug_lock);
+    enabled = g_kdebug_enabled;
+    spin_unlock_irqrestore(&g_debug_lock, f);
+    return enabled;
+}
+
+bool kdebug_should_log(int level) {
+    (void)level;
+    return kdebug_is_enabled();
+}
+
 void kdebug_log(int level, const char *tag, const char *fmt, ...) {
+    if (!kdebug_should_log(level)) {
+        return;
+    }
+
     if (level < 0) level = 0;
     if (level > 4) level = 4;
 
@@ -206,6 +230,10 @@ void kdebug_hexdump(const char *tag, const void *addr, u32 len) {
 
 /* Push a raw string to the debug buffer */
 void kdebug_push_raw(const char *s) {
+    if (!kdebug_is_enabled()) {
+        return;
+    }
+
     u64 f = spin_lock_irqsave(&g_debug_lock);
     while(*s) {
         g_debug_buf[g_debug_ptr % DEBUG_BUF_SIZE] = *s++;

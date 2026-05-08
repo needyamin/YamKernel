@@ -78,6 +78,7 @@
 /* Phase 3: Non-blocking I/O */
 #define SYS_SELECT            92
 #define SYS_FCNTL             93
+#define SYS_EXECVE            94
 
 #define YAM_OS_FLAG_VFS_SPAWN    (1u << 7)
 #define YAM_OS_FLAG_THREADS      (1u << 8)

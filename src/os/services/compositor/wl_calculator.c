@@ -13,6 +13,8 @@
 
 #define CALC_W 520
 #define CALC_H 560
+#define CALC_MIN_W 520
+#define CALC_MIN_H 560
 #define SCALE 10000LL
 #define MAX_DIGITS 18
 #define HIST_MAX 6
@@ -54,6 +56,10 @@ static u32 history_count = 0;
 static i32 last_x = -1;
 static i32 last_y = -1;
 static bool shift_held = false;
+static i32 calc_w = CALC_W;
+static i32 calc_h = CALC_H;
+static i32 calc_ox = 0;
+static i32 calc_oy = 0;
 
 static const char sc_ascii[128] = {
     0,  27, '1','2','3','4','5','6','7','8','9','0','-','=','\b',
@@ -407,7 +413,8 @@ static calc_button_t buttons[] = {
 };
 
 static bool hit_button(const calc_button_t *b, i32 x, i32 y) {
-    return b && x >= b->x && x < b->x + b->w && y >= b->y && y < b->y + b->h;
+    return b && x >= calc_ox + b->x && x < calc_ox + b->x + b->w &&
+           y >= calc_oy + b->y && y < calc_oy + b->y + b->h;
 }
 
 static void draw_text_clip(wl_surface_t *s, i32 x, i32 y, const char *text, u32 color, u32 max_chars) {
@@ -423,48 +430,59 @@ static void draw_text_clip(wl_surface_t *s, i32 x, i32 y, const char *text, u32 
 }
 
 static void draw_button(wl_surface_t *s, const calc_button_t *b) {
-    wl_draw_rounded_rect(s, b->x, b->y, b->w, b->h, 7, b->color);
-    wl_draw_rounded_outline(s, b->x, b->y, b->w, b->h, 7, COL_LINE);
+    i32 bx = calc_ox + b->x;
+    i32 by = calc_oy + b->y;
+    wl_draw_rounded_rect(s, bx, by, b->w, b->h, 7, b->color);
+    wl_draw_rounded_outline(s, bx, by, b->w, b->h, 7, COL_LINE);
     u32 fg = (b->color == COL_OP || b->color == COL_OK) ? COL_PRIMARY : COL_TEXT;
     if (b->color == COL_DANGER) fg = 0xFFB42318;
-    i32 tx = b->x + ((b->w - (i32)strlen(b->label) * 8) / 2);
-    if (tx < b->x + 8) tx = b->x + 8;
-    wl_draw_text(s, tx, b->y + (b->h - 16) / 2, b->label, fg, 0);
+    i32 tx = bx + ((b->w - (i32)strlen(b->label) * 8) / 2);
+    if (tx < bx + 8) tx = bx + 8;
+    wl_draw_text(s, tx, by + (b->h - 16) / 2, b->label, fg, 0);
 }
 
 static void draw_calculator(wl_surface_t *s) {
-    wl_draw_rect(s, 0, 0, CALC_W, CALC_H, COL_BG);
-    wl_draw_rect(s, 0, 0, CALC_W, 44, COL_PANEL);
-    wl_draw_rect(s, 0, 44, CALC_W, 1, COL_LINE);
+    calc_w = (i32)s->width;
+    calc_h = (i32)s->height;
+    if (calc_w < CALC_MIN_W) calc_w = CALC_MIN_W;
+    if (calc_h < CALC_MIN_H) calc_h = CALC_MIN_H;
+    calc_ox = (calc_w - CALC_W) / 2;
+    calc_oy = (calc_h - CALC_H) / 2;
+    if (calc_ox < 0) calc_ox = 0;
+    if (calc_oy < 0) calc_oy = 0;
+
+    wl_draw_rect(s, 0, 0, calc_w, calc_h, COL_BG);
+    wl_draw_rect(s, 0, 0, calc_w, 44, COL_PANEL);
+    wl_draw_rect(s, 0, 44, calc_w, 1, COL_LINE);
     wl_draw_text(s, 22, 16, "Calculator", COL_TEXT, 0);
     wl_draw_text(s, 128, 16, calc_mode == CALC_MODE_STANDARD ? "Standard" : "Scientific", COL_MUTED, 0);
-    wl_draw_text(s, 330, 16, "GUI Clipboard Memory", COL_MUTED, 0);
+    wl_draw_text(s, calc_w - 190, 16, "GUI Clipboard Memory", COL_MUTED, 0);
 
-    wl_draw_rounded_rect(s, 22, 62, 474, 104, 8, 0xFF111827);
-    wl_draw_rounded_outline(s, 22, 62, 474, 104, 8, 0xFF334155);
-    draw_text_clip(s, 38, 80, expr_buf, 0xFF94A3B8, 54);
+    wl_draw_rounded_rect(s, calc_ox + 22, calc_oy + 62, 474, 104, 8, 0xFF111827);
+    wl_draw_rounded_outline(s, calc_ox + 22, calc_oy + 62, 474, 104, 8, 0xFF334155);
+    draw_text_clip(s, calc_ox + 38, calc_oy + 80, expr_buf, 0xFF94A3B8, 54);
     int len = strlen(display_buf);
-    i32 dx = 474 - len * 8;
-    if (dx < 36) dx = 36;
-    wl_draw_text(s, dx, 114, display_buf, calc_error ? 0xFFFFB4B4 : 0xFFFFFFFF, 0);
+    i32 dx = calc_ox + 474 - len * 8;
+    if (dx < calc_ox + 36) dx = calc_ox + 36;
+    wl_draw_text(s, dx, calc_oy + 114, display_buf, calc_error ? 0xFFFFB4B4 : 0xFFFFFFFF, 0);
 
     char mem[80];
     char memv[48];
     format_fixed(calc_memory, memv, sizeof(memv));
     ksnprintf(mem, sizeof(mem), "M %s", memv);
-    draw_text_clip(s, 38, 148, mem, 0xFFCBD5E1, 32);
+    draw_text_clip(s, calc_ox + 38, calc_oy + 148, mem, 0xFFCBD5E1, 32);
 
     for (u32 i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
         draw_button(s, &buttons[i]);
     }
 
-    wl_draw_rect(s, 0, CALC_H - 70, CALC_W, 1, COL_LINE);
-    wl_draw_text(s, 24, CALC_H - 56, "History", COL_MUTED, 0);
+    wl_draw_rect(s, 0, calc_h - 70, calc_w, 1, COL_LINE);
+    wl_draw_text(s, 24, calc_h - 56, "History", COL_MUTED, 0);
     u32 start = history_count > 2 ? history_count - 2 : 0;
     for (u32 i = start; i < history_count; i++) {
-        draw_text_clip(s, 96, CALC_H - 56 + (i - start) * 18, history[i], COL_TEXT, 48);
+        draw_text_clip(s, 96, calc_h - 56 + (i - start) * 18, history[i], COL_TEXT, 48);
     }
-    wl_draw_text(s, 24, CALC_H - 18, status_buf, COL_MUTED, 0);
+    wl_draw_text(s, 24, calc_h - 18, status_buf, COL_MUTED, 0);
 }
 
 static void handle_click(i32 x, i32 y) {
@@ -500,6 +518,7 @@ void wl_calc_task(void *arg) {
     task_sleep_ms(200);
     wl_surface_t *s = wl_surface_create("Calculator", 650, 50, CALC_W, CALC_H, sched_current()->id);
     if (!s) return;
+    wl_surface_set_constraints(s, true, CALC_MIN_W, CALC_MIN_H);
 
     clear_all();
     kprintf("[CALC] YamOS Calculator ready: gui=1 keyboard=1 memory=1 clipboard=1 fixed_decimal=4\n");
@@ -511,7 +530,8 @@ void wl_calc_task(void *arg) {
         input_event_t ev;
         bool dirty = false;
         while (wl_surface_pop_event(s, &ev)) {
-            if (ev.type == EV_ABS && ev.code == 0) last_x = ev.value;
+            if (ev.type == EV_RESIZE) dirty = true;
+            else if (ev.type == EV_ABS && ev.code == 0) last_x = ev.value;
             else if (ev.type == EV_ABS && ev.code == 1) last_y = ev.value;
             else if (ev.type == EV_CLIPBOARD && ev.code == CLIPBOARD_COPY) {
                 copy_result();

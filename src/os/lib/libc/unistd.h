@@ -100,9 +100,10 @@ static inline int pause(void) {
     return -1;
 }
 static inline int execve(const char *path, char *const argv[], char *const envp[]) {
-    (void)path; (void)argv; (void)envp;
-    errno = ENOSYS;
-    return -1;
+    int rc = (int)syscall3(SYS_EXECVE, (u64)path, (u64)argv, (u64)envp);
+    if (rc < 0)
+        errno = ENOSYS;
+    return rc;
 }
 static inline pid_t spawn(const char *path) {
     pid_t pid = (pid_t)syscall3(SYS_SPAWN, (u64)path, 0, 0);

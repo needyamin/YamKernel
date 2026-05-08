@@ -19,6 +19,7 @@
 #include "../../../cpu/apic.h"
 #include "../../../cpu/msr.h"
 #include "../../../drivers/timer/rtc.h"
+#include "../../../drivers/timer/pit.h"
 #include "../../../nexus/channel.h"
 #include "../../../nexus/graph.h"
 #include "wl_draw.h"
@@ -94,6 +95,23 @@ static const char *line_after(const char *line, const char *prefix) {
     return strncmp(line, prefix, n) == 0 ? line + n : NULL;
 }
 
+static int parse_int_safe(const char *s) {
+    if (!s) return 0;
+    int sign = 1;
+    if (*s == '-') {
+        sign = -1;
+        s++;
+    } else if (*s == '+') {
+        s++;
+    }
+    int v = 0;
+    while (*s >= '0' && *s <= '9') {
+        v = v * 10 + (*s - '0');
+        s++;
+    }
+    return v * sign;
+}
+
 static void read_field(char **p, char *out, usize cap) {
     if (!p || !*p) return;
     char *s = *p;
@@ -118,6 +136,21 @@ static void load_profile_line(char *line) {
     value = line_after(line, "login=");
     if (value) {
         copy_text(g_compositor.login_user, sizeof(g_compositor.login_user), value);
+        return;
+    }
+
+    value = line_after(line, "time_offset=");
+    if (value) {
+        g_compositor.time_offset_minutes = parse_int_safe(value);
+        return;
+    }
+
+    value = line_after(line, "wallpaper_mode=");
+    if (value) {
+        int mode = parse_int_safe(value);
+        if (mode < 0) mode = 0;
+        if (mode > 3) mode = 3;
+        g_compositor.wallpaper_mode = (u8)mode;
         return;
     }
 
@@ -187,9 +220,11 @@ bool wl_compositor_save_profile(void) {
     char buf[2048];
     usize pos = 0;
     pos += ksnprintf(buf + pos, sizeof(buf) - pos,
-                     "version=1\ncomputer=%s\nlogin=%s\n",
+                     "version=1\ncomputer=%s\nlogin=%s\ntime_offset=%d\nwallpaper_mode=%u\n",
                      g_compositor.computer_name,
-                     g_compositor.login_user[0] ? g_compositor.login_user : "root");
+                     g_compositor.login_user[0] ? g_compositor.login_user : "root",
+                     g_compositor.time_offset_minutes,
+                     g_compositor.wallpaper_mode);
     for (u32 i = 0; i < g_compositor.user_count && pos + 96 < sizeof(buf); i++) {
         yam_user_account_t *u = &g_compositor.users[i];
         if (!u->active) continue;
@@ -259,6 +294,8 @@ void wl_compositor_init(void) {
     g_compositor.login_failed = false;
     g_compositor.current_user[0] = '\0';
     strcpy(g_compositor.current_user, "setup");
+    g_compositor.time_offset_minutes = 0;
+    g_compositor.wallpaper_mode = 0;
 
     if (wl_compositor_load_profile()) {
         kprintf_color(0xFF00DDFF, "[WAYLAND] Compositor initialized at %ux%u (Mode: LOGIN, persisted setup)\n",
@@ -321,9 +358,14 @@ wl_surface_t *wl_surface_create(const char *title, i32 x, i32 y, u32 w, u32 h, u
     s->title_bg     = 0xFF222233;
     s->title_fg     = 0xFFFFFFFF;
     s->focused      = false;
+    s->resizable    = true;
     s->maximized    = false;
     s->restore_x    = x;
     s->restore_y    = y;
+    s->restore_width = w;
+    s->restore_height = h;
+    s->min_width = (w > 360) ? (w * 70) / 100 : w;
+    s->min_height = (h > 220) ? (h * 70) / 100 : h;
     
     /* Init animation state */
     s->anim_scale   = 50;  /* 50% */
@@ -412,6 +454,46 @@ void wl_surface_destroy(wl_surface_t *surface) {
     g_compositor.surface_count--;
 }
 
+bool wl_surface_resize(wl_surface_t *surface, u32 new_w, u32 new_h) {
+    if (!surface || surface->state != WL_SURFACE_ACTIVE || !surface->buffer) return false;
+    if (new_w == 0 || new_h == 0) return false;
+    if (surface->width == new_w && surface->height == new_h) return true;
+
+    drm_buffer_t *old_buf = surface->buffer;
+    u32 old_w = surface->width;
+    u32 old_h = surface->height;
+
+    drm_buffer_t *new_buf = drm_create_dumb_buffer(new_w, new_h);
+    if (!new_buf) return false;
+    memset(new_buf->pixels, 0, new_buf->size);
+
+    u32 copy_w = (old_w < new_w) ? old_w : new_w;
+    u32 copy_h = (old_h < new_h) ? old_h : new_h;
+    for (u32 y = 0; y < copy_h; y++) {
+        memcpy(new_buf->pixels + (y * new_w), old_buf->pixels + (y * old_w), (usize)copy_w * sizeof(u32));
+    }
+
+    surface->buffer = new_buf;
+    surface->width = new_w;
+    surface->height = new_h;
+    drm_destroy_dumb_buffer(old_buf);
+    input_event_t resize_ev = { .type = EV_RESIZE, .code = 0, .value = 1 };
+    wl_surface_push_event(surface, resize_ev);
+    return true;
+}
+
+bool wl_surface_resize_fast(wl_surface_t *surface, u32 new_w, u32 new_h) {
+    /* Keep content while resizing to avoid blank windows. */
+    return wl_surface_resize(surface, new_w, new_h);
+}
+
+void wl_surface_set_constraints(wl_surface_t *surface, bool resizable, u32 min_w, u32 min_h) {
+    if (!surface || surface->state != WL_SURFACE_ACTIVE) return;
+    surface->resizable = resizable;
+    if (min_w > 0) surface->min_width = min_w;
+    if (min_h > 0) surface->min_height = min_h;
+}
+
 void wl_surface_focus(wl_surface_t *surface) {
     if (!surface) return;
     
@@ -437,14 +519,14 @@ void wl_surface_commit(wl_surface_t *surface) {
     if (!surface || surface->state != WL_SURFACE_ACTIVE || !surface->buffer) return;
 
     surface->commit_count++;
-    surface->last_checksum = wl_debug_checksum(surface->buffer->pixels, surface->width * surface->height);
+    /* Full-surface checksum is expensive; keep it only when debug logging is enabled. */
+    if (kdebug_is_enabled()) {
+        surface->last_checksum = wl_debug_checksum(surface->buffer->pixels, surface->width * surface->height);
+    }
 
     if (!surface->content_seen && surface->last_checksum != 0) {
         surface->content_seen = true;
         kprintf("[WL_DBG] first-content id=%u title='%s' commit=%u checksum=0x%x\n",
-                surface->id, surface->title, surface->commit_count, surface->last_checksum);
-    } else if (surface->commit_count <= 3 || (surface->commit_count % 120) == 0) {
-        kprintf("[WL_DBG] commit id=%u title='%s' count=%u checksum=0x%x\n",
                 surface->id, surface->title, surface->commit_count, surface->last_checksum);
     }
 }
@@ -457,10 +539,6 @@ void wl_surface_push_event(wl_surface_t *surface, input_event_t ev) {
         surface->event_queue.events[surface->event_queue.head] = ev;
         surface->event_queue.head = next_head;
         surface->event_push_count++;
-        if (surface->event_push_count <= 8 || (surface->event_push_count % 64) == 0) {
-            kprintf("[WL_DBG] event-push id=%u title='%s' type=%u code=%u value=%d total=%u\n",
-                    surface->id, surface->title, ev.type, ev.code, ev.value, surface->event_push_count);
-        }
     }
     spin_unlock_irqrestore(&surface->lock, f);
 }
@@ -475,12 +553,35 @@ bool wl_surface_pop_event(wl_surface_t *surface, input_event_t *ev) {
     *ev = surface->event_queue.events[surface->event_queue.tail];
     surface->event_queue.tail = (surface->event_queue.tail + 1) % 32;
     surface->event_pop_count++;
-    if (surface->event_pop_count <= 8 || (surface->event_pop_count % 64) == 0) {
-        kprintf("[WL_DBG] event-pop id=%u title='%s' type=%u code=%u value=%d total=%u\n",
-                surface->id, surface->title, ev->type, ev->code, ev->value, surface->event_pop_count);
-    }
     spin_unlock_irqrestore(&surface->lock, f);
     return true;
+}
+
+static u64 wl_compositor_scene_signature(void) {
+    u64 sig = ((u64)g_compositor.state << 32) ^ g_compositor.focused_id ^ g_compositor.surface_count;
+    for (int i = 0; i < WL_MAX_SURFACES; i++) {
+        wl_surface_t *s = &g_compositor.surfaces[i];
+        if (s->state == WL_SURFACE_FREE) continue;
+        u64 v = ((u64)s->id << 48) ^
+                ((u64)(u32)s->x << 32) ^
+                ((u64)(u32)s->y << 16) ^
+                ((u64)s->width << 8) ^
+                (u64)s->height ^
+                ((u64)s->state << 56) ^
+                ((u64)s->commit_count << 1) ^
+                (u64)(s->focused ? 1 : 0);
+        sig ^= (v + 0x9e3779b97f4a7c15ULL + (sig << 6) + (sig >> 2));
+    }
+    return sig;
+}
+
+static bool wl_compositor_has_active_animation(void) {
+    for (int i = 0; i < WL_MAX_SURFACES; i++) {
+        wl_surface_t *s = &g_compositor.surfaces[i];
+        if (s->state != WL_SURFACE_ACTIVE) continue;
+        if (s->anim_closing || s->anim_scale < 100 || s->anim_alpha < 255) return true;
+    }
+    return false;
 }
 
 
@@ -488,9 +589,64 @@ void wl_compositor_task(void *arg) {
     (void)arg;
     kprintf_color(0xFF00DDFF, "[WAYLAND] Compositor task started.\n");
     fb_enable_text(false);
+    u32 last_state = 0xFFFFFFFFu;
+    u64 frame_no = 0;
+    u64 last_hb_tick = this_cpu()->ticks;
+    u32 idle_frames = 0;
+    u64 last_scene_sig = 0;
+    u64 last_render_tick = this_cpu()->ticks;
+    u32 hb_rendered = 0;
+    u32 hb_skipped = 0;
+    u64 hb_render_ms = 0;
     while (g_compositor.running) {
-        wl_compositor_process_input();
-        wl_compositor_render_frame();
-        task_sleep_ms(16);
+        frame_no++;
+        if (g_compositor.state != last_state) {
+            kprintf("[WAYLAND] state -> %u surfaces=%u focus=%u user='%s'\n",
+                    g_compositor.state, g_compositor.surface_count,
+                    g_compositor.focused_id, g_compositor.current_user);
+            last_state = g_compositor.state;
+        }
+        if ((frame_no % 240) == 0) {
+            u64 now = this_cpu()->ticks;
+            kprintf("[WAYLAND] hb frame=%lu dt_ticks=%lu state=%u surfaces=%u focus=%u cursor=%d,%d\n",
+                    frame_no, now - last_hb_tick, g_compositor.state,
+                    g_compositor.surface_count, g_compositor.focused_id,
+                    g_compositor.cursor_x, g_compositor.cursor_y);
+            last_hb_tick = now;
+        }
+        bool had_input = wl_compositor_process_input();
+        u64 scene_sig = wl_compositor_scene_signature();
+        bool has_animation = wl_compositor_has_active_animation();
+        u64 now_tick = this_cpu()->ticks;
+        bool heartbeat_due = (now_tick - last_render_tick) >= 100; /* keep periodic refresh alive */
+        bool need_render = had_input || has_animation || (scene_sig != last_scene_sig) || heartbeat_due;
+
+        if (need_render) {
+            u64 t0 = pit_uptime_ms();
+            wl_compositor_render_frame();
+            u64 t1 = pit_uptime_ms();
+            last_scene_sig = scene_sig;
+            last_render_tick = now_tick;
+            hb_rendered++;
+            hb_render_ms += (t1 >= t0) ? (t1 - t0) : 0;
+        } else {
+            hb_skipped++;
+        }
+        if (had_input || g_compositor.dragging || g_compositor.resizing) {
+            idle_frames = 0;
+            task_sleep_ms(8);   /* responsive under interaction */
+        } else {
+            idle_frames++;
+            task_sleep_ms(idle_frames > 30 ? 24 : 12); /* save cycles when idle */
+        }
+
+        if ((frame_no % 240) == 0) {
+            u32 avg_render_ms = hb_rendered ? (u32)(hb_render_ms / hb_rendered) : 0;
+            kprintf("[WAYLAND] perf rendered=%u skipped=%u avg_render_ms=%u\n",
+                    hb_rendered, hb_skipped, avg_render_ms);
+            hb_rendered = 0;
+            hb_skipped = 0;
+            hb_render_ms = 0;
+        }
     }
 }

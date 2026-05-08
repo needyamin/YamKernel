@@ -1,225 +1,59 @@
-YamOS Codex Memory
-==================
-Read this first before working on the repo. Keep this file lean.
+YamOS Codex Memory — read first every session; keep this file lean.
 
-Project
--------
-- Repo root: C:\laragon\www\YamOS  |  WSL: /mnt/c/laragon/www/YamOS
-- Build: wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"
-- Verify: powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify
-- Output: build/yamkernel.iso  |  Log: build/verify.log
+Positioning
+-----------
+YamOS is an exceptional (not “experimental toy”) x86_64 OS: YamKernel graph hybrid,
+Limine boot, YamGraph resource graph, kernel-first desktop/services. Marketing tone:
+ambitious engineering, honest gaps—see README “Not Complete Yet”.
 
-Owner Direction
----------------
-- Kernel/OS-level work first. No fake runtimes, package-manager theater, or
-  language-specific stubs. App-level work is unblocked only after kernel
-  foundations are solid (see missing compat list below).
-- Kernel-first rule: if a feature needs missing kernel support, fix the kernel
-  first, then build the feature on top.
-- YamOS is not complete enough to run arbitrary x86_64 software yet.
-- Standing required foundations (incomplete):
-  - execve + strong process model
-  - dynamic linker / PT_INTERP / dlopen
-  - pthread ABI, TLS, thread-local errno, robust futex
-  - signal delivery, masks, handlers, interruption semantics
-  - persistent writable filesystem (FAT32 block-backed fully mounted)
-  - full POSIX path/fcntl/lock/permission semantics
-  - nonblocking sockets (DONE: SOCK_NONBLOCK, select, fcntl O_NONBLOCK)
-  - select/poll/epoll (DONE: select via sys_poll, SYS_SELECT=92, SYS_FCNTL=93)
-  - TLS/HTTPS + certificate store (partial: probe only)
-  - package manager/downloader
-  - PTY, termios, job control
-  - UID/GID, file modes, capabilities, sandboxing
-  - GPU, USB audio, Wi-Fi 802.11 MAC, Bluetooth HCI transport
-  - browser engine: DOM, CSS, JS VM, TLS, codecs, sandboxing
+Repo / build
+------------
+Root: C:\laragon\www\YamOS  |  WSL: /mnt/c/laragon/www/YamOS
+Build: wsl -d Ubuntu -- bash -lc "cd /mnt/c/laragon/www/YamOS && make iso"
+Verify: powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify
+Artifacts: build/yamkernel.iso  |  build/verify.log
 
-Architecture Map
-----------------
-- Kernel entry:     src/kernel/main.c
-- Kernel shell:     src/kernel/shell.c
-- PID 1 init:       src/os/bin/init.c
-- ELF loader:       src/fs/elf.c
-- VFS:              src/fs/vfs.c
-- Syscalls:         src/cpu/syscall.c + src/kernel/api/syscall.h (ABI source of truth)
-- Poll subsystem:   src/fs/poll.h + sys_poll() in vfs.c
-- PCI bus:          src/drivers/bus/pci.c/.h
-- Driver manager:   src/drivers/core/driver_manager.c/.h
-- Block device:     src/drivers/block/block.c/.h
-- e1000 NIC:        src/drivers/net/e1000.c/.h
-- Network stack:    src/net/ (ARP, IP, ICMP, UDP, TCP, DHCP, DNS, HTTP)
-- Memory managers:  src/mem/ (PMM, VMM, heap, slab)
-- Compositor:       src/os/services/compositor/
-- App registry:     src/os/services/app_registry/
-- libyam SDK:       src/os/lib/libyam/
-- libc:             src/os/lib/libc/
+Rules
+-----
+- Kernel/OS foundations before app theater: no fake runtimes, stub installers, or
+  userland papering over missing kernel ABI.
+- If a feature needs kernel support, implement kernel first.
+- Do not run raw qemu-system-x86_64; use test.ps1 helpers.
 
-Current Syscall ABI (src/kernel/api/syscall.h)
------------------------------------------------
-SYS_MAX = 94. Key syscalls:
-- File I/O: SYS_OPEN 1, SYS_READ 2, SYS_WRITE 3, SYS_CLOSE 4, SYS_LSEEK 18,
-  SYS_MKDIR 5, SYS_UNLINK 26, SYS_READDIR 27, SYS_CHDIR 28, SYS_GETCWD 29
-- Process: SYS_EXIT 6, SYS_GETPID 7, SYS_SLEEP 8, SYS_WAITPID 12, SYS_SPAWN 77
-- Memory: SYS_BRK 9, SYS_MMAP 10, SYS_MPROTECT 43, SYS_MADVISE 44
-- Sockets: SYS_SOCKET 70, SYS_BIND 71, SYS_CONNECT 72, SYS_LISTEN 73,
-  SYS_ACCEPT 74, SYS_SENDTO 75, SYS_RECVFROM 76
-- Non-blocking I/O (Phase 3): SYS_SELECT 92, SYS_FCNTL 93
-- File metadata: SYS_STAT 78, SYS_FSTAT 79, SYS_FTRUNCATE 80, SYS_RENAME 81
-- At-calls: SYS_OPENAT 82, SYS_FSTATAT 83, SYS_MKDIRAT 84, SYS_UNLINKAT 85,
-  SYS_RENAMEAT 86
-- Threads: SYS_THREAD_CREATE 87, SYS_THREAD_EXIT 88
-- Signals: SYS_SIGACTION 89, SYS_SIGPROCMASK 90, SYS_SIGRETURN 91
-- App ABI: SYS_OS_INFO 67, SYS_APP_REGISTER 68, SYS_APP_QUERY 69
-- Wayland: SYS_WL_CREATE_SURFACE..SYS_TOUCH_GET_SLOTS
-- OS flags: YAM_OS_FLAG_SOCKET_ABI (1<<6), VFS_SPAWN (1<<7), THREADS (1<<8),
-  NONBLOCK_IO (1<<9)
-
-Current Kernel/Driver State
----------------------------
-- PCI scan: 6 devices in QEMU; bound: display/vga-framebuffer + net/e1000.
-- Built-in drivers: e1000 8086:100E, xhci 0C:03, vga 03:00, ahci 01:06,
-  virtio-blk 1AF4:1001, virtio-blk-modern 1AF4:1042, iwlwifi (class 02:80).
-- Block core: initialized, max_devices=16. FAT32 volumes auto-mounted at /mnt.
-- VFS promotes /home, /var, /usr/local to persistent FAT32 when vd0 present.
-- e1000: MMIO mapped, TX/RX rings ready, link up.
-- DHCP: ACK IP=10.0.2.15 GW=10.0.2.2 DNS=10.0.2.3 (verified).
-- HTTP: GET http://ansnew.com/ succeeds (797-797 bytes, varies by DNS).
-- TLS: certificate-store bootstrap + bounded ClientHello probe only; full
-  TLS handshake not yet complete.
-- Wi-Fi: iwlwifi driver skeleton; reports no adapter/firmware in QEMU.
-- Bluetooth: hci_usb skeleton; reports no USB HCI transport in QEMU.
-
-Current Filesystem State
-------------------------
-- VFS mounts: /tmp (ramfs), /var (ramfs→FAT32), /usr/local (ramfs→FAT32),
-  /opt, /home (ramfs; per-user subdirs created at login), /mnt (block FAT32).
-- Supported: mkdir, open (O_CREAT, O_EXCL, O_TRUNC, O_APPEND), read, write,
-  unlink, readdir, rename (RAMFS in-place; FAT32 copy+unlink), stat/fstat,
-  ftruncate, lseek (SEEK_END via fstat), chdir/getcwd, *at dirfd family.
-- O_EXCL: rejects if path exists (lock-file support).
-- O_APPEND: moves offset to EOF before write.
-- VFS open checks existence before fd alloc; O_CREAT required for new files.
-- 1MB LRU block cache with dirty tracking.
-- /proc pseudo-files: cpuinfo, meminfo, version, uptime, loadavg.
-- /dev: devfs_exists() guards open.
-
-Current Network Stack State
+Architecture (primary paths)
 ----------------------------
-- TCP state machine: SYN, SYN-ACK, ACK, CLOSE_WAIT, FIN handling.
-- tcp_sock_t.nonblocking flag; tcp_set_nonblock() / tcp_is_nonblock().
-- connect(): returns -EINPROGRESS if nonblocking.
-- recv(): returns -EAGAIN if nonblocking and no data.
-- accept(): returns -EAGAIN if nonblocking and no client.
-- sys_socket_user(): handles SOCK_NONBLOCK flag (ORed with type).
-- sys_fcntl_user(): F_GETFL / F_SETFL O_NONBLOCK on socket fds.
-- sys_select_user(): backed by sys_poll; 128-bit fd_set (2×u64);
-  maps readfds/writefds to POLLIN/POLLOUT; writes back result sets.
-- libc sys/socket.h: fd_set, FD_ZERO/SET/CLR/ISSET, select(), fcntl(),
-  SOCK_NONBLOCK, EAGAIN, O_NONBLOCK, EINPROGRESS.
-- TCP socket file_ops: read/write/poll/close wired through VFS file_t.
-- UDP datagram fd-backed ABI: reserved (SYS_SENDTO/RECVFROM stub -1).
+main/shell/init: src/kernel/main.c, src/kernel/shell.c, src/os/bin/init.c
+ELF/VFS/syscalls: src/fs/elf.c, src/fs/vfs.c, src/cpu/syscall.c,
+  ABI header src/kernel/api/syscall.h (SYS_MAX=94; syscall numbers + OS flags)
+Poll: src/fs/poll.h, sys_poll in vfs.c
+Drivers: src/drivers/ (pci.c, driver_manager, block, e1000, xhci, ahci, virtio-blk)
+Net: src/net/  |  Mem: src/mem/  |  Compositor: src/os/services/compositor/
+Apps: src/os/services/app_registry/  |  libyam: src/os/lib/libyam/  |  libc: src/os/lib/libc/
 
-Current Threading & Signal State  (Phase 1.1 complete)
--------------------------------------------------------
-- sched_thread_create(): copies parent task, shares pml4, allocates new kernel
-  stack; IA32_FS_BASE written from task.tls_base at every context switch.
-- TLS block (tls_block_t): allocated by pthread_create, FS:0 = self pointer
-  (glibc ABI compat), 128 pthread_key slots in specific[].
-- Futex: FUTEX_WAIT/WAKE hash table (64 buckets, wait.c); SYS_FUTEX=42.
-  FUTEX_WAIT/WAKE/WAKE_PRIVATE/WAIT_PRIVATE constants in syscall.h + libyam.
-- pthread_mutex_t: futex-backed 0/1/2 (unlocked/locked/contended);
-  lock uses CAS(__ATOMIC_ACQUIRE) + futex_wait; unlock = atomic_fetch_sub + wake.
-- pthread_cond_t: sequence-counter futex; cond_wait = unlock + futex_wait on seq
-  + relock; broadcast = fetch_add + futex_wake(INT_MAX).
-- pthread_key_create/delete/getspecific/setspecific: backed by tls_block.specific[].
-- Signal ABI: SYS_SIGACTION=89, SYS_SIGPROCMASK=90, SYS_SIGRETURN=91.
-  sigaction stores handler; SIGKILL(9)/SIGSTOP(17) cannot be caught/blocked.
-  sigprocmask: SIG_BLOCK/UNBLOCK/SETMASK; delivers at every SYSCALL_RETURN.
-  Default unhandled signal action: sched_exit_current(128+sig).
-  sys_sigreturn: first slice only (full ucontext push pending).
-- New OS flags: YAM_OS_FLAG_PTHREAD_ABI (1<<10), YAM_OS_FLAG_SIGNALS (1<<11).
+Current capability (summary — detail drifts; verify in tree)
+-------------------------------------------------------------
+- QEMU path: PCI inventory, FAT32 block-backed mounts under /mnt, VFS promotion of
+  persistent dirs when vd0 present, e1000 + DHCP/DNS/TCP/HTTP verified in verify.log.
+- TLS: store bootstrap + ClientHello probe; full HTTPS handshake not done.
+- Threads/signals/futex/pthread pieces and SYS_SELECT/SYS_FCNTL nonblocking I/O:
+  see syscall.h + Phase notes in README.
+- Desktop: compositor-native Wayland-style UI, multi-user, File Manager, browser
+  (plain HTTP path), settings windows—see README “Current Desktop Behavior”.
+- Major gaps: execve/dynamic linker, full TLS, portable Linux userspace, browser-
+  class stack—README lists foundations still required.
 
-Current Application Architecture State
----------------------------------------
-- App registry: 64 slots, spinlock-protected. Records PID, task name,
-  YamGraph node, app type, permissions, name, publisher, version, desc.
-- Native SDK: src/os/lib/libyam/app.h — yam_os_info(), yam_app_register(),
-  yam_app_query(), yam_spawn(), yam_spawn_args(), yam_spawn_env().
-- libc spawn wrappers: spawn(), spawnv(), spawnve(); execve() = ENOSYS.
-- ELF spawn: elf_spawn_path_argv_envp(); bare-name resolver: /bin,
-  /usr/local/bin, /opt/yamos/packages, /home/root/bin.
-- Exit/wait: TASK_ZOMBIE → sched_waitpid() reap; SYS_WAITPID copies
-  encoded status to user via copy_to_user(); WNOHANG supported.
-- /bin/hello: boot-probe ELF; exercises stat, fstat, ftruncate, rename,
-  O_APPEND, O_EXCL, *at dirfd calls, spawn+waitpid from Ring 3.
-- authd: registers as YamOS service (type=2, perm=IPC) before YamGraph IPC.
-- FAT32 install: PID 1 writes /usr/local/bin/hello-local persistently.
+Roadmap (compressed)
+--------------------
+Phases 1–2 complete; Phase 3 in progress. Open work includes full TLS/HTTPS,
+ypkg, sigframe/ucontext, ELF dynamic linker, execve/fork/Unix sockets,
+virtio-gpu/Mesa path, libc port, eventual Chromium-class browser—see README table.
 
-Current Desktop/GUI State
---------------------------
-- Compositor: Wayland-style kernel-space, 1280x800, DRM scanout.
-- States: SETUP → LOGIN → DESKTOP → VTTY.
-- Multi-user: YAM_MAX_USERS=8; yam_user_account_t (username, password hash,
-  display_name, admin, active); current_user[32] tracks logged-in user.
-- Login: validates via wl_password_hash; yam_channel_t authd fallback.
-- Setup: creates accounts for setup_user, root, guest; persists via FAT32.
-- Home dir: /home/<username> created by sys_mkdir at setup/login time for
-  each account; skip-setup creates /home/root + /home/guest.
-- File Manager (wl_file_manager.c):
-  - Opens in /home/<current_user> (resolved from comp->current_user at launch).
-  - Sidebar: Home (user-specific), Users (/home), Root (/), Temp, System, Volumes.
-  - Browse, search, sort (name/type/size), breadcrumb address bar, history nav.
-  - New file (O_CREAT|O_TRUNC), new folder (mkdir), delete (unlink), open/edit,
-    save text, keyboard navigation (Up/Down/PgUp/PgDn/Enter/Backspace).
-  - Text editor mode: read, edit, save back to VFS.
-- Browser (wl_browser.c): real HTTP via http_get(); typed render-tree (headings,
-  paragraphs, lists, links, pre/code); scrollable viewport; HTTPS rejected until
-  TLS ready; redirect follow (plain HTTP, up to 2 hops).
-- Settings windows (standalone, open-or-focus): Ethernet, Wi-Fi, Bluetooth,
-  Sound, Display. Top-bar chips open respective window directly.
-- DRM: drm_page_flip_damage() (dirty-rect updates), drm_set_mode() (Bochs VBE
-  I/O port modesetting; live 1024x768 ↔ 1920x1080 toggle).
-- Launcher: two-column grid (apps + settings); single-instance focus helper.
-- Window chrome: 36px titlebar, minimize/maximize/restore/close, drop-shadow,
-  maximize scales content + remaps input coords.
-- IPC: YamGraph channels; authd bidirectional auth flow.
+Agent usage note
+----------------
+Always read this file before planning or coding. Use it as the compact source of
+project identity, build commands, architectural paths, and no-go constraints so
+token usage stays low and decisions remain consistent.
 
-Phase Roadmap
+Do not repeat
 -------------
-Phase 1 (Core Foundation)    — COMPLETE
-Phase 2 (Performance/HW)     — COMPLETE
-  - LRU block cache, AHCI SATA driver, FAT32 persistent volumes.
-  - DRM damage tracking, Bochs VBE runtime modesetting.
-Phase 3 (Connected Ecosystem) — IN PROGRESS
-  [DONE] Non-blocking socket ABI: SOCK_NONBLOCK, select(), fcntl(F_SETFL).
-  [DONE] File Manager multi-user: opens in logged-in user's home dir.
-  [DONE] Phase 1.1 pthread ABI: futex mutex/cond, TLS keys, signal delivery.
-  [TODO] Full TLS/HTTPS handshake (mbedTLS port, X.509, TLS 1.3).
-  [TODO] ypkg package manager (HTTPS download + FAT32 install DB).
-  [TODO] Phase 1.2: Full sigframe (ucontext on user stack + sigreturn restore).
-  [TODO] Phase 1.3: ELF dynamic linker (ld.so, PT_INTERP, dlopen/dlsym).
-  [TODO] Phase 4: execve + fork + Unix sockets + namespace sandboxing.
-  [TODO] Phase 5: virtio-gpu DRM + Mesa OpenGL ES (Chromium/Brave requirement).
-  [TODO] Phase 6: musl libc + libc++ port.
-  [TODO] Phase 7: Chromium/Brave port (unblocked after Phases 1.2, 1.3, 4-6).
-
-Build Verification (latest passing)
-------------------------------------
-- make iso: PASS
-- verify.log shows: PCI/driver inventory, FAT32 vd0 mount, VFS promotion,
-  e1000 init, DHCP ACK, DNS resolve, TCP connect, HTTP GET.
-
-Cleanup Notes
--------------
-- Removed: language-runtime placeholders, fake userspace stubs, legacy demo
-  ELF apps, Wayland demo client, scheduler heartbeat demo.
-- Makefile packages: yamkernel.elf, wallpaper.bin, logo.bin, authd.elf, hello.elf.
-- No vendor/ folder; limine.h lives at src/include/limine.h.
-- No src/os/lib/libgui; tools/stb_image.h kept for tools/img2raw.c.
-- No empty authd/shell service directories.
-- Scratch files (scratch_fat32.py, scratch_vfs.py, scratch_update_elf.py) removed.
-
-Do Not Repeat
--------------
-- Do not add language-runtime stubs or fake package installers.
-- Do not run raw qemu-system-x86_64 directly; use test.ps1 helpers.
-- Do not paper over missing kernel infra with app-level theater.
+No language-runtime stubs or fake package installers; no kernel bypass via apps.

@@ -6,6 +6,7 @@
 #define _LIB_KPRINTF_H
 
 #include <nexus/types.h>
+#include <stdarg.h>
 
 /* Printf to both serial and framebuffer */
 void kprintf(const char *fmt, ...);
@@ -15,5 +16,8 @@ void kprintf_color(u32 color, const char *fmt, ...);
 
 /* Low-level: printf to a buffer */
 int ksnprintf(char *buf, usize size, const char *fmt, ...);
+
+/* Va-list variant (also used by mbedTLS libc shims). */
+int kvsnprintf(char *buf, usize size, const char *fmt, va_list ap);
 
 #endif /* _LIB_KPRINTF_H */

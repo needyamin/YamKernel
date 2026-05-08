@@ -146,7 +146,7 @@ static void print_banner(void) {
         "  ╩ ╩╚═╝╩╚═╝╚╝╚═╝╩═╝\n"
     );
     kprintf_color(0xFF00FF88,
-        "\n  YamKernel v0.3.0 — Graph-Based Adaptive OS\n");
+        "\n  YamOS Kernel v0.3.0 — Next-Gen Adaptive Operating System\n");
     kprintf_color(0xFF888888,
         "  Architecture: x86_64 | Model: YamGraph Resource Graph\n"
         "  Features: Zone-PMM CoW CFS AI Touch cgroups OOM Power\n"
@@ -161,7 +161,7 @@ static void print_banner(void) {
 void kernel_main(void) {
     /* ---- Phase 1: Early console (serial only) ---- */
     serial_init();
-    KINFO("BOOT", "=== YamKernel Boot Start ===");
+    KINFO("BOOT", "=== YamOS Boot Start ===");
     KINFO("BOOT", "Serial console initialized");
 
     /* ---- Phase 2: Validate bootloader response ---- */
@@ -336,7 +336,7 @@ void kernel_main(void) {
     kprintf_color(0xFF00FF88,
         "\n"
         "  ╔══════════════════════════════════════════════════╗\n"
-        "  ║        YamKernel v0.4.0 — BOOT COMPLETE         ║\n"
+        "  ║          YamOS v0.4.0 — BOOT COMPLETE           ║\n"
         "  ╚══════════════════════════════════════════════════╝\n"
         "\n");
 

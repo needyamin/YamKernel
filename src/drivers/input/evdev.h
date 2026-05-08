@@ -15,6 +15,7 @@
 #define EV_ABS      0x03
 #define EV_CLOSE    0x100
 #define EV_CLIPBOARD 0x101
+#define EV_RESIZE   0x102
 
 /* Relative axes */
 #define REL_X       0x00

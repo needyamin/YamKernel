@@ -278,8 +278,12 @@ void fb_draw_splash(void *wallpaper_data, void *logo_data) {
         g_logo_bottom = y + mark_h;
     }
 
-    fb_draw_text_center(g_logo_bottom + 34, "YamOS", 0xFFE8ECF4);
-    fb_draw_text_center(g_logo_bottom + 56, "Graph-Based Adaptive OS", 0xFF8E96A3);
+    int title_y = g_logo_bottom + 32;
+    int subtitle_y = title_y + 24;
+    int status_y = subtitle_y + 20;
+    fb_draw_text_center(title_y, "YamOS", 0xFFE8ECF4);
+    fb_draw_text_center(subtitle_y, "Adaptive Operating System", 0xFF8E96A3);
+    fb_draw_text_center(status_y, "Booting...", 0xFF6EE7FF);
 
     g_progress_w = (int)g_fb->width / 5;
     if (g_progress_w < 180) g_progress_w = 180;
@@ -299,6 +303,11 @@ void fb_draw_spinner(int frame) {
     int fill = (g_progress_w * (frame + 1)) / 30;
     fb_fill_round_rect_i(g_progress_x, g_progress_y, g_progress_w, g_progress_h, 3, 0xFF2B3038);
     fb_fill_round_rect_i(g_progress_x, g_progress_y, fill, g_progress_h, 3, 0xFFE8ECF4);
+    /* Add a moving accent pulse for a cooler boot feel */
+    int pulse = g_progress_x + fill - 10;
+    if (pulse < g_progress_x) pulse = g_progress_x;
+    if (pulse > g_progress_x + g_progress_w - 6) pulse = g_progress_x + g_progress_w - 6;
+    fb_fill_round_rect_i(pulse, g_progress_y, 6, g_progress_h, 3, 0xFF38BDF8);
 }
 
 u32 *fb_get_pixels(void) { return g_pixels; }

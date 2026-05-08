@@ -13,6 +13,7 @@ void  *memmove(void *dest, const void *src, usize count);
 int    memcmp(const void *a, const void *b, usize count);
 
 usize  strlen(const char *s);
+char  *strchr(const char *s, int c);
 int    strcmp(const char *a, const char *b);
 int    strncmp(const char *a, const char *b, usize n);
 char  *strcpy(char *dest, const char *src);

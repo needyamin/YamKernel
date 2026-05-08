@@ -5,11 +5,7 @@
 #include <nexus/panic.h>
 #include "../cpu/idt.h"
 #include "../lib/kprintf.h"
-
-typedef __builtin_va_list va_list;
-#define va_start(ap, last) __builtin_va_start(ap, last)
-#define va_end(ap)         __builtin_va_end(ap)
-#define va_arg(ap, type)   __builtin_va_arg(ap, type)
+#include <stdarg.h>
 
 static void panic_vformat(char *buf, usize cap, const char *fmt, va_list ap) {
     int pos = 0;

@@ -19,5 +19,7 @@ typedef struct {
 
 /* Read the current date/time from the CMOS RTC */
 void rtc_read(rtc_time_t *t);
+/* Set date/time in CMOS RTC */
+void rtc_set(const rtc_time_t *t);
 
 #endif /* _DRIVERS_RTC_H */

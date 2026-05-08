@@ -45,8 +45,11 @@ typedef struct wl_surface {
     u32                 title_bg;
     u32                 title_fg;
     bool                focused;
+    bool                resizable;
     bool                maximized;
     i32                 restore_x, restore_y;
+    u32                 restore_width, restore_height;
+    u32                 min_width, min_height;
     
     /* Owner task ID */
     u64                 owner_task_id;
@@ -118,6 +121,7 @@ typedef struct wl_compositor {
     /* Cursor state */
     i32             cursor_x, cursor_y;
     bool            cursor_visible;
+    u8              cursor_resize_edge; /* hover hint: 1L 2R 4T 8B */
     
     /* Display dimensions */
     u32             display_w, display_h;
@@ -128,12 +132,23 @@ typedef struct wl_compositor {
     bool            dragging;
     u32             drag_surface_id;
     i32             drag_off_x, drag_off_y;
+    bool            resizing;
+    u32             resize_surface_id;
+    u8              resize_edge;        /* bitmask: 1L 2R 4T 8B */
+    i32             resize_start_cursor_x, resize_start_cursor_y;
+    i32             resize_start_x, resize_start_y;
+    i32             resize_start_w, resize_start_h;
+    bool            resize_preview_valid;
+    i32             resize_preview_x, resize_preview_y;
+    i32             resize_preview_w, resize_preview_h;
     
     /* Power Menu */
     bool            show_power_menu;
     bool            show_debug_overlay;
     u8              desktop_menu_open;  /* 0 none, 1 File, 2 View, 3 Window */
     bool            calendar_open;
+    i32             time_offset_minutes; /* User-adjustable offset from BDT */
+    u8              wallpaper_mode;      /* 0 boot wallpaper, 1..N built-in themes */
     bool            context_menu_open;
     i32             context_x, context_y;
     u32             context_surface_id;
@@ -154,6 +169,9 @@ wl_surface_t *wl_surface_create(const char *title, i32 x, i32 y, u32 w, u32 h, u
 
 /* Destroy a surface */
 void wl_surface_destroy(wl_surface_t *surface);
+bool wl_surface_resize(wl_surface_t *surface, u32 new_w, u32 new_h);
+bool wl_surface_resize_fast(wl_surface_t *surface, u32 new_w, u32 new_h);
+void wl_surface_set_constraints(wl_surface_t *surface, bool resizable, u32 min_w, u32 min_h);
 
 /* Mark a surface's buffer as updated (needs recomposite) */
 void wl_surface_commit(wl_surface_t *surface);

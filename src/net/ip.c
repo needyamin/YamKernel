@@ -97,7 +97,7 @@ void ip_send(u32 dst_ip, u8 proto, const void *payload, usize payload_len) {
            ARP replies can be consumed before this packet is sent. */
         for (int i = 0; i < 100000; i++) {
             if ((i % 1000) == 0) net_poll();
-            __asm__ volatile("pause");
+            net_coop_yield((u32)i);
         }
         if (!arp_lookup(next_hop, dst_mac)) {
             /* Broadcast attempt if ARP failed */

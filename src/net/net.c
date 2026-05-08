@@ -6,6 +6,7 @@
 #include "../drivers/net/iwlwifi.h"
 #include "../lib/kprintf.h"
 #include "../nexus/graph.h"
+#include "../sched/sched.h"
 
 static net_interface_t loopback_if;
 
@@ -41,4 +42,11 @@ void net_init(void) {
 
 void net_poll(void) {
     e1000_poll();
+}
+
+void net_coop_yield(u32 spin_iter) {
+    if ((spin_iter & 0x3FFu) == 0) {
+        sched_yield();
+    }
+    __asm__ volatile("pause");
 }

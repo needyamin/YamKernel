@@ -1,4 +1,4 @@
-/* YamKernel - compositor-native browser shell with real plain-HTTP fetch */
+/* YamKernel - compositor-native browser shell with HTTP and HTTPS fetch */
 #include "../lib/kprintf.h"
 #include "../lib/string.h"
 #include "../net/net.h"
@@ -11,14 +11,15 @@
 #define BROWSER_W 820
 #define BROWSER_H 560
 #define URL_MAX 160
-#define PAGE_MAX 12288
-#define TEXT_MAX 8192
+/* Larger pages improve real-site readability; full CSS/JS layout is still absent. */
+#define PAGE_MAX (64 * 1024)
+#define TEXT_MAX (32 * 1024)
 #define HISTORY_MAX 12
-#define RENDER_MAX 192
+#define RENDER_MAX 384
 #define RENDER_TEXT 192
 #define DOC_TOP 232
-#define DOC_BOTTOM (BROWSER_H - 38)
-#define DOC_VIEW_H (DOC_BOTTOM - DOC_TOP)
+#define BROWSER_MIN_W 700
+#define BROWSER_MIN_H 460
 #define NODE_STYLE_FG 0x01
 #define NODE_STYLE_BG 0x02
 
@@ -45,13 +46,14 @@ typedef struct {
   u32 flags;
 } render_node_t;
 
-static char url_buffer[URL_MAX] = "http://ansnew.com/";
-static char loaded_url[URL_MAX] = "http://ansnew.com/";
+static char url_buffer[URL_MAX] = "about:yamos";
+static char loaded_url[URL_MAX] = "about:yamos";
 static char page_title[96] = "New Tab";
 static char status_text[160] = "Ready";
 static char response_meta[128] = "No page loaded";
 static char raw_page[PAGE_MAX];
 static char rendered_text[TEXT_MAX];
+static char reader_scratch[TEXT_MAX];
 static render_node_t render_nodes[RENDER_MAX];
 static u32 render_count = 0;
 static char history[HISTORY_MAX][URL_MAX];
@@ -65,6 +67,27 @@ static i32 last_x = -1;
 static i32 last_y = -1;
 static i32 document_scroll = 0;
 static i32 document_height = 0;
+static i32 browser_w = BROWSER_W;
+static i32 browser_h = BROWSER_H;
+static i32 nav_addr_w = 536;
+static i32 nav_go_x = 702;
+
+static i32 doc_bottom(void) { return browser_h - 38; }
+static i32 doc_view_h(void) {
+  i32 h = doc_bottom() - DOC_TOP;
+  return (h > 120) ? h : 120;
+}
+
+static void browser_update_layout(wl_surface_t *s) {
+  if (!s) return;
+  browser_w = (i32)s->width;
+  browser_h = (i32)s->height;
+  if (browser_w < BROWSER_MIN_W) browser_w = BROWSER_MIN_W;
+  if (browser_h < BROWSER_MIN_H) browser_h = BROWSER_MIN_H;
+  nav_go_x = browser_w - 118;
+  nav_addr_w = nav_go_x - 154 - 12;
+  if (nav_addr_w < 320) nav_addr_w = 320;
+}
 
 static const char sc_ascii[128] = {
     0,   27,  '1',  '2',  '3',  '4', '5', '6',  '7', '8', '9', '0',
@@ -182,25 +205,38 @@ static bool tag_close(const char *s, const char *tag) {
 
 static void normalize_url(char *inout) {
   char tmp[URL_MAX];
+  /* Do not rewrite about: — would become invalid http://about:... */
+  if (starts_with_ci(inout, "about:"))
+    return;
   if (!starts_with(inout, "http://") && !starts_with(inout, "https://")) {
     ksnprintf(tmp, sizeof(tmp), "http://%s", inout);
     text_copy(inout, URL_MAX, tmp);
   }
 }
 
-static bool parse_plain_http_url(const char *url, char *host, usize host_cap,
-                                 char *path, usize path_cap) {
-  if (!starts_with(url, "http://"))
+static bool parse_http_or_https_url(const char *url, bool *use_tls_out,
+                                    char *host, usize host_cap, char *path,
+                                    usize path_cap) {
+  const char *rest;
+  if (starts_with(url, "https://")) {
+    if (use_tls_out)
+      *use_tls_out = true;
+    rest = url + 8;
+  } else if (starts_with(url, "http://")) {
+    if (use_tls_out)
+      *use_tls_out = false;
+    rest = url + 7;
+  } else
     return false;
-  const char *p = url + 7;
+
   usize h = 0;
-  while (*p && *p != '/' && *p != ':' && h + 1 < host_cap)
-    host[h++] = *p++;
+  while (*rest && *rest != '/' && *rest != ':' && h + 1 < host_cap)
+    host[h++] = *rest++;
   host[h] = 0;
-  if (*p == ':')
+  if (*rest == ':')
     return false;
-  if (*p == '/')
-    text_copy(path, path_cap, p);
+  if (*rest == '/')
+    text_copy(path, path_cap, rest);
   else
     text_copy(path, path_cap, "/");
   return host[0] != 0;
@@ -502,6 +538,148 @@ static void append_render_char(usize *pos, char c, int *line_col) {
   (*line_col)++;
 }
 
+static void append_reader_char(char *out, usize cap, usize *wp, char c) {
+  if (*wp + 1 >= cap)
+    return;
+  out[*wp] = c;
+  (*wp)++;
+  out[*wp] = 0;
+}
+
+static void reader_plain_break_before_tag(char *out, usize cap, usize *wp) {
+  if (*wp > 0 && out[*wp - 1] != '\n')
+    append_reader_char(out, cap, wp, '\n');
+}
+
+/*
+ * Tag-stripping "reader mode": extracts visible text when the structured HTML
+ * mapper yields almost nothing (common on CSS-heavy or oddly-marked pages).
+ */
+static usize html_reader_plain_body(const char *body, char *out, usize cap) {
+  usize wp = 0;
+  out[0] = 0;
+  bool in_tag = false;
+  bool skip_script_style = false;
+  bool last_space = false;
+
+  const char *b = body;
+  if (starts_with(b, "HTTP/"))
+    b = body_start(body);
+
+  for (usize i = 0; b[i] && wp + 1 < cap; i++) {
+    char c = b[i];
+    if (skip_script_style) {
+      if (tag_close(&b[i], "script") || tag_close(&b[i], "style"))
+        skip_script_style = false;
+      continue;
+    }
+    if (c == '&') {
+      char ent = 0;
+      if (starts_with(&b[i], "&amp;")) {
+        ent = '&';
+        i += 4;
+      } else if (starts_with(&b[i], "&lt;")) {
+        ent = '<';
+        i += 3;
+      } else if (starts_with(&b[i], "&gt;")) {
+        ent = '>';
+        i += 3;
+      } else if (starts_with(&b[i], "&quot;")) {
+        ent = '"';
+        i += 5;
+      } else if (starts_with(&b[i], "&#39;")) {
+        ent = '\'';
+        i += 4;
+      }
+      if (ent) {
+        last_space = false;
+        append_reader_char(out, cap, &wp, ent);
+        continue;
+      }
+    }
+    if (c == '<') {
+      if (tag_open(&b[i], "script") || tag_open(&b[i], "style")) {
+        skip_script_style = true;
+      } else if (tag_is(&b[i], "br") || tag_open(&b[i], "br")) {
+        append_reader_char(out, cap, &wp, '\n');
+        last_space = false;
+      } else if (tag_open(&b[i], "p") || tag_open(&b[i], "div") ||
+                 tag_open(&b[i], "section") || tag_open(&b[i], "article") ||
+                 tag_open(&b[i], "header") || tag_open(&b[i], "footer") ||
+                 tag_open(&b[i], "main") || tag_open(&b[i], "nav") ||
+                 tag_open(&b[i], "li") || tag_open(&b[i], "tr") ||
+                 tag_open(&b[i], "h1") || tag_open(&b[i], "h2") ||
+                 tag_open(&b[i], "h3") || tag_open(&b[i], "h4")) {
+        reader_plain_break_before_tag(out, cap, &wp);
+        last_space = false;
+      }
+      in_tag = true;
+      continue;
+    }
+    if (c == '>') {
+      in_tag = false;
+      continue;
+    }
+    if (in_tag)
+      continue;
+    if (c == '\r' || c == '\t')
+      c = ' ';
+    if (c == '\n') {
+      append_reader_char(out, cap, &wp, '\n');
+      last_space = false;
+      continue;
+    }
+    if (c == ' ') {
+      if (last_space)
+        continue;
+      last_space = true;
+    } else {
+      last_space = false;
+    }
+    append_reader_char(out, cap, &wp, c);
+  }
+  return wp;
+}
+
+static void chunk_plain_to_render_nodes(void) {
+  const char *plain = rendered_text;
+  render_count = 0;
+  usize len = strlen(plain);
+  usize i = 0;
+  while (i < len && render_count < RENDER_MAX) {
+    usize room = RENDER_TEXT - 1;
+    usize max_end = i + room;
+    if (max_end > len)
+      max_end = len;
+    usize end = max_end;
+    for (usize k = i; k < max_end && k < len; k++) {
+      if (plain[k] == '\n') {
+        end = k;
+        break;
+      }
+    }
+    if (end == max_end && end < len && plain[end] != '\n') {
+      usize sp = end;
+      while (sp > i && plain[sp - 1] != ' ')
+        sp--;
+      if (sp > i)
+        end = sp;
+    }
+    usize chunk_len = end - i;
+    if (chunk_len == 0) {
+      i++;
+      continue;
+    }
+    char buf[RENDER_TEXT];
+    memcpy(buf, plain + i, chunk_len);
+    buf[chunk_len] = 0;
+    render_add(RN_P, buf);
+    i = end;
+    while (i < len && (plain[i] == ' ' || plain[i] == '\n'))
+      i++;
+  }
+}
+
 static void html_to_text(const char *body) {
   usize pos = 0;
   bool in_tag = false;
@@ -687,6 +865,22 @@ static void html_to_text(const char *body) {
 
   render_flush_line(current_type, line, &line_pos, current_fg, current_bg,
                     current_flags);
+  {
+    usize body_len = 0;
+    while (body[body_len])
+      body_len++;
+    usize alt =
+        html_reader_plain_body(body, reader_scratch, sizeof(reader_scratch));
+    if (body_len > 900 && alt > pos + 64) {
+      memcpy(rendered_text, reader_scratch, alt + 1);
+      render_count = 0;
+      memset(render_nodes, 0, sizeof(render_nodes));
+      chunk_plain_to_render_nodes();
+      kprintf("[BROWSER] reader-mode fallback: structured=%lu reader=%lu bytes\n",
+              (unsigned long)pos, (unsigned long)alt);
+      return;
+    }
+  }
   if (pos == 0)
     append_text(rendered_text, sizeof(rendered_text), &pos,
                 "(empty response body)");
@@ -709,6 +903,80 @@ static void history_push(const char *url) {
   text_copy(history[history_pos], sizeof(history[0]), url);
 }
 
+/*
+ * Built-in about: pages — no network; documents YamBrowser as the OSS shell for YamOS.
+ */
+static bool browser_fetch_about_builtin(void) {
+  const char *u = url_buffer;
+  if (!starts_with_ci(u, "about:"))
+    return false;
+
+  const char *r = u + 6;
+  while (*r == '/' || *r == '\\')
+    r++;
+
+  memset(raw_page, 0, sizeof(raw_page));
+
+  if (!*r || starts_with_ci(r, "blank")) {
+    ksnprintf(
+        raw_page, sizeof(raw_page),
+        "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n"
+        "<!DOCTYPE html><html><head><title>New Tab</title></head>"
+        "<body><p>about:blank</p></body></html>");
+  } else if (starts_with_ci(r, "yamos")) {
+    ksnprintf(
+        raw_page, sizeof(raw_page),
+        "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n"
+        "<!DOCTYPE html><html><head><title>YamBrowser — YamOS</title></head><body>"
+        "<h1>YamBrowser</h1>"
+        "<p>Open-source compositor-native shell (MIT, in-tree). It is <strong>not</strong> "
+        "Firefox/Chromium: there is no HTML5/CSS/JS engine here.</p>"
+        "<h2>Limits</h2>"
+        "<p>Modern sites need JavaScript, CSS layout, fonts, and codecs. YamBrowser only "
+        "does DNS/TCP, HTTP/HTTPS fetch, and text-oriented HTML mapping plus an optional "
+        "<strong>reader mode</strong> (tag-stripped text) for tough pages.</p>"
+        "<p>A general-purpose browser requires porting a real engine after dynamic linking "
+        "and a POSIX-grade userspace.</p>"
+        "<h2>Works today</h2>"
+        "<ul>"
+        "<li>HTTP and HTTPS (mbed TLS, embedded roots, RTC time)</li>"
+        "<li>Larger document buffers + scroll</li>"
+        "<li>Redirects</li>"
+        "</ul>"
+        "<h2>Try HTTP</h2>"
+        "<ul>"
+        "<li><a href=\"http://ansnew.com/\">http://ansnew.com/</a></li>"
+        "</ul>"
+        "<h2>HTTPS</h2>"
+        "<p>HTTPS uses mbed TLS with an embedded trust bundle (ISRG Root X1) and RTC time.</p>"
+        "<p><a href=\"about:blank\">about:blank</a></p>"
+        "</body></html>");
+  } else {
+    ksnprintf(
+        raw_page, sizeof(raw_page),
+        "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n"
+        "<!DOCTYPE html><html><head><title>Unknown about</title></head><body>"
+        "<p>Unknown about: page.</p>"
+        "<p>Use <a href=\"about:yamos\">about:yamos</a> or "
+        "<a href=\"about:blank\">about:blank</a>.</p>"
+        "</body></html>");
+  }
+
+  br_state = BR_LOADING;
+  progress = 55;
+  text_copy(loaded_url, sizeof(loaded_url), url_buffer);
+  history_push(loaded_url);
+  const char *body = body_start(raw_page);
+  extract_title(body);
+  html_to_text(body);
+  br_state = BR_DONE;
+  text_copy(status_text, sizeof(status_text),
+            "Built-in about: page (open-source YamBrowser)");
+  text_copy(response_meta, sizeof(response_meta), "local / no network");
+  progress = 100;
+  return true;
+}
+
 static void browser_fetch_current(void) {
   char host[96];
   char path[128];
@@ -722,26 +990,16 @@ fetch_again:
   progress = 18;
   text_copy(status_text, sizeof(status_text), "Parsing address...");
 
-  if (starts_with(url_buffer, "https://")) {
-    br_state = BR_ERROR;
-    text_copy(status_text, sizeof(status_text),
-              "HTTPS needs full encrypted HTTP client. Try http://ansnew.com/");
-    text_copy(rendered_text, sizeof(rendered_text),
-              "YamBrowser cannot load HTTPS yet.\n\nImplemented now:\n- DNS\n- "
-              "TCP\n- plain HTTP/1.0\n- TLS reachability probe\n- "
-              "certificate-store bootstrap\n- basic HTML text "
-              "extraction\n\nMissing for Mozilla-class browsing:\n- encrypted "
-              "HTTPS stream\n- certificate chain validation\n- JavaScript\n- "
-              "CSS layout\n- images\n- sandboxed multi-process renderer");
+  if (browser_fetch_about_builtin())
     return;
-  }
 
-  if (!parse_plain_http_url(url_buffer, host, sizeof(host), path,
-                            sizeof(path))) {
+  bool use_tls = false;
+  if (!parse_http_or_https_url(url_buffer, &use_tls, host, sizeof(host), path,
+                               sizeof(path))) {
     br_state = BR_ERROR;
-    text_copy(status_text, sizeof(status_text), "Invalid HTTP URL");
+    text_copy(status_text, sizeof(status_text), "Invalid HTTP(S) URL");
     text_copy(rendered_text, sizeof(rendered_text),
-              "Use a URL like http://ansnew.com/");
+              "Use a URL like http://ansnew.com/ or https://example.com/");
     return;
   }
 
@@ -749,16 +1007,18 @@ fetch_again:
   text_copy(status_text, sizeof(status_text),
             "Resolving DNS and connecting...");
   memset(raw_page, 0, sizeof(raw_page));
-  int rc = http_get(host, path, raw_page, sizeof(raw_page), &len);
+  int rc =
+      use_tls ? https_get(host, path, raw_page, sizeof(raw_page), &len)
+              : http_get(host, path, raw_page, sizeof(raw_page), &len);
   if (rc < 0) {
     br_state = BR_ERROR;
     ksnprintf(status_text, sizeof(status_text), "Load failed rc=%d", rc);
     ksnprintf(
         rendered_text, sizeof(rendered_text),
         "Could not load %s\n\nNetwork requirements:\n- e1000 link up\n- DHCP "
-        "lease\n- DNS server\n- TCP connect\n- plain HTTP server\n\nHTTPS "
-        "pages need the next encrypted HTTP client layer.",
-        url_buffer);
+        "lease\n- DNS server\n- TCP connect\n- %s server\n\nCertificates are verified "
+        "against the embedded trust bundle (extend src/net/certs/ as needed).",
+        url_buffer, use_tls ? "HTTPS/TLS" : "plain HTTP");
     kprintf("[BROWSER] load failed url='%s' rc=%d\n", url_buffer, rc);
     return;
   }
@@ -770,7 +1030,7 @@ fetch_again:
        code == 308) &&
       redirect_count < 2 &&
       extract_header_value(raw_page, "Location", location, sizeof(location))) {
-    if (starts_with(location, "http://")) {
+    if (starts_with(location, "http://") || starts_with(location, "https://")) {
       redirect_count++;
       text_copy(url_buffer, sizeof(url_buffer), location);
       kprintf("[BROWSER] redirect %d -> %s\n", code, url_buffer);
@@ -778,7 +1038,8 @@ fetch_again:
     }
     if (starts_with(location, "/")) {
       char next[URL_MAX];
-      ksnprintf(next, sizeof(next), "http://%s%s", host, location);
+      ksnprintf(next, sizeof(next), "%s://%s%s",
+                use_tls ? "https" : "http", host, location);
       redirect_count++;
       text_copy(url_buffer, sizeof(url_buffer), next);
       kprintf("[BROWSER] redirect %d -> %s\n", code, url_buffer);
@@ -880,7 +1141,7 @@ static i32 node_height(render_node_t *n, i32 w) {
 
 static void browser_scroll_by(i32 delta) {
   i32 max_scroll =
-      document_height > DOC_VIEW_H ? document_height - DOC_VIEW_H : 0;
+      document_height > doc_view_h() ? document_height - doc_view_h() : 0;
   document_scroll += delta;
   if (document_scroll < 0)
     document_scroll = 0;
@@ -889,7 +1150,7 @@ static void browser_scroll_by(i32 delta) {
 }
 
 static bool node_visible(i32 y, i32 h) {
-  return y + h >= DOC_TOP && y <= DOC_BOTTOM;
+  return y + h >= DOC_TOP && y <= doc_bottom();
 }
 
 static void draw_render_tree(wl_surface_t *s, i32 x, i32 y, i32 w) {
@@ -960,40 +1221,41 @@ static void draw_render_tree(wl_surface_t *s, i32 x, i32 y, i32 w) {
 }
 
 static void draw_browser(wl_surface_t *s) {
-  wl_draw_vgradient(s, 0, 0, BROWSER_W, BROWSER_H, 0xFF0B1120, 0xFF111827);
+  browser_update_layout(s);
+  wl_draw_vgradient(s, 0, 0, browser_w, browser_h, 0xFF0B1120, 0xFF111827);
 
-  wl_draw_rect(s, 0, 0, BROWSER_W, 44, 0xFF0F172A);
+  wl_draw_rect(s, 0, 0, browser_w, 44, 0xFF0F172A);
   wl_draw_rounded_rect(s, 14, 8, 178, 32, 8, 0xFF111827);
   wl_draw_text(s, 28, 17, page_title, 0xFFE5E7EB, 0);
   wl_draw_text(s, 172, 17, "x", 0xFF64748B, 0);
   wl_draw_text(s, 214, 17, "+", 0xFF94A3B8, 0);
 
-  wl_draw_rect(s, 0, 44, BROWSER_W, 54, 0xFF111827);
+  wl_draw_rect(s, 0, 44, browser_w, 54, 0xFF111827);
   draw_button(s, 16, 56, 38, "<", history_pos > 0);
   draw_button(s, 60, 56, 38, ">", history_pos + 1 < history_count);
   draw_button(s, 104, 56, 38, "R", true);
 
-  wl_draw_rounded_rect(s, 154, 55, 536, 32, 8,
+  wl_draw_rounded_rect(s, 154, 55, nav_addr_w, 32, 8,
                        address_focus ? 0xFF1D4ED8 : 0xFF334155);
-  wl_draw_rounded_rect(s, 155, 56, 534, 30, 7, 0xFF0B1220);
+  wl_draw_rounded_rect(s, 155, 56, nav_addr_w - 2, 30, 7, 0xFF0B1220);
   wl_draw_text(s, 168, 64, url_buffer, 0xFFFFFFFF, 0);
   if (address_focus) {
     int cx = 168 + (int)strlen(url_buffer) * 8;
-    if (cx > 674)
-      cx = 674;
+    i32 cx_max = 164 + nav_addr_w - 14;
+    if (cx > cx_max) cx = cx_max;
     wl_draw_rect(s, cx, 64, 8, 16, 0xFFFFFFFF);
   }
-  wl_draw_rounded_rect(s, 702, 55, 94, 32, 8, 0xFF2563EB);
-  wl_draw_text(s, 728, 64, "Go", 0xFFFFFFFF, 0);
+  wl_draw_rounded_rect(s, nav_go_x, 55, 94, 32, 8, 0xFF2563EB);
+  wl_draw_text(s, nav_go_x + 26, 64, "Go", 0xFFFFFFFF, 0);
 
   if (br_state == BR_LOADING)
-    wl_draw_rect(s, 0, 96, (BROWSER_W * progress) / 100, 3, 0xFF38BDF8);
+    wl_draw_rect(s, 0, 96, (browser_w * progress) / 100, 3, 0xFF38BDF8);
   else
-    wl_draw_rect(s, 0, 96, BROWSER_W, 1, 0xFF263244);
+    wl_draw_rect(s, 0, 96, browser_w, 1, 0xFF263244);
 
-  wl_draw_rounded_rect(s, 18, 116, BROWSER_W - 36, BROWSER_H - 164, 9,
+  wl_draw_rounded_rect(s, 18, 116, browser_w - 36, browser_h - 164, 9,
                        0xFFF8FAFC);
-  wl_draw_rounded_outline(s, 18, 116, BROWSER_W - 36, BROWSER_H - 164, 9,
+  wl_draw_rounded_outline(s, 18, 116, browser_w - 36, browser_h - 164, 9,
                           0xFFCBD5E1);
   wl_draw_text(s, 38, 136, page_title, 0xFF0F172A, 0);
   wl_draw_rounded_rect(s, 38, 158, 108, 24, 6,
@@ -1003,38 +1265,38 @@ static void draw_browser(wl_surface_t *s) {
   wl_draw_text(s, 160, 163, response_meta,
                br_state == BR_ERROR ? 0xFFB91C1C : 0xFF475569, 0);
   wl_draw_text(s, 38, 188, loaded_url, 0xFF64748B, 0);
-  wl_draw_rect(s, 38, 212, BROWSER_W - 76, 1, 0xFFE2E8F0);
+  wl_draw_rect(s, 38, 212, browser_w - 76, 1, 0xFFE2E8F0);
 
   if (br_state == BR_LOADING) {
     wl_draw_text(s, 344, 288, "Loading...", 0xFF475569, 0);
   } else {
     if (render_count > 0)
-      draw_render_tree(s, 38, 232, BROWSER_W - 76);
+      draw_render_tree(s, 38, 232, browser_w - 76);
     else if (br_state == BR_ERROR)
       wl_draw_text(s, 38, 232, rendered_text, 0xFF7F1D1D, 0);
     else
-      draw_render_tree(s, 38, 232, BROWSER_W - 76);
+      draw_render_tree(s, 38, 232, browser_w - 76);
   }
 
-  if (document_height > DOC_VIEW_H) {
-    i32 track_x = BROWSER_W - 34;
+  if (document_height > doc_view_h()) {
+    i32 track_x = browser_w - 34;
     i32 track_y = DOC_TOP;
-    i32 track_h = DOC_VIEW_H;
-    i32 thumb_h = (DOC_VIEW_H * track_h) / document_height;
+    i32 track_h = doc_view_h();
+    i32 thumb_h = (doc_view_h() * track_h) / document_height;
     if (thumb_h < 34)
       thumb_h = 34;
-    i32 max_scroll = document_height - DOC_VIEW_H;
+    i32 max_scroll = document_height - doc_view_h();
     i32 thumb_y = track_y + ((track_h - thumb_h) * document_scroll) /
                                 (max_scroll ? max_scroll : 1);
     wl_draw_rounded_rect(s, track_x, track_y, 6, track_h, 3, 0xFFE2E8F0);
     wl_draw_rounded_rect(s, track_x, thumb_y, 6, thumb_h, 3, 0xFF64748B);
   }
 
-  wl_draw_rect(s, 0, BROWSER_H - 34, BROWSER_W, 34, 0xFF0F172A);
-  wl_draw_text(s, 16, BROWSER_H - 23, status_text,
+  wl_draw_rect(s, 0, browser_h - 34, browser_w, 34, 0xFF0F172A);
+  wl_draw_text(s, 16, browser_h - 23, status_text,
                br_state == BR_ERROR ? 0xFFFFB4B4 : 0xFF94A3B8, 0);
-  wl_draw_text(s, BROWSER_W - 342, BROWSER_H - 23,
-               "YamBrowser: styled layout + scroll v0", 0xFF64748B, 0);
+  wl_draw_text(s, browser_w - 372, browser_h - 23,
+               "YamBrowser OSS · about:yamos · HTTP/HTTPS + reader", 0xFF64748B, 0);
 }
 
 static bool hit(i32 x, i32 y, i32 w, i32 h) {
@@ -1057,9 +1319,9 @@ static void browser_click(void) {
     browser_go_history(1);
   else if (hit(104, 56, 38, 30))
     browser_fetch_current();
-  else if (hit(154, 55, 536, 32))
+  else if (hit(154, 55, nav_addr_w, 32))
     address_focus = true;
-  else if (hit(702, 55, 94, 32))
+  else if (hit(nav_go_x, 55, 94, 32))
     browser_fetch_current();
   else
     address_focus = false;
@@ -1097,9 +1359,9 @@ static void browser_key(u16 sc) {
     else
       browser_scroll_by(42);
   } else if (sc == 0x49) {
-    browser_scroll_by(-DOC_VIEW_H + 36);
+    browser_scroll_by(-doc_view_h() + 36);
   } else if (sc == 0x51) {
-    browser_scroll_by(DOC_VIEW_H - 36);
+    browser_scroll_by(doc_view_h() - 36);
   }
 }
 
@@ -1111,40 +1373,28 @@ void wl_browser_task(void *arg) {
                                       BROWSER_H, sched_current()->id);
   if (!s)
     return;
+  wl_surface_set_constraints(s, true, BROWSER_MIN_W, BROWSER_MIN_H);
 
-  text_copy(
-      rendered_text, sizeof(rendered_text),
-      "Type a plain HTTP URL and press Enter.\n\nTry:\n- http://ansnew.com/\n- "
-      "http://neverssl.com/\n\nThis browser now has a real plain-HTTP network "
-      "path and a static DOM paint layer. HTTPS page loading, JavaScript, full "
-      "CSS layout, images, and Mozilla-class rendering are still engine work.");
-  render_count = 0;
-  render_add(RN_H1, "YamBrowser");
-  render_add(
-      RN_P,
-      "Plain HTTP pages are fetched by the YamOS kernel network stack, parsed "
-      "into static document nodes, and painted by the compositor.");
-  render_add(RN_LI, "Works now: DNS, TCP, HTTP/1.0, redirects, headings, "
-                    "paragraphs, links, forms, buttons, image placeholders.");
-  render_add(
-      RN_LI,
-      "Still required for Firefox-class browsing: encrypted HTTPS stream, "
-      "certificate validation, HTML5 tree builder, CSS cascade/layout, "
-      "JavaScript, images, storage, cache, cookies, sandboxing.");
+  browser_fetch_current();
+
   draw_browser(s);
   wl_surface_commit(s);
 
   u32 my_id = s->id;
   while (s->state == WL_SURFACE_ACTIVE && s->id == my_id) {
     input_event_t ev;
+    bool dirty = false;
     while (wl_surface_pop_event(s, &ev)) {
-      if (ev.type == EV_ABS && ev.code == 0)
+      if (ev.type == EV_RESIZE) {
+        dirty = true;
+      } else if (ev.type == EV_ABS && ev.code == 0)
         last_x = ev.value;
       else if (ev.type == EV_ABS && ev.code == 1)
         last_y = ev.value;
-      else if (ev.type == EV_REL && ev.code == REL_WHEEL)
+      else if (ev.type == EV_REL && ev.code == REL_WHEEL) {
         browser_scroll_by(ev.value < 0 ? 72 : -72);
-      else if (ev.type == EV_KEY) {
+        dirty = true;
+      } else if (ev.type == EV_KEY) {
         if (ev.code == 0x2A || ev.code == 0x36) {
           shift_held = ev.value == KEY_PRESSED;
         } else if (ev.value == KEY_PRESSED) {
@@ -1152,11 +1402,15 @@ void wl_browser_task(void *arg) {
             browser_click();
           else
             browser_key(ev.code);
+          dirty = true;
         }
       }
     }
-    draw_browser(s);
-    wl_surface_commit(s);
+    if (br_state == BR_LOADING) dirty = true;
+    if (dirty) {
+      draw_browser(s);
+      wl_surface_commit(s);
+    }
     task_sleep_ms(16);
   }
 }

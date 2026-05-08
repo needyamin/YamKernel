@@ -169,7 +169,7 @@ int tcp_connect(int fd, u32 dst_ip, u16 dst_port) {
     /* Blocking: wait for SYN-ACK */
     for (int i = 0; i < 8000000 && s->waiting_syn_ack; i++) {
         if ((i % 100) == 0) net_poll();
-        __asm__ volatile("pause");
+        net_coop_yield((u32)i);
     }
 
     if (s->state != SOCK_STATE_ESTABLISHED) {
@@ -200,8 +200,10 @@ int tcp_accept(int fd) {
         if (ls->accept_head == ls->accept_tail) return -EAGAIN;
     } else {
         /* Blocking: wait for a connection in the accept queue */
-        while (ls->accept_head == ls->accept_tail)
-            __asm__ volatile("pause");
+        for (u32 spin = 0; ls->accept_head == ls->accept_tail; spin++) {
+            if ((spin % 1000u) == 0) net_poll();
+            net_coop_yield(spin);
+        }
     }
 
     int client_fd = ls->accept_queue[ls->accept_tail];
@@ -231,7 +233,7 @@ int tcp_recv(int fd, void *buf, usize max_len) {
             if (s->recv_head != s->recv_tail) break;
             if (s->state == SOCK_STATE_CLOSE_WAIT || s->state == SOCK_STATE_CLOSED) return 0;
             if ((i % 1000) == 0) net_poll();
-            __asm__ volatile("pause");
+            net_coop_yield((u32)i);
         }
     }
 
@@ -274,7 +276,7 @@ int tcp_close(int fd) {
     /* Wait for close to complete */
     for (int i = 0; i < 1000000 && s->state != SOCK_STATE_CLOSED; i++) {
         if ((i % 1000) == 0) net_poll();
-        __asm__ volatile("pause");
+        net_coop_yield((u32)i);
     }
     s->active = false;
     return 0;

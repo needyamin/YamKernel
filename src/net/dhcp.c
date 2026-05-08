@@ -159,7 +159,7 @@ void dhcp_start(void) {
     /* Wait up to 5 seconds */
     for (int i = 0; i < 5000000 && !g_dhcp_done; i++) {
         if ((i % 1000) == 0) net_poll();
-        __asm__ volatile("pause");
+        net_coop_yield((u32)i);
     }
     if (!g_dhcp_done)
         kprintf_color(0xFFFF8800, "[DHCP] Timeout — no server responded\n");

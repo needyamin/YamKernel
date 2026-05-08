@@ -10,6 +10,8 @@
 #include "../lib/kprintf.h"
 #include "../lib/string.h"
 
+#include "psa/crypto.h"
+
 #define TLS_PORT 443
 #define TLS_RECV_MAX 512
 
@@ -141,10 +143,24 @@ bool tls_service_ready(void) {
 }
 
 void net_tls_init(void) {
+    /*
+     * psa_crypto_init() pulls in mbedTLS paths that use SSE stack spills (movaps).
+     * During early boot, net_init() runs on the BSP kernel stack, which can be
+     * only 8-byte aligned → #GP before we ever print the TLS banner.
+     * Finish PSA bring-up from PID 1 (sched_alloc kernel stacks are 16-byte aligned).
+     */
+    kprintf("[TLS] mbedTLS PSA deferred to PID 1 (boot-stack alignment)\n");
+}
+
+void net_tls_psa_late_init(void) {
+    psa_status_t ps = psa_crypto_init();
+    if (ps != PSA_SUCCESS)
+        kprintf("[TLS] psa_crypto_init failed: %d\n", (int)ps);
+
     g_cert_store_ready = cert_store_anchor_count() > 0;
     g_tls_ready = g_cert_store_ready;
     kprintf("[CERT] store ready: anchors=%u policy=bootstrap\n", cert_store_anchor_count());
-    kprintf("[TLS] service ready: client_hello=1 sni=1 cert_store=%s full_https=pending\n",
+    kprintf("[TLS] service ready: mbedTLS=https_get VERIFY_REQUIRED cert_store=%s\n",
             g_cert_store_ready ? "ready" : "missing");
 }
 
