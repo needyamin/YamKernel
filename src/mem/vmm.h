@@ -118,5 +118,7 @@ void vmm_shootdown_all(void);
 
 /* Kernel stacks with unmapped guard pages on both ends */
 void *vmm_alloc_kernel_stack(usize usable_size);
+void  vmm_free_kernel_stack(void *stack, usize usable_size);
+bool  vmm_clone_task_vmas(struct task *dst, const struct task *src);
 
 #endif /* _MEM_VMM_H */

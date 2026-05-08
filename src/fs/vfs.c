@@ -914,7 +914,11 @@ int fd_alloc(file_t *file) {
     task_t *t = sched_current();
     if (!t) return -1;
     for (int i = 0; i < 128; i++) {
-        if (!t->fd_table[i]) { t->fd_table[i] = file; return i; }
+        if (!t->fd_table[i]) {
+            t->fd_table[i] = file;
+            t->fd_flags[i] = 0;
+            return i;
+        }
     }
     return -1;
 }
@@ -926,7 +930,25 @@ file_t *fd_get(int fd) {
 void fd_free(int fd) {
     if (fd < 0 || fd >= 128) return;
     task_t *t = sched_current();
-    if (t) t->fd_table[fd] = NULL;
+    if (t) {
+        t->fd_table[fd] = NULL;
+        t->fd_flags[fd] = 0;
+    }
+}
+
+int fd_get_flags(int fd) {
+    if (fd < 0 || fd >= 128) return -1;
+    task_t *t = sched_current();
+    if (!t || !t->fd_table[fd]) return -1;
+    return (int)t->fd_flags[fd];
+}
+
+int fd_set_flags(int fd, u32 flags) {
+    if (fd < 0 || fd >= 128) return -1;
+    task_t *t = sched_current();
+    if (!t || !t->fd_table[fd]) return -1;
+    t->fd_flags[fd] = flags;
+    return 0;
 }
 
 static void file_release(file_t *f) {
@@ -951,6 +973,18 @@ void vfs_task_close_fds(task_t *t) {
     for (int i = 0; i < 128; i++) {
         file_t *f = t->fd_table[i];
         t->fd_table[i] = NULL;
+        t->fd_flags[i] = 0;
+        file_release(f);
+    }
+}
+
+void vfs_task_close_cloexec_fds(task_t *t) {
+    if (!t) return;
+    for (int i = 0; i < 128; i++) {
+        if (!t->fd_table[i] || !(t->fd_flags[i] & 1u)) continue;
+        file_t *f = t->fd_table[i];
+        t->fd_table[i] = NULL;
+        t->fd_flags[i] = 0;
         file_release(f);
     }
 }
@@ -963,6 +997,7 @@ static int fd_alloc_from(file_t *file, int start) {
     for (int i = start; i < 128; i++) {
         if (!t->fd_table[i]) {
             t->fd_table[i] = file;
+            t->fd_flags[i] = 0;
             return i;
         }
     }
@@ -973,6 +1008,7 @@ static int fd_install_at(file_t *file, int fd) {
     task_t *t = sched_current();
     if (!t || fd < 0 || fd >= 128) return -1;
     t->fd_table[fd] = file;
+    t->fd_flags[fd] = 0;
     return fd;
 }
 

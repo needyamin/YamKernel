@@ -1,147 +1,314 @@
 YamOS major implementation plan
 ===============================
 
-Goal
-----
+Investigation pass
+------------------
 
-Make YamOS feel powerful by strengthening the kernel and ABI foundations that
-modern software expects: real process replacement, dynamic loading, threads,
-signals, filesystems, TLS, package management, and multi-core execution.
+Date: 2026-05-09
+Scope: process ABI, execve, fd lifetime, task cleanup, mmap, signals, threads,
+and the next steps that make YamOS feel powerful in current years.
 
-Rule
-----
+Local verification caveat:
+The current Windows environment cannot run the normal verify path because the
+configured "Ubuntu" WSL distro is missing, and no native make/gcc/clang toolchain
+is available. Recent kernel changes are source-reviewed but still need a real
+build and boot run.
 
-Do not fake capability in userland. If an app/runtime/package/browser needs a
-kernel feature, implement the kernel/ABI feature first and expose honest errors
-until it works.
+Core rule
+---------
 
-Phase 1: Real process replacement
----------------------------------
+Do not fake capability in userland. If a runtime, package manager, browser, or
+tool needs a kernel feature, implement the kernel/ABI feature first. Returning
+honest failure is better than returning fake success.
 
-Status: started.
+What the investigation found
+----------------------------
 
-Implement true execve for static ELF programs first.
+1. execve is no longer just a plan.
+   SYS_EXECVE now routes into elf_exec_resolved_argv_envp(). Static ELF exec is
+   present in source, and PT_INTERP exec has a first implementation that maps the
+   main ELF plus interpreter, builds argv/envp/auxv, seeds brk, switches pml4,
+   and jumps into user mode.
+
+2. The exec path is powerful but not proven.
+   It needs compile fixes, boot testing, and failure-path testing. The code
+   should prove that success never returns, failure keeps the old process alive,
+   PID/cwd/fd table behavior is preserved correctly, and old mappings are
+   released safely.
+
+3. Dynamic linking is still shallow.
+   The loader path has auxv and PT_INTERP structure, but relocation support is
+   narrow, TLS program headers are not complete, and there is no proven small
+   dynamically linked libc test yet. This is the next big compatibility wall.
+
+4. Process memory cleanup improved.
+   vmm_destroy_user_pml4() walks user page tables and releases pages through
+   page refcounts. execve destroys the replaced address space. brk is now tracked
+   per task and shrink unmaps released heap pages.
+
+5. Process lifetime cleanup is halfway done.
+   waitpid reaping now releases child VMA metadata, non-shared user pml4, FPU
+   state, fd table resources, kernel stack pages, YamGraph task nodes, and the
+   task object. Forked tasks now receive cloned VMA metadata and their own
+   YamGraph node instead of inheriting the parent's node by memcpy. Missing
+   pieces remain: build/boot proof, orphan cleanup, and correct full
+   process-vs-thread ownership. Scheduler lifetime/cleanup counters are now
+   exposed through SYS_SCHED_INFO and the terminal `sched` command.
+
+6. FD lifetime is now real enough for exec work.
+   fork/thread creation retains copied fd_table entries. waitpid closes child
+   fds. task_t has per-fd descriptor flags. SYS_FCNTL supports F_GETFD/F_SETFD.
+   dup/dup2 clear descriptor flags on the new fd. execve closes FD_CLOEXEC fds.
+
+7. Threads exist but are not a full process model.
+   SYS_THREAD_CREATE creates tasks sharing the parent pml4, fd table entries are
+   retained, and pthread uses it. But thread groups are not fully cleaned up on
+   exec/exit, joins are waitpid-shaped, user stacks/TLS ownership are weak, and
+   killing or execing a multithreaded process is intentionally restricted.
+
+8. Signals are a minimal bridge, not POSIX-correct yet.
+   sigaction/sigprocmask exist, but delivery is a lightweight handler jump with
+   a pushed resume address. There is no real sigframe/ucontext/rt_sigreturn,
+   no robust interrupted-syscall restart model, and no complete process/thread
+   targeting semantics.
+
+9. mmap is not ready for serious ports.
+   Anonymous lazy mapping exists through VMAs and page faults, but file-backed
+   mmap does not actually map file contents with MAP_PRIVATE/MAP_SHARED
+   semantics. The mmap base is global instead of per-process, which can become
+   a correctness problem as exec/fork usage grows.
+
+10. Networking is useful but not browser/runtime grade.
+    TCP sockets, nonblocking behavior, select, DNS, DHCP, and plain HTTP are in
+    tree. sendto/recvfrom still return failure in the syscall dispatcher, Unix
+    sockets are missing, socket options are limited, and TLS/HTTPS is not a full
+    verified handshake yet.
+
+11. The README is behind the newest process work.
+    README still describes full execve as missing. That was true before the
+    recent slice, but the current tree now has first execve/PT_INTERP work that
+    must be described as "implemented but unverified" after build testing.
+
+Pre-plan: highest intelligence path
+-----------------------------------
+
+The best route is not "add more features." The best route is to make the
+process ABI trustworthy. Once process replacement, lifetime cleanup, mmap,
+signals, and dynamic loading are reliable, every later subsystem becomes easier:
+shells, package manager, language runtimes, browser work, and test harnesses.
+
+Gate 0: Restore build and boot verification
+-------------------------------------------
+
+Goal:
+Get the normal verify path running again, then compile and boot the current
+source before adding more large features.
 
 Tasks:
-- Add an ELF exec path that loads a new image into a fresh user address space.
-- Preserve the current task identity, fd table, cwd, parent/child relation, and
-  scheduler state.
-- Replace the current task pml4, reset user image state, and jump to the new
-  entry point without returning on success.
-- Return ENOSYS or another honest failure for dynamic/PT_INTERP exec until the
-  loader path is ready.
-- Add a user test program that calls execve("/bin/hello", argv, envp).
-- Wire the test program into the build/initrd and boot probe.
+- Re-enable an Ubuntu WSL distro or provide an equivalent Linux build toolchain.
+- Run: powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 verify
+- Fix compile errors from the recent exec/fd/process lifetime work.
+- Boot with the project helper, not raw qemu, and capture serial logs.
+- Promote build/boot failures into plan items instead of guessing.
 
-Why this matters:
-execve is the core Unix process primitive. Without it, shells, installers,
-language runtimes, build tools, and service supervisors cannot behave normally.
+Exit criteria:
+- Kernel builds.
+- ISO is produced.
+- Boot reaches userspace.
+- /bin/hello still runs.
+- /bin/exec-test is present in initrd.
 
-Phase 2: Dynamic ELF loader path
+Gate 1: Process lifetime closure
 --------------------------------
 
-Implement PT_INTERP, shared-library mapping, relocations, auxv, and TLS segment
-support well enough to run a small dynamically linked libc program.
+Goal:
+Make task creation, exec, exit, and waitpid stop leaking or destroying the wrong
+resources.
 
 Tasks:
-- Promote ELF loading code into reusable "prepare image" helpers.
-- Support PT_INTERP during exec, not only spawn.
-- Add enough relocation support for the chosen small libc/dynamic linker.
-- Populate auxv with AT_PHDR, AT_PHENT, AT_PHNUM, AT_ENTRY, AT_BASE, AT_RANDOM,
-  AT_PAGESZ, and AT_EXECFN.
-- Add TLS program-header support and per-thread TLS initialization.
+- Add vmm_free_kernel_stack() matching vmm_alloc_kernel_stack(). Status:
+  implemented in source.
+- Free child kernel stacks during waitpid reap. Status: implemented in source.
+- Destroy YamGraph task nodes during task cleanup. Status: implemented in source.
+- Create one cleanup helper for final task destruction so waitpid, failed fork,
+  failed thread create, and future kill paths do not duplicate partial cleanup.
+  Status: first helper implemented for spawn/fork/thread failure and waitpid
+  reap paths.
+- Clone forked VMA metadata so waitpid does not free the parent's VMA list.
+  Status: implemented in source.
+- Add cleanup counters or boot logs for repeated fork/exec/wait loops. Status:
+  source-level counters implemented for task creation, fork, thread creation,
+  reaping, task-object frees, kernel-stack frees, user-pml4 destruction,
+  VMA-list destruction, fd-table closure, and YamGraph node destruction. The
+  counters are printed by sched_print_stats(), copied through SYS_SCHED_INFO,
+  and visible in the compositor terminal with `sched`.
+- Split "process-owned" resources from "thread-owned" resources:
+  - process-owned: pml4, fd table references, cwd, brk, process signal state
+  - thread-owned: kernel stack, user stack ownership, FPU state, tls_base,
+    pending thread signal state
+- Define what happens when a process leader exits while threads still exist.
+- Define what happens when a non-leader thread exits or is joined.
 
-Phase 3: Threads and signals
-----------------------------
+Exit criteria:
+- Reaping a process releases pml4, VMAs, fds, FPU state, kernel stack, YamGraph
+  node, and task object exactly once. Source path implemented; boot verification
+  still required.
+- Reaping a thread does not destroy the shared process address space. Source
+  path now avoids destroying shared pml4/VMA metadata; thread-group semantics
+  still need stronger policy.
+- Repeated fork/exec/wait loops do not grow task, fd, or page counts.
 
-Make pthread/futex/signal behavior robust enough for real ports.
+Gate 2: execve correctness contract
+-----------------------------------
+
+Goal:
+Turn execve from "first implementation" into a kernel contract that tests can
+trust.
 
 Tasks:
-- Harden SYS_THREAD_CREATE/SYS_THREAD_EXIT lifetime and ownership.
-- Implement sigaction, sigprocmask, sigreturn, user signal frames, and restart
-  behavior for interrupted syscalls.
-- Define per-process vs per-thread signal targeting.
-- Stress test pthread mutexes, condvars, TLS keys, joins, exits, and signals.
+- Verify static execve: /bin/exec-test calls execve("/bin/hello").
+- Confirm exec success preserves PID and parent relation but replaces the image.
+- Confirm exec failure returns -1 and the caller continues in the old image.
+- Confirm cwd survives exec.
+- Confirm non-CLOEXEC fds survive exec.
+- Confirm FD_CLOEXEC fds close on exec.
+- Confirm signal handlers and pending signals reset according to YamOS rules.
+- Confirm brk starts after the new image, not the old one.
+- Confirm old pml4 and old VMAs are destroyed after the new address space is
+  live.
+- Keep exec blocked from non-leader threads until thread-group cleanup exists.
 
-Phase 4: Filesystem and mmap compatibility
-------------------------------------------
+Exit criteria:
+- A boot/user test proves static exec, failed exec, cwd, fd inheritance,
+  FD_CLOEXEC, argv/envp, and same-PID behavior.
 
-Build the file semantics modern tools require.
+Gate 3: Dynamic ELF loader smoke test
+-------------------------------------
+
+Goal:
+Run one small dynamically linked YamOS program before pretending to support
+large ports.
 
 Tasks:
-- Implement permissions with uid/gid/mode checks.
-- Add symlink/readlink, rmdir, file locks, richer stat metadata, and better
-  /dev and /proc behavior.
-- Implement file-backed mmap with MAP_PRIVATE/MAP_SHARED behavior.
-- Add corruption and persistence tests for FAT32-backed mounts.
+- Build or import a tiny ld.so-compatible test target.
+- Complete PT_TLS program-header handling.
+- Add the missing auxv entries expected by the chosen libc/loader.
+- Expand relocations beyond R_X86_64_RELATIVE as required by the test loader.
+- Verify AT_PHDR, AT_PHENT, AT_PHNUM, AT_ENTRY, AT_BASE, AT_RANDOM, AT_PAGESZ,
+  and AT_EXECFN values in userspace.
+- Add a dynamic exec test separate from static /bin/exec-test.
 
-Phase 5: Networking and TLS
+Exit criteria:
+- A tiny dynamically linked program runs from execve.
+- The same program can call write, brk/malloc, and exit.
+
+Gate 4: mmap and file-backed memory
+-----------------------------------
+
+Goal:
+Make mmap useful for loaders, libc, package tools, and future browser/runtime
+ports.
+
+Tasks:
+- Move next_mmap_addr into task_t so mappings are per-process.
+- Implement MAP_FIXED validation and collision handling.
+- Track file-backed VMAs with file references and offsets.
+- Implement MAP_PRIVATE lazy file page-in.
+- Implement MAP_SHARED write-back policy or return honest failure until it is
+  ready.
+- Make munmap handle partial unmaps or reject them consistently.
+- Ensure fork preserves VMA metadata and CoW semantics.
+
+Exit criteria:
+- mmap anonymous, mmap file private, mprotect, munmap, fork, and exec have tests.
+
+Gate 5: Signals and threads
 ---------------------------
 
-Move from early networking to real application networking.
+Goal:
+Support real pthread and Unix program behavior instead of only demos.
 
 Tasks:
-- Complete socket options, shutdown, getpeername/getsockname, UDP fd support,
-  Unix sockets, and stronger poll/select readiness.
-- Harden TCP timeouts, retransmission, close states, and error reporting.
-- Finish mbedTLS HTTPS with certificate-chain validation, hostname checks,
-  secure randomness, and a real root store.
+- Implement real sigframe/ucontext layout.
+- Implement sigreturn restore instead of the current lightweight return-address
+  trick.
+- Define process-directed vs thread-directed signal delivery.
+- Implement SIGCHLD behavior for process children.
+- Add syscall interruption/restart rules.
+- Harden pthread_join and thread exit around thread groups.
+- Track user stack/TLS allocations so thread cleanup can release them or expose
+  a clear ownership rule.
 
-Phase 6: Package manager
-------------------------
+Exit criteria:
+- Tests cover signal handler return, blocked signals, kill/raise, child exit
+  SIGCHLD, pthread_create/join, mutex/condvar, TLS keys, and thread exit.
 
-Turn ypkg from a capability slice into an ecosystem foundation.
+Gate 6: Networking/TLS/package foundation
+-----------------------------------------
 
-Tasks:
-- Define signed repository metadata.
-- Verify metadata and package payload signatures.
-- Maintain an installed package database with file ownership.
-- Implement dependency resolution, install, upgrade, uninstall, rollback, and
-  transaction recovery.
-
-Phase 7: Multi-core and hardware expansion
-------------------------------------------
-
-Use modern hardware safely.
+Goal:
+Only build package/browser dreams on real transport and security.
 
 Tasks:
-- Audit scheduler locks, address-space switching, run queue ownership, and TLB
-  shootdowns.
-- Enable multi-core task scheduling only after the audit passes.
-- Add virtio-net, virtio-gpu, NVMe, audio, Wi-Fi, and Bluetooth in that order of
-  foundation value.
+- Implement sendto/recvfrom or explicitly split UDP from TCP in the ABI.
+- Add getsockname/getpeername, shutdown, and useful socket options.
+- Add Unix-domain sockets for local service IPC compatibility.
+- Finish mbedTLS-backed HTTPS with certificate chain validation, hostname
+  verification, time validation, and root store handling.
+- Add signed ypkg repository metadata and package signatures.
 
-Current implementation slice
-----------------------------
+Exit criteria:
+- A package metadata fetch uses verified HTTPS and rejects bad certificates or
+  bad signatures.
 
-Start with static execve:
+Gate 7: Documentation truth pass
+--------------------------------
 
-1. Add elf_exec_resolved_argv_envp(). Status: implemented.
-2. Wire SYS_EXECVE to it. Status: implemented.
-3. Add PT_INTERP exec support. Status: first implementation added. execve now
-   maps the main ELF, maps the interpreter, builds a Linux-style argc/argv/envp
-   and auxv stack, and enters the loader through enter_user_mode_ldso().
-4. Add a focused execve boot/user test. Status: implemented as /bin/exec-test.
-5. Make old-image teardown CoW/refcount aware. Status: implemented in
-   vmm_destroy_user_pml4(), and execve now releases the replaced pml4.
-6. Build and fix compile/runtime issues. Status: blocked locally because the
-   Windows environment has no configured WSL distro and no native make/gcc/clang.
-7. Make sys_brk per-process instead of global. Status: implemented. task_t now
-   tracks brk_start/brk_current, exec/spawn seed the break from ELF load end,
-   and shrinking brk unmaps released heap pages.
-8. Reap child process memory on waitpid. Status: partially implemented.
-   waitpid now releases child VMA metadata, non-shared user pml4, FPU state,
-   and the task object. Kernel stack free support is still missing.
-9. Add fd-table lifetime handling. Status: implemented. fork/thread creation now
-   retains copied file descriptors, and waitpid reaping closes the child fd
-   table so files/sockets can release their backing resources.
+Goal:
+Keep public docs aligned with kernel reality.
 
-Known follow-up from this slice
--------------------------------
+Tasks:
+- After build/boot verification, update README from "execve missing" to
+  "execve first implementation, static path tested, dynamic path in progress."
+- Keep CODEX_MEMORY.txt lean and current after each major slice.
+- Keep note.txt as the honest high-level diagnosis.
+- Keep this plan.txt as the tactical route.
 
-- Add an automated boot probe that runs /bin/exec-test and checks that
-  /bin/hello runs in the same PID after exec.
-- Harden PT_INTERP exec with more relocation types, TLS program-header support,
-  and real dynamic-linker/runtime tests.
-- Add remaining process-exit cleanup for kernel stacks, FD_CLOEXEC semantics,
-  thread groups, and YamGraph nodes.
+Immediate next implementation order
+-----------------------------------
+
+1. Fix the local build environment or run the verify command on a machine with
+   the Ubuntu WSL distro/toolchain installed.
+2. Compile and boot the current source.
+3. Fix all compile errors from the exec/fd/process cleanup slice.
+4. Build/boot verify the source-level process lifetime cleanup just added:
+   vmm_free_kernel_stack(), centralized task cleanup, fork VMA metadata clone,
+   and YamGraph task-node destruction.
+5. Boot-run the terminal `sched` command before and after /bin/exec-test or a
+   fork/exec/wait loop and confirm cleanup counters move as expected.
+6. Define and implement orphan/dead-task cleanup for tasks that cannot be
+   reaped through the current parent waitpid path.
+7. Add /bin/exec-test boot assertions for same PID, cwd, fd inheritance, and
+   FD_CLOEXEC.
+8. Only then continue PT_TLS and dynamic-loader relocation work.
+
+Do not do next
+--------------
+
+- Do not add fake app installers or fake package success.
+- Do not claim browser-class support before dynamic linking, signals, mmap,
+  TLS, and process lifetime are reliable.
+- Do not widen the syscall ABI randomly; strengthen the semantics already
+  exposed.
+- Do not enable full SMP task scheduling before process/address-space cleanup
+  and TLB shootdown behavior are audited.
+- Do not rewrite unrelated desktop/application code while the process ABI is
+  still settling.
+
+Bottom line
+-----------
+
+YamOS becomes powerful by becoming boringly correct at the Unix-like foundations:
+exec, wait, fd lifetime, mmap, dynamic loading, signals, threads, TLS, and tests.
+The current code is moving in the right direction. The next intelligent move is
+to verify, close leaks, and turn the process ABI into a contract.

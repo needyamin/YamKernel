@@ -82,6 +82,7 @@ typedef struct task {
     u8           *stack;
     u8           *fpu_state;
     struct file  *fd_table[128];
+    u32           fd_flags[128];
     char          cwd[256];
     struct vma   *vma_head;
     u64           brk_start;
@@ -129,6 +130,16 @@ typedef struct {
     u64 ticks;
     u64 rq_load[MAX_CPUS];
     u32 rq_ready[MAX_CPUS];
+    u64 lifetime_tasks_created;
+    u64 lifetime_processes_forked;
+    u64 lifetime_threads_created;
+    u64 lifetime_tasks_reaped;
+    u64 lifetime_task_objects_freed;
+    u64 lifetime_kernel_stacks_freed;
+    u64 lifetime_user_pml4s_destroyed;
+    u64 lifetime_vma_lists_destroyed;
+    u64 lifetime_fd_tables_closed;
+    u64 lifetime_graph_nodes_destroyed;
 } sched_info_t;
 
 /* Public API */

@@ -31,6 +31,9 @@ static u8 syscall_stack[16384] ALIGNED(16);
 
 #define YAM_AT_FDCWD (-100)
 #define YAM_AT_REMOVEDIR 0x200
+#define YAM_F_GETFD 1
+#define YAM_F_SETFD 2
+#define YAM_FD_CLOEXEC 1
 
 static u64 *syscall_current_pml4(void) {
     task_t *t = this_cpu()->current;
@@ -159,6 +162,16 @@ static i64 sys_sched_info(u64 uout) {
         out.rq_load[i] = info.rq_load[i];
         out.rq_ready[i] = info.rq_ready[i];
     }
+    out.lifetime_tasks_created = info.lifetime_tasks_created;
+    out.lifetime_processes_forked = info.lifetime_processes_forked;
+    out.lifetime_threads_created = info.lifetime_threads_created;
+    out.lifetime_tasks_reaped = info.lifetime_tasks_reaped;
+    out.lifetime_task_objects_freed = info.lifetime_task_objects_freed;
+    out.lifetime_kernel_stacks_freed = info.lifetime_kernel_stacks_freed;
+    out.lifetime_user_pml4s_destroyed = info.lifetime_user_pml4s_destroyed;
+    out.lifetime_vma_lists_destroyed = info.lifetime_vma_lists_destroyed;
+    out.lifetime_fd_tables_closed = info.lifetime_fd_tables_closed;
+    out.lifetime_graph_nodes_destroyed = info.lifetime_graph_nodes_destroyed;
 
     bool smap = (read_cr4() & CR4_SMAP) != 0;
     if (smap) __asm__ volatile ("stac");
@@ -687,6 +700,12 @@ static i64 sys_accept_user(int fd, u64 uaddr, u64 ulen) {
 static i64 sys_fcntl_user(int fd, int cmd, u64 arg) {
     file_t *f = fd_get(fd);
     if (!f) return -1;
+    if (cmd == YAM_F_GETFD) {
+        return fd_get_flags(fd);
+    }
+    if (cmd == YAM_F_SETFD) {
+        return fd_set_flags(fd, (u32)(arg & YAM_FD_CLOEXEC));
+    }
     if (cmd == F_GETFL) {
         int flags = 0;
         if (f->fops == &socket_fops) {

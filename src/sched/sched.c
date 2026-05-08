@@ -47,6 +47,66 @@ static spinlock_t sleep_lock = SPINLOCK_INIT;
 static u64        next_id = 1;
 static volatile u32 sched_enabled = 0;
 static u64        total_tasks = 0;
+static u64        lifetime_tasks_created = 0;
+static u64        lifetime_processes_forked = 0;
+static u64        lifetime_threads_created = 0;
+static u64        lifetime_tasks_reaped = 0;
+static u64        lifetime_task_objects_freed = 0;
+static u64        lifetime_kernel_stacks_freed = 0;
+static u64        lifetime_user_pml4s_destroyed = 0;
+static u64        lifetime_vma_lists_destroyed = 0;
+static u64        lifetime_fd_tables_closed = 0;
+static u64        lifetime_graph_nodes_destroyed = 0;
+
+#define TASK_GRAPH_NODE_INVALID ((u32)~0u)
+
+static void sched_destroy_task_resources(task_t *t,
+                                         bool destroy_address_space,
+                                         bool close_fds,
+                                         bool free_object) {
+    if (!t) return;
+
+    if (destroy_address_space) {
+        if (t->vma_head) lifetime_vma_lists_destroyed++;
+        vmm_destroy_task_vmas(t);
+        if (t->pml4) {
+            vmm_destroy_user_pml4(t->pml4);
+            t->pml4 = NULL;
+            lifetime_user_pml4s_destroyed++;
+        }
+    }
+
+    if (close_fds) {
+        bool had_fds = false;
+        for (u32 i = 0; i < 128; i++) {
+            if (t->fd_table[i]) {
+                had_fds = true;
+                break;
+            }
+        }
+        vfs_task_close_fds(t);
+        if (had_fds) lifetime_fd_tables_closed++;
+    }
+
+    if (t->stack) {
+        vmm_free_kernel_stack(t->stack, SCHED_STACK_SIZE);
+        t->stack = NULL;
+        lifetime_kernel_stacks_freed++;
+    }
+    if (t->fpu_state) {
+        kfree(t->fpu_state);
+        t->fpu_state = NULL;
+    }
+    if (t->graph_node != TASK_GRAPH_NODE_INVALID && t->graph_node != 0) {
+        if (yamgraph_node_destroy(t->graph_node)) lifetime_graph_nodes_destroyed++;
+        t->graph_node = TASK_GRAPH_NODE_INVALID;
+    }
+
+    if (free_object && task_cache) {
+        lifetime_task_objects_freed++;
+        kmem_cache_free(task_cache, t);
+    }
+}
 
 /* ---- Sorted run queue (binary insert for O(log n) pick) ---- */
 
@@ -139,6 +199,8 @@ task_t *sched_spawn(const char *name, void (*entry)(void *), void *arg, u8 prio)
     task_t *t = (task_t *)kmem_cache_alloc(task_cache);
     if (!t) return NULL;
 
+    memset(t, 0, sizeof(*t));
+    t->graph_node = TASK_GRAPH_NODE_INVALID;
     t->id = next_id++;
     t->prio = (prio < SCHED_PRIO_LEVELS) ? prio : SCHED_PRIO_LEVELS - 1;
     t->nice = DEFAULT_NICE;
@@ -167,14 +229,24 @@ task_t *sched_spawn(const char *name, void (*entry)(void *), void *arg, u8 prio)
         strncpy(t->cwd, "/", sizeof(t->cwd) - 1);
     }
     t->graph_node = yamgraph_node_create(YAM_NODE_TASK, t->name, t);
+    if (t->graph_node == TASK_GRAPH_NODE_INVALID) {
+        sched_destroy_task_resources(t, false, false, true);
+        return NULL;
+    }
 
     t->stack = (u8 *)vmm_alloc_kernel_stack(SCHED_STACK_SIZE);
-    if (!t->stack) { kmem_cache_free(task_cache, t); return NULL; }
+    if (!t->stack) {
+        sched_destroy_task_resources(t, false, false, true);
+        return NULL;
+    }
 
     u32 fpu_sz = cpuid_get_info()->xsave_size;
     if (fpu_sz == 0) fpu_sz = 512; /* FXSAVE fallback */
     t->fpu_state = (u8 *)kmalloc(fpu_sz);
-    if (!t->fpu_state) { kmem_cache_free(task_cache, t); return NULL; }
+    if (!t->fpu_state) {
+        sched_destroy_task_resources(t, false, false, true);
+        return NULL;
+    }
     memset(t->fpu_state, 0, fpu_sz);
 
     /* Stack frame for context_switch + task_trampoline */
@@ -206,6 +278,7 @@ task_t *sched_spawn(const char *name, void (*entry)(void *), void *arg, u8 prio)
     spin_unlock_irqrestore(&rq->lock, f);
 
     total_tasks++;
+    lifetime_tasks_created++;
     kprintf("[SCHED] spawn '%s' id=%lu cpu=%u nice=%d w=%u rq_ready=%u rq_load=%lu\n",
             t->name, t->id, target_cpu, t->nice, t->weight, rq->count, rq->load_weight);
     return t;
@@ -286,6 +359,7 @@ void sched_init(void) {
     this_cpu()->idle    = boot;
     active_tasks[0]     = boot;
     total_tasks = 1;
+    lifetime_tasks_created = 1;
 
     kprintf_color(0xFF00FF88, "[SCHED] Multi-Queue CFS v0.3.0 init OK (nice range %d..%d)\n",
                   MIN_NICE, MAX_NICE);
@@ -470,6 +544,7 @@ void sched_sleep_until(u64 deadline_tick) {
 i64 sys_fork(void) {
     task_t *parent = sched_current();
     if (!parent) return -1;
+    if (parent->child_count >= MAX_CHILDREN) return -1;
 
     if (!task_cache)
         task_cache = kmem_cache_create("task_t", sizeof(task_t), 16);
@@ -481,6 +556,7 @@ i64 sys_fork(void) {
     child->id = next_id++;
     child->parent = parent;
     child->child_count = 0;
+    memset(child->children, 0, sizeof(child->children));
     child->state = TASK_READY;
     child->exit_code = 0;
     child->signal_pending = 0;
@@ -489,22 +565,51 @@ i64 sys_fork(void) {
     child->vol_switches = child->invol_switches = 0;
     child->slice_ticks = 0;
     child->need_resched = 0;
+    child->stack = NULL;
+    child->fpu_state = NULL;
+    child->pml4 = NULL;
+    child->vma_head = NULL;
+    child->graph_node = TASK_GRAPH_NODE_INVALID;
+    child->next = NULL;
+    child->wait_next = NULL;
 
     /* Allocate new kernel stack */
     child->stack = (u8 *)vmm_alloc_kernel_stack(SCHED_STACK_SIZE);
-    if (!child->stack) { kmem_cache_free(task_cache, child); return -1; }
+    if (!child->stack) {
+        sched_destroy_task_resources(child, false, false, true);
+        return -1;
+    }
     memcpy(child->stack, parent->stack, SCHED_STACK_SIZE);
 
     /* FPU state */
     u32 fork_fpu_sz = cpuid_get_info()->xsave_size;
     if (fork_fpu_sz == 0) fork_fpu_sz = 512;
     child->fpu_state = (u8 *)kmalloc(fork_fpu_sz);
-    if (!child->fpu_state) { kmem_cache_free(task_cache, child); return -1; }
-    memcpy(child->fpu_state, parent->fpu_state, fork_fpu_sz);
+    if (!child->fpu_state) {
+        sched_destroy_task_resources(child, false, false, true);
+        return -1;
+    }
+    if (parent->fpu_state) memcpy(child->fpu_state, parent->fpu_state, fork_fpu_sz);
+    else memset(child->fpu_state, 0, fork_fpu_sz);
 
     /* CoW address space */
     if (parent->pml4) {
         child->pml4 = vmm_fork_address_space(parent->pml4);
+        if (!child->pml4) {
+            sched_destroy_task_resources(child, false, false, true);
+            return -1;
+        }
+    }
+
+    if (!vmm_clone_task_vmas(child, parent)) {
+        sched_destroy_task_resources(child, child->pml4 != NULL, false, true);
+        return -1;
+    }
+
+    child->graph_node = yamgraph_node_create(YAM_NODE_TASK, child->name, child);
+    if (child->graph_node == TASK_GRAPH_NODE_INVALID) {
+        sched_destroy_task_resources(child, child->pml4 != NULL, false, true);
+        return -1;
     }
 
     /* Adjust RSP to point into child's stack */
@@ -513,9 +618,7 @@ i64 sys_fork(void) {
 
     vfs_task_retain_fds(child);
 
-    /* Add child to parent */
-    if (parent->child_count < MAX_CHILDREN)
-        parent->children[parent->child_count++] = child;
+    parent->children[parent->child_count++] = child;
 
     /* Add to run queue */
     runqueue_t *rq = &per_cpu_rq[0];
@@ -524,6 +627,8 @@ i64 sys_fork(void) {
     rq_insert(rq, child);
     spin_unlock_irqrestore(&rq->lock, f);
     total_tasks++;
+    lifetime_tasks_created++;
+    lifetime_processes_forked++;
 
     return (i64)child->id;  /* Parent gets child PID; child would get 0 in real impl */
 }
@@ -543,23 +648,15 @@ i64 sched_waitpid(i64 pid, i32 *status, u32 options) {
                 i64 ret = (i64)child->id;
                 if (child->state == TASK_ZOMBIE && total_tasks > 0) total_tasks--;
                 child->state = TASK_DEAD;
-                vmm_destroy_task_vmas(child);
-                if (child->pml4 && child->pml4 != cur->pml4) {
-                    vmm_destroy_user_pml4(child->pml4);
-                    child->pml4 = NULL;
-                }
-                if (child->fpu_state) {
-                    kfree(child->fpu_state);
-                    child->fpu_state = NULL;
-                }
-                vfs_task_close_fds(child);
+                bool owns_address_space = child->pml4 && child->pml4 != cur->pml4;
                 /* Remove from children list */
                 cur->children[i] = cur->children[cur->child_count - 1];
                 cur->children[cur->child_count - 1] = NULL;
                 cur->child_count--;
+                lifetime_tasks_reaped++;
                 kprintf("[SCHED] reaped child pid=%ld status=0x%x parent=%lu\n",
                         ret, wait_status, cur->id);
-                kmem_cache_free(task_cache, child);
+                sched_destroy_task_resources(child, owns_address_space, true, true);
                 return ret;
             }
         }
@@ -601,6 +698,14 @@ void sched_set_ai_hint(task_t *t, u8 hint) { t->ai_hint = hint; }
 void sched_print_stats(void) {
     kprintf_color(0xFF00DDFF, "\n[SCHED] === Scheduler Statistics ===\n");
     kprintf("  Total tasks: %lu\n", total_tasks);
+    kprintf("  Lifetime: created=%lu forked=%lu threads=%lu reaped=%lu freed_tasks=%lu\n",
+            lifetime_tasks_created, lifetime_processes_forked,
+            lifetime_threads_created, lifetime_tasks_reaped,
+            lifetime_task_objects_freed);
+    kprintf("  Cleanup: stacks=%lu pml4=%lu vmas=%lu fd_tables=%lu graph_nodes=%lu\n",
+            lifetime_kernel_stacks_freed, lifetime_user_pml4s_destroyed,
+            lifetime_vma_lists_destroyed, lifetime_fd_tables_closed,
+            lifetime_graph_nodes_destroyed);
     for (int c = 0; c < MAX_CPUS; c++) {
         if (per_cpu_rq[c].count > 0 || c == 0) {
             kprintf("  CPU%d: %u ready, min_vrt=%lu\n",
@@ -616,6 +721,16 @@ void sched_get_info(sched_info_t *out) {
     out->schedulable_cpus = smp_sched_cpu_count();
     out->total_tasks = (u32)total_tasks;
     out->ticks = this_cpu()->ticks;
+    out->lifetime_tasks_created = lifetime_tasks_created;
+    out->lifetime_processes_forked = lifetime_processes_forked;
+    out->lifetime_threads_created = lifetime_threads_created;
+    out->lifetime_tasks_reaped = lifetime_tasks_reaped;
+    out->lifetime_task_objects_freed = lifetime_task_objects_freed;
+    out->lifetime_kernel_stacks_freed = lifetime_kernel_stacks_freed;
+    out->lifetime_user_pml4s_destroyed = lifetime_user_pml4s_destroyed;
+    out->lifetime_vma_lists_destroyed = lifetime_vma_lists_destroyed;
+    out->lifetime_fd_tables_closed = lifetime_fd_tables_closed;
+    out->lifetime_graph_nodes_destroyed = lifetime_graph_nodes_destroyed;
 
     for (int c = 0; c < MAX_CPUS; c++) {
         runqueue_t *rq = &per_cpu_rq[c];
@@ -635,6 +750,7 @@ void sched_get_info(sched_info_t *out) {
 task_t *sched_thread_create(const char *name, u64 entry, u64 stack_top, u64 arg, u64 tls_base) {
     task_t *parent = sched_current();
     if (!parent) return NULL;
+    if (parent->child_count >= MAX_CHILDREN) return NULL;
 
     if (!task_cache)
         task_cache = kmem_cache_create("task_t", sizeof(task_t), 16);
@@ -646,6 +762,7 @@ task_t *sched_thread_create(const char *name, u64 entry, u64 stack_top, u64 arg,
     child->id = next_id++;
     child->parent = parent;
     child->child_count = 0;
+    memset(child->children, 0, sizeof(child->children));
     child->state = TASK_READY;
     child->exit_code = 0;
     child->signal_pending = 0;
@@ -656,29 +773,44 @@ task_t *sched_thread_create(const char *name, u64 entry, u64 stack_top, u64 arg,
     child->need_resched = 0;
     child->tls_base = tls_base;
     child->thread_group = parent->thread_group ? parent->thread_group : parent->id;
+    child->stack = NULL;
+    child->fpu_state = NULL;
+    child->graph_node = TASK_GRAPH_NODE_INVALID;
+    child->next = NULL;
+    child->wait_next = NULL;
 
     /* Give it a name */
     if (name) {
         memset(child->name, 0, sizeof(child->name));
         for (u32 i = 0; i < sizeof(child->name) - 1 && name[i]; i++) child->name[i] = name[i];
     }
-    
-    child->graph_node = yamgraph_node_create(YAM_NODE_TASK, child->name, child);
-
     /* Allocate new kernel stack */
     child->stack = (u8 *)vmm_alloc_kernel_stack(SCHED_STACK_SIZE);
-    if (!child->stack) { kmem_cache_free(task_cache, child); return NULL; }
+    if (!child->stack) {
+        sched_destroy_task_resources(child, false, false, true);
+        return NULL;
+    }
     memset(child->stack, 0, SCHED_STACK_SIZE);
 
     /* FPU state */
     u32 fork_fpu_sz = cpuid_get_info()->xsave_size;
     if (fork_fpu_sz == 0) fork_fpu_sz = 512;
     child->fpu_state = (u8 *)kmalloc(fork_fpu_sz);
-    if (!child->fpu_state) { kmem_cache_free(task_cache, child); return NULL; }
-    memcpy(child->fpu_state, parent->fpu_state, fork_fpu_sz);
+    if (!child->fpu_state) {
+        sched_destroy_task_resources(child, false, false, true);
+        return NULL;
+    }
+    if (parent->fpu_state) memcpy(child->fpu_state, parent->fpu_state, fork_fpu_sz);
+    else memset(child->fpu_state, 0, fork_fpu_sz);
 
     /* Share address space (no CoW) */
     child->pml4 = parent->pml4;
+
+    child->graph_node = yamgraph_node_create(YAM_NODE_TASK, child->name, child);
+    if (child->graph_node == TASK_GRAPH_NODE_INVALID) {
+        sched_destroy_task_resources(child, false, false, true);
+        return NULL;
+    }
 
     /* Set up stack frame for enter_user_mode */
     /* We don't use task_trampoline for this, we push an iretq frame directly. */
@@ -706,9 +838,7 @@ task_t *sched_thread_create(const char *name, u64 entry, u64 stack_top, u64 arg,
 
     vfs_task_retain_fds(child);
 
-    /* Add child to parent */
-    if (parent->child_count < MAX_CHILDREN)
-        parent->children[parent->child_count++] = child;
+    parent->children[parent->child_count++] = child;
 
     /* Add to run queue */
     runqueue_t *rq = &per_cpu_rq[0];
@@ -717,6 +847,8 @@ task_t *sched_thread_create(const char *name, u64 entry, u64 stack_top, u64 arg,
     rq_insert(rq, child);
     spin_unlock_irqrestore(&rq->lock, f);
     total_tasks++;
+    lifetime_tasks_created++;
+    lifetime_threads_created++;
 
     return child;
 }

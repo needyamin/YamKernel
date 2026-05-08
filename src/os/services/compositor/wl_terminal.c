@@ -184,6 +184,8 @@ static void cmd_help(void) {
     term_newline();
     term_puts("  ps       - List running tasks", COL_FG);
     term_newline();
+    term_puts("  sched    - Scheduler lifetime/cleanup counters", COL_FG);
+    term_newline();
     term_puts("  ls cd pwd cat mkdir touch rm write history - File tools", COL_FG);
     term_newline();
     term_puts("  run /bin/hello - Launch a VFS ELF app", COL_FG);
@@ -246,8 +248,40 @@ static void cmd_uptime(void) {
 
 static void cmd_echo(const char *args) {
     if (args && *args) {
-        term_puts(args, COL_FG);
+    term_puts(args, COL_FG);
     }
+    term_newline();
+}
+
+static void cmd_sched(void) {
+    sched_info_t info;
+    char line[160];
+    sched_get_info(&info);
+
+    ksnprintf(line, sizeof(line), "tasks: total=%u ready=%u running=%u blocked=%u",
+              info.total_tasks, info.ready_tasks, info.running_tasks,
+              info.blocked_tasks);
+    term_puts(line, COL_PROMPT);
+    term_newline();
+
+    ksnprintf(line, sizeof(line), "lifetime: created=%lu forked=%lu threads=%lu reaped=%lu",
+              info.lifetime_tasks_created, info.lifetime_processes_forked,
+              info.lifetime_threads_created, info.lifetime_tasks_reaped);
+    term_puts(line, COL_FG);
+    term_newline();
+
+    ksnprintf(line, sizeof(line), "cleanup: stacks=%lu pml4=%lu vmas=%lu fds=%lu graph=%lu",
+              info.lifetime_kernel_stacks_freed,
+              info.lifetime_user_pml4s_destroyed,
+              info.lifetime_vma_lists_destroyed,
+              info.lifetime_fd_tables_closed,
+              info.lifetime_graph_nodes_destroyed);
+    term_puts(line, COL_FG);
+    term_newline();
+
+    ksnprintf(line, sizeof(line), "objects: task_objects_freed=%lu switches=%lu",
+              info.lifetime_task_objects_freed, info.total_switches);
+    term_puts(line, COL_FG);
     term_newline();
 }
 
@@ -836,6 +870,8 @@ static void process_command(void) {
         cmd_netstress("");
     } else if (strncmp(cmd, "netstress ", 10) == 0) {
         cmd_netstress(cmd + 10);
+    } else if (strcmp(cmd, "sched") == 0) {
+        cmd_sched();
     } else if (strcmp(cmd, "ps") == 0) {
         term_puts("  PID  NAME         STATE", COL_PROMPT);
         term_newline();

@@ -76,9 +76,14 @@ void *vmm_alloc_kernel_stack(usize usable_size) {
 
     for (u64 off = 0; off < usable_size; off += PAGE_SIZE) {
         u64 phys = pmm_alloc_page();
-        if (!phys) return NULL;
+        if (!phys) {
+            vmm_free_kernel_stack((void *)usable, usable_size);
+            return NULL;
+        }
         if (!vmm_map_page(pml4, usable + off, phys,
                           VMM_FLAG_WRITE | VMM_FLAG_NX)) {
+            pmm_free_page(phys);
+            vmm_free_kernel_stack((void *)usable, usable_size);
             return NULL;
         }
     }
@@ -86,6 +91,21 @@ void *vmm_alloc_kernel_stack(usize usable_size) {
     kprintf("[VMM] guarded kernel stack usable=0x%lx size=%lu guard_lo=0x%lx guard_hi=0x%lx\n",
             usable, usable_size, base, usable + usable_size);
     return (void *)usable;
+}
+
+void vmm_free_kernel_stack(void *stack, usize usable_size) {
+    if (!stack || usable_size == 0) return;
+    usable_size = (usable_size + PAGE_SIZE - 1) & ~(usize)(PAGE_SIZE - 1);
+
+    u64 usable = (u64)stack;
+    u64 *pml4 = vmm_get_kernel_pml4();
+    for (u64 off = 0; off < usable_size; off += PAGE_SIZE) {
+        u64 va = usable + off;
+        u64 phys = vmm_virt_to_phys(pml4, va);
+        if (!phys) continue;
+        vmm_unmap_page(pml4, va);
+        pmm_free_page(phys & ~0xFFFULL);
+    }
 }
 
 /* ---- Public API ---- */
@@ -495,6 +515,25 @@ void vmm_destroy_task_vmas(task_t *t) {
         v = next;
     }
     t->vma_head = NULL;
+}
+
+bool vmm_clone_task_vmas(task_t *dst, const task_t *src) {
+    if (!dst || !src) return false;
+    dst->vma_head = NULL;
+
+    vma_t **tail = (vma_t **)&dst->vma_head;
+    for (const vma_t *v = (const vma_t *)src->vma_head; v; v = v->next) {
+        vma_t *copy = (vma_t *)kmalloc(sizeof(*copy));
+        if (!copy) {
+            vmm_destroy_task_vmas(dst);
+            return false;
+        }
+        memcpy(copy, v, sizeof(*copy));
+        copy->next = NULL;
+        *tail = copy;
+        tail = &copy->next;
+    }
+    return true;
 }
 
 /* ---- Demand Paging ---- */

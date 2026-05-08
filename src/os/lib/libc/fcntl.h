@@ -1,6 +1,9 @@
 #ifndef _LIBC_FCNTL_H
 #define _LIBC_FCNTL_H
 
+#include <stdarg.h>
+#include "../libyam/syscall.h"
+
 #define O_RDONLY   0x0000
 #define O_WRONLY   0x0001
 #define O_RDWR     0x0002
@@ -18,10 +21,14 @@
 #define FD_CLOEXEC 1
 
 static inline int fcntl(int fd, int cmd, ...) {
-    (void)fd;
-    if (cmd == F_GETFD || cmd == F_GETFL) return 0;
-    if (cmd == F_SETFD || cmd == F_SETFL) return 0;
-    return -1;
+    u64 arg = 0;
+    va_list ap;
+    va_start(ap, cmd);
+    if (cmd == F_SETFD || cmd == F_SETFL) {
+        arg = (u64)va_arg(ap, int);
+    }
+    va_end(ap);
+    return (int)syscall3(SYS_FCNTL, (u64)fd, (u64)cmd, arg);
 }
 
 #endif

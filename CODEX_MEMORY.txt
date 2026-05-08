@@ -47,8 +47,15 @@ Current capability (summary - detail drifts; verify in tree)
   sys_brk is no longer global and shrink unmaps heap pages.
 - FD lifetime improved: fork/thread creation retain copied fd_table entries;
   waitpid reaping closes child fd table and releases VMA metadata, non-shared
-  pml4, FPU state, and task object. Kernel stack free, FD_CLOEXEC, full thread
-  group cleanup, and YamGraph-node cleanup still pending.
+  pml4, FPU state, and task object. task_t has per-fd descriptor flags;
+  SYS_FCNTL supports F_GETFD/F_SETFD; dup/dup2 clear descriptor flags; execve
+  closes FD_CLOEXEC descriptors; /bin/exec-test now exercises that flag before
+  exec. Process lifetime cleanup now has vmm_free_kernel_stack(), a centralized
+  scheduler task-resource cleanup helper, forked-task VMA metadata cloning, fork
+  YamGraph node creation, and waitpid reaping that frees kernel stacks and
+  destroys task YamGraph nodes. Scheduler lifetime/cleanup counters are exposed
+  through SYS_SCHED_INFO and the compositor terminal `sched` command. Full
+  thread-group/orphan cleanup still pending.
 - Threads/signals/futex/pthread pieces and SYS_SELECT/SYS_FCNTL nonblocking I/O:
   see syscall.h + Phase notes in README.
 - Desktop: compositor-native Wayland-style UI, multi-user, File Manager, browser

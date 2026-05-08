@@ -207,6 +207,16 @@ typedef struct {
     u64 ticks;
     u64 rq_load[8];
     u32 rq_ready[8];
+    u64 lifetime_tasks_created;
+    u64 lifetime_processes_forked;
+    u64 lifetime_threads_created;
+    u64 lifetime_tasks_reaped;
+    u64 lifetime_task_objects_freed;
+    u64 lifetime_kernel_stacks_freed;
+    u64 lifetime_user_pml4s_destroyed;
+    u64 lifetime_vma_lists_destroyed;
+    u64 lifetime_fd_tables_closed;
+    u64 lifetime_graph_nodes_destroyed;
 } yam_sched_info_t;
 
 typedef struct {

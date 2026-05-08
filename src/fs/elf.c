@@ -1276,6 +1276,7 @@ i64 elf_exec_resolved_argv_envp(const char *name, int argc,
     cur->signal_pending = 0;
     cur->sig_mask = 0;
     for (u32 i = 0; i < 32; i++) cur->sig_handlers[i] = NULL;
+    vfs_task_close_cloexec_fds(cur);
     cur->tls_base = 0;
     cur->thread_group = 0;
     memset(cur->name, 0, sizeof(cur->name));
